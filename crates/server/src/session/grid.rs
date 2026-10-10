@@ -5,7 +5,7 @@ use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term, TermMode};
-use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
+use alacritty_terminal::vte::ansi::{Color, Handler, ModifyOtherKeys, NamedColor, Processor};
 
 /// ConPTY / 应用会发 DSR 等查询(如 `ESC [ 6 n`);alacritty 解析后通过
 /// `Event::PtyWrite` 给出应答。必须写回 PTY,否则 Windows 上 shell 会一直
@@ -23,9 +23,36 @@ impl EventListener for ReplyListener {
     }
 }
 
+/// alacritty 不实现 XTMODKEYS,Term 收到 `CSI > 4 ; Pv m` 就丢了。这里单独
+/// 记下来,好让 resync 重绘把它带回去:浏览器端的 xterm.js 靠它决定
+/// Shift+Enter 之类的按键编码(见 clients/web/src/keys.ts)。
+#[derive(Default)]
+struct KeyModes {
+    modify_other_keys: u8,
+}
+
+impl Handler for KeyModes {
+    fn set_modify_other_keys(&mut self, mode: ModifyOtherKeys) {
+        self.modify_other_keys = match mode {
+            ModifyOtherKeys::Reset => 0,
+            ModifyOtherKeys::EnableExceptWellDefined => 1,
+            ModifyOtherKeys::EnableAll => 2,
+        };
+    }
+
+    /// RIS(`ESC c`)。
+    fn reset_state(&mut self) {
+        *self = Self::default();
+    }
+}
+
 pub struct SessionGrid {
     term: Term<ReplyListener>,
     parser: Processor,
+    /// 第二个解析器只喂 KeyModes。Handler 有几十个方法,包一层转发给 Term
+    /// 不值得;多解析一遍的开销相对 PTY 吞吐可以忽略。
+    key_modes: KeyModes,
+    key_modes_parser: Processor,
     cols: u16,
     rows: u16,
     pty_replies: Arc<Mutex<Vec<u8>>>,
@@ -40,11 +67,20 @@ impl SessionGrid {
             &size,
             ReplyListener { pending: pty_replies.clone() },
         );
-        Self { term, parser: Processor::new(), cols, rows, pty_replies }
+        Self {
+            term,
+            parser: Processor::new(),
+            key_modes: KeyModes::default(),
+            key_modes_parser: Processor::new(),
+            cols,
+            rows,
+            pty_replies,
+        }
     }
 
     pub fn advance(&mut self, bytes: &[u8]) {
         self.parser.advance(&mut self.term, bytes);
+        self.key_modes_parser.advance(&mut self.key_modes, bytes);
     }
 
     pub fn take_pty_replies(&self) -> Vec<u8> {
@@ -140,6 +176,9 @@ impl SessionGrid {
         }
         if mode.contains(TermMode::UTF8_MOUSE) {
             out.push_str("\x1b[?1005h");
+        }
+        if self.key_modes.modify_other_keys != 0 {
+            out.push_str(&format!("\x1b[>4;{}m", self.key_modes.modify_other_keys));
         }
         out.into_bytes()
     }
@@ -279,6 +318,27 @@ mod tests {
 
         assert!(b.mode().contains(TermMode::BRACKETED_PASTE), "mode: {:?}", b.mode());
         assert!(b.mode().contains(TermMode::APP_CURSOR), "mode: {:?}", b.mode());
+    }
+
+    #[test]
+    fn repaint_restores_modify_other_keys() {
+        let mut a = SessionGrid::new(20, 5);
+        assert!(!String::from_utf8(a.repaint()).unwrap().contains("\x1b[>4;"));
+        a.advance(b"\x1b[>4;2m");
+        let mut b = SessionGrid::new(20, 5);
+        b.advance(&a.repaint());
+        assert_eq!(b.key_modes.modify_other_keys, 2);
+        a.advance(b"\x1b[>4;1m");
+        assert!(String::from_utf8(a.repaint()).unwrap().contains("\x1b[>4;1m"));
+        // 省略 Pv 即复位;RIS 也复位
+        a.advance(b"\x1b[>4m");
+        assert_eq!(a.key_modes.modify_other_keys, 0);
+        a.advance(b"\x1b[>4;2m\x1bc");
+        assert_eq!(a.key_modes.modify_other_keys, 0);
+        // 跨 read 边界切开的序列也能识别
+        a.advance(b"\x1b[>4");
+        a.advance(b";2m");
+        assert_eq!(a.key_modes.modify_other_keys, 2);
     }
 
     #[test]

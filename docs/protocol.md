@@ -200,6 +200,13 @@ Launcher { id:str, provider:str, name:str, detail:str, command:[str], cwd:str? }
   xterm's VT encoding and Alt-arrow remapping. Keydown/repeats and keyup are
   separate events; blur/detach releases tracked keys. IME/dead-key/AltGr text,
   non-ASCII text, paste and terminal replies retain xterm's byte input path.
+  On other systems the pty passes bytes through unchanged, so the client is the
+  key encoder. When the application enables XTMODKEYS modifyOtherKeys
+  (`CSI > 4 ; Pv m`, `Pv` 1 or 2), the web client encodes Enter, Tab, Backspace
+  and Escape combinations whose plain VT encoding drops a modifier as
+  `CSI 27 ; mod ; code ~` (e.g. Shift+Enter → `CSI 27;2;13~`). Alt-only,
+  Shift+Tab and Ctrl+Backspace keep their well-known encodings; other keys and
+  the mode-off case keep xterm's encoding.
   Clipboard and browser shortcuts retain their browser default actions; keys
   reserved by the browser or OS cannot be forwarded if no DOM event is delivered.
   Missing `os` (older servers) means unknown: keep the plain VT encoding.
@@ -345,7 +352,8 @@ SessionEventKind "created" | "renamed" | "closed"
   its tracked `last_seq`, after `hello-ok` (H2) and never before.
 - **S10** A resync restores content, cursor position and visibility, and the
   common modes: app cursor keys (`?1`), app keypad, bracketed paste (`?2004`),
-  mouse reporting (`?1000/1002/1003/1005/1006`). It does **not** restore the
+  mouse reporting (`?1000/1002/1003/1005/1006`), and modifyOtherKeys
+  (`CSI > 4 ; Pv m`). It does **not** restore the
   alt screen, DECSTBM scroll regions, or scrollback. Accepted lossy tradeoff;
   full-screen apps may need `Ctrl-L` after a rough reconnect.
 - **S11** `session-exited{channel,id}` ends that channel's stream; the server

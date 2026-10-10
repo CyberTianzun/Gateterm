@@ -9,7 +9,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 execSync("npx esbuild src/keys.ts --bundle --format=esm --outfile=test/.keys.build.mjs", {
   cwd: join(here, ".."),
 });
-const { browserShortcut, WindowsKeyboardAdapter } = await import("./.keys.build.mjs");
+const { browserShortcut, KeyboardAdapter } = await import("./.keys.build.mjs");
 const key = (over = {}) => ({
   type: "keydown", key: "Enter", code: "Enter", shiftKey: false, ctrlKey: false, altKey: false, metaKey: false,
   ...over,
@@ -19,10 +19,10 @@ const decode = seq => {
   const [vk, scan, char, down, state, repeat] = seq.slice(2, -1).split(";").map(Number);
   return {vk, scan, char, down, state, repeat};
 };
-const encode = (ev, adapter = new WindowsKeyboardAdapter()) => adapter.encode(key(ev), "windows");
+const encode = (ev, adapter = new KeyboardAdapter()) => adapter.encode(key(ev), "windows");
 
 test("Shift+Enter 的真实按下和松开分别转发,不在按下时提前松开", () => {
-  const adapter = new WindowsKeyboardAdapter();
+  const adapter = new KeyboardAdapter();
   assert.deepEqual(decode(encode({shiftKey:true}, adapter)), {vk:13,scan:28,char:13,down:1,state:16,repeat:1});
   assert.deepEqual(decode(encode({type:"keyup",shiftKey:true}, adapter)), {vk:13,scan:28,char:13,down:0,state:16,repeat:1});
   assert.equal(adapter.releaseAll(), "");
@@ -48,7 +48,7 @@ test("常用功能键的八种 Ctrl/Shift/Alt 组合完整保留,不走 Alt-arro
 });
 
 test("重复按下不生成松开;keypress 不再生成第二份字符", () => {
-  const adapter = new WindowsKeyboardAdapter();
+  const adapter = new KeyboardAdapter();
   const ev = {key:"a",code:"KeyA"};
   assert.equal(decode(encode(ev, adapter)).down, 1);
   assert.equal(decode(encode({...ev,repeat:true}, adapter)).down, 1);
@@ -58,7 +58,7 @@ test("重复按下不生成松开;keypress 不再生成第二份字符", () => {
 });
 
 test("keyup 即使修饰键先松开也释放原来的键,并使用当前修饰状态", () => {
-  const adapter = new WindowsKeyboardAdapter();
+  const adapter = new KeyboardAdapter();
   encode({key:"A",code:"KeyA",ctrlKey:true,shiftKey:true}, adapter);
   const up = decode(encode({type:"keyup",key:"a",code:"KeyA"}, adapter));
   assert.equal(up.vk, 65);
@@ -68,7 +68,7 @@ test("keyup 即使修饰键先松开也释放原来的键,并使用当前修饰�
 });
 
 test("左右 Ctrl/Alt 和锁定键状态独立保留", () => {
-  const adapter = new WindowsKeyboardAdapter();
+  const adapter = new KeyboardAdapter();
   encode({key:"Control",code:"ControlRight",ctrlKey:true}, adapter);
   encode({key:"Control",code:"ControlLeft",ctrlKey:true}, adapter);
   encode({key:"Alt",code:"AltRight",ctrlKey:true,altKey:true}, adapter);
@@ -95,7 +95,7 @@ test("字母虚拟键取实际布局字符,扫描码取物理位置;CapsLock 字
 test("Ctrl+C 无选区时中断;有选区及复制/粘贴/Meta/浏览器命令交给浏览器", () => {
   const copy = key({key:"c",code:"KeyC",ctrlKey:true});
   assert.equal(decode(encode(copy)).char, 3);
-  assert.equal(new WindowsKeyboardAdapter().encode(copy, "windows", true), null);
+  assert.equal(new KeyboardAdapter().encode(copy, "windows", true), null);
   assert.equal(browserShortcut(copy, true), true);
   for (const ev of [
     {key:"v",code:"KeyV",ctrlKey:true}, {key:"V",code:"KeyV",ctrlKey:true,shiftKey:true},
@@ -109,7 +109,7 @@ test("Ctrl+C 无选区时中断;有选区及复制/粘贴/Meta/浏览器命令�
 });
 
 test("输入法的候选确认 Enter、229、dead key、AltGr 和 Unicode 文本不被截获", () => {
-  const adapter = new WindowsKeyboardAdapter();
+  const adapter = new KeyboardAdapter();
   adapter.setComposing(true);
   assert.equal(encode({shiftKey:true}, adapter), null);
   adapter.setComposing(false);
@@ -124,7 +124,7 @@ test("输入法的候选确认 Enter、229、dead key、AltGr 和 Unicode 文本
 });
 
 test("丢焦点释放所有已经转发的键,然后不再转发孤立的 keyup", () => {
-  const adapter = new WindowsKeyboardAdapter();
+  const adapter = new KeyboardAdapter();
   encode({key:"Alt",code:"AltLeft",altKey:true}, adapter);
   encode({key:"ArrowUp",code:"ArrowUp",altKey:true}, adapter);
   const releases = adapter.releaseAll().match(/\x1b\[[\d;]+_/g).map(decode);
@@ -137,7 +137,7 @@ test("丢焦点释放所有已经转发的键,然后不再转发孤立的 keyup"
 });
 
 test("没有 AltGraph 标志的右 Alt+Ctrl 仍作为 AltGr 文本,左 Alt+Ctrl 仍作为快捷键", () => {
-  const adapter = new WindowsKeyboardAdapter();
+  const adapter = new KeyboardAdapter();
   encode({key:"Alt",code:"AltRight",ctrlKey:true,altKey:true}, adapter);
   const text = {key:"@",code:"KeyQ",ctrlKey:true,altKey:true};
   assert.equal(encode(text, adapter), null);
@@ -149,17 +149,66 @@ test("没有 AltGraph 标志的右 Alt+Ctrl 仍作为 AltGr 文本,左 Alt+Ctrl 
 });
 
 test("macOS 客户端连 Windows 时保留 Option 布局文本,Option+功能键仍作为 Alt", () => {
-  const adapter = new WindowsKeyboardAdapter(true);
+  const adapter = new KeyboardAdapter(true);
   assert.equal(encode({key:"@",code:"Digit2",altKey:true}, adapter), null);
   assert.equal(decode(encode({key:"ArrowUp",code:"ArrowUp",altKey:true}, adapter)).state, 258);
   assert.equal(decode(encode({key:"j",code:"KeyJ",ctrlKey:true}, adapter)).vk, 74);
 });
 
-test("非 Windows 或未知服务端保留 xterm 行为", () => {
-  const adapter = new WindowsKeyboardAdapter();
+test("非 Windows 且程序没开 modifyOtherKeys 时保留 xterm 行为", () => {
+  const adapter = new KeyboardAdapter();
   for (const os of ["linux", "macos", ""]) {
     assert.equal(adapter.encode(key({shiftKey:true}), os), null);
     assert.equal(adapter.encode(key({type:"keyup",shiftKey:true}), os), null);
   }
+  adapter.setModifyOtherKeys(2);
+  adapter.setModifyOtherKeys(0);
+  assert.equal(adapter.encode(key({shiftKey:true}), "macos"), null);
   assert.equal(adapter.releaseAll(), "");
+});
+
+test("modifyOtherKeys 只改写传统编码丢修饰键的组合", () => {
+  const unix = (ev, adapter) => adapter.encode(key(ev), "linux");
+  for (const level of [1, 2]) {
+    const adapter = new KeyboardAdapter();
+    adapter.setModifyOtherKeys(level);
+    // [键, shift/alt/ctrl 掩码, 期望;null = 交给 xterm]
+    for (const [name, mask, want] of [
+      ["Enter",1,"\x1b[27;2;13~"], ["Enter",4,"\x1b[27;5;13~"], ["Enter",5,"\x1b[27;6;13~"],
+      ["Enter",3,"\x1b[27;4;13~"], ["Enter",0,null], ["Enter",2,null],
+      ["Tab",4,"\x1b[27;5;9~"], ["Tab",5,"\x1b[27;6;9~"], ["Tab",1,null], ["Tab",0,null], ["Tab",2,null],
+      ["Backspace",1,"\x1b[27;2;127~"], ["Backspace",5,"\x1b[27;6;127~"], ["Backspace",4,null], ["Backspace",2,null],
+      ["Escape",1,"\x1b[27;2;27~"], ["Escape",4,"\x1b[27;5;27~"], ["Escape",2,null],
+      ["ArrowUp",1,null], ["F1",4,null],
+    ]) {
+      const ev = {key:name,code:name,shiftKey:!!(mask&1),altKey:!!(mask&2),ctrlKey:!!(mask&4)};
+      assert.equal(unix(ev, adapter), want, `${level}/${name}/${mask}`);
+    }
+    assert.equal(unix({key:"j",code:"KeyJ",ctrlKey:true}, adapter), null);
+    assert.equal(unix({key:"Enter",code:"NumpadEnter",shiftKey:true}, adapter), "\x1b[27;2;13~");
+  }
+});
+
+test("modifyOtherKeys 截获的键吞掉 keypress,keyup 交还 xterm", () => {
+  const adapter = new KeyboardAdapter();
+  adapter.setModifyOtherKeys(2);
+  const ev = {shiftKey:true};
+  assert.equal(adapter.encode(key(ev), "linux"), "\x1b[27;2;13~");
+  assert.equal(adapter.encode(key({...ev,type:"keypress"}), "linux"), "");
+  assert.equal(adapter.encode(key({...ev,type:"keyup"}), "linux"), null);
+  assert.equal(adapter.encode(key({type:"keypress"}), "linux"), null);
+});
+
+test("modifyOtherKeys 与 Windows 共用截获判断:输入法、浏览器快捷键不截获", () => {
+  const adapter = new KeyboardAdapter();
+  adapter.setModifyOtherKeys(2);
+  adapter.setComposing(true);
+  assert.equal(adapter.encode(key({shiftKey:true}), "macos"), null);
+  adapter.setComposing(false);
+  for (const ev of [{shiftKey:true,isComposing:true}, {shiftKey:true,keyCode:229}, {shiftKey:true,metaKey:true}]) {
+    assert.equal(adapter.encode(key(ev), "macos"), null, JSON.stringify(ev));
+  }
+  // reset() 只清按键状态,不清程序设置的终端模式
+  adapter.reset();
+  assert.equal(adapter.encode(key({shiftKey:true}), "macos"), "\x1b[27;2;13~");
 });

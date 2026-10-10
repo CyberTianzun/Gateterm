@@ -1,7 +1,13 @@
 /**
- * Windows 的 ConPTY 从字节重建 INPUT_RECORD。xterm 的传统 VT 编码会丢掉
- * Ctrl+J 的 J、Enter 的修饰键,还会把 Alt+方向键改成 Ctrl+方向键。
- * 在 xterm 编码之前统一转成 win32-input-mode:CSI Vk;Sc;Uc;Kd;Cs;Rc _。
+ * xterm.js 的传统 VT 编码会丢修饰键,这里在它之前截获。两个后端,职责不同:
+ *
+ * - Windows:ConPTY 从字节重建 INPUT_RECORD,再由 conhost 按程序的要求编码。
+ *   xterm 会丢掉 Ctrl+J 的 J、Enter 的修饰键,还会把 Alt+方向键改成 Ctrl+方向键,
+ *   所以一律转成 win32-input-mode(CSI Vk;Sc;Uc;Kd;Cs;Rc _)把按键原样交给 conhost。
+ * - 其他:PTY 不转换,浏览器就是编码器。程序用 `CSI > 4 ; Pv m` 打开 modifyOtherKeys
+ *   后(Claude Code 就会这样做),把传统编码丢修饰键的组合编成 CSI 27;mod;code ~,
+ *   例如 Shift+Enter;没打开时保持 xterm 行为。
+ *
  * 输入法、粘贴和终端应答仍走 xterm.onData。
  */
 export type ServerOs = string;
@@ -100,20 +106,59 @@ export function browserShortcut(ev: KeyLike, hasSelection: boolean): boolean {
   return ev.shiftKey && !ev.ctrlKey && !ev.altKey && ev.key === "Insert";
 }
 
+// 传统编码会丢修饰键的键。Alt 单独按时 ESC 前缀已经保留信息,Shift+Tab(CSI Z)、
+// Ctrl+Backspace(BS)是公认编码,这些都不改,对应 XTMODKEYS 的 "except well-defined"。
+const otherKeys: Record<string, { code: number; plain: number[] }> = {
+  Enter: { code: 13, plain: [0, 2] },
+  Tab: { code: 9, plain: [0, 1, 2] },
+  Backspace: { code: 127, plain: [0, 2, 4] },
+  Escape: { code: 27, plain: [0, 2] },
+};
+
 /** 每个终端一份状态,避免丢焦点后修饰键保持按下、或孤立的 keyup 进 PTY。 */
-export class WindowsKeyboardAdapter {
+export class KeyboardAdapter {
   private pressed = new Map<string, PressedKey>();
+  /** modifyOtherKeys 路径在 keydown 截获过的键,用来吞掉对应的 keypress。 */
+  private modified = new Set<string>();
   private composing = false;
   private altGraph = false;
+  private modifyOtherKeys = 0;
 
   /** macOS 的 Option 默认用于布局文本,只有功能键或 macOptionIsMeta 才作为 Alt。 */
   constructor(private readonly optionAsText = false) {}
 
   setComposing(value: boolean): void { this.composing = value; }
 
+  /** 程序输出的 `CSI > 4 ; Pv m`。它属于终端状态而不是按键状态,reset() 不清它;
+   *  终端 reset(RIS、resync)时由调用方置 0,resync 的重绘会再发回来。 */
+  setModifyOtherKeys(level: number): void { this.modifyOtherKeys = level; }
+
   /** null = 交给 xterm;字符串 = 原样发 PTY 并取消事件;空串 = 只取消事件。 */
   encode(ev: KeyLike, serverOs: ServerOs, hasSelection = false): string | null {
-    if (serverOs !== "windows") return null;
+    if (serverOs === "windows") return this.encodeWindows(ev, hasSelection);
+    if (ev.type === "keyup") { this.modified.delete(ev.code); return null; }
+    if (ev.type === "keypress") return this.modified.has(ev.code) ? "" : null;
+    if (ev.type !== "keydown" || !this.modifyOtherKeys || !this.intercepts(ev, hasSelection)) return null;
+    const key = otherKeys[ev.key];
+    const mods = (ev.shiftKey ? 1 : 0) | (ev.altKey ? 2 : 0) | (ev.ctrlKey ? 4 : 0);
+    if (!key || key.plain.includes(mods)) return null;
+    this.modified.add(ev.code);
+    return `\x1b[27;${mods + 1};${key.code}~`;
+  }
+
+  /** 两个后端共用:输入法、浏览器快捷键、布局文本这些都不该截获。 */
+  private intercepts(ev: KeyLike, hasSelection: boolean): boolean {
+    if (this.composing || ev.isComposing || ev.keyCode === 229 ||
+        ["Dead", "Process", "Unidentified", "AltGraph"].includes(ev.key)) return false;
+    if (browserShortcut(ev, hasSelection)) return false;
+    // AltGr 的布局文本由浏览器提交,不把它当 Ctrl+Alt 快捷键。
+    if ((this.altGraph || ev.getModifierState?.("AltGraph")) && ev.key.length === 1) return false;
+    if (this.optionAsText && ev.altKey && !ev.ctrlKey && ev.key.length === 1) return false;
+    // 非 ASCII 文本(包括代理对)交给 xterm,保留它的输入法/Unicode 处理。
+    return !/[^\x00-\x7f]/.test(ev.key);
+  }
+
+  private encodeWindows(ev: KeyLike, hasSelection: boolean): string | null {
     // 部分 Windows 浏览器不报告 getModifierState("AltGraph"),但会报告右 Alt+Ctrl。
     if (ev.code === "AltRight") {
       if (ev.type === "keydown") this.altGraph = ev.key === "AltGraph" || ev.ctrlKey;
@@ -126,15 +171,7 @@ export class WindowsKeyboardAdapter {
       return packet(previous, false, this.controlState(ev, previous));
     }
     if (ev.type === "keypress") return previous ? "" : null;
-    if (ev.type !== "keydown") return null;
-    if (this.composing || ev.isComposing || ev.keyCode === 229 ||
-        ["Dead", "Process", "Unidentified", "AltGraph"].includes(ev.key)) return null;
-    if (browserShortcut(ev, hasSelection)) return null;
-    // AltGr 的布局文本由浏览器提交,不把它当 Ctrl+Alt 快捷键。
-    if ((this.altGraph || ev.getModifierState?.("AltGraph")) && ev.key.length === 1) return null;
-    if (this.optionAsText && ev.altKey && !ev.ctrlKey && ev.key.length === 1) return null;
-    // 非 ASCII 文本(包括代理对)交给 xterm,保留它的输入法/Unicode 处理。
-    if (/[^\x00-\x7f]/.test(ev.key)) return null;
+    if (ev.type !== "keydown" || !this.intercepts(ev, hasSelection)) return null;
     const key = resolveKey(ev);
     if (!key) return null;
     const pressed = { ...key, char: character(ev, key) };
@@ -169,5 +206,5 @@ export class WindowsKeyboardAdapter {
     return release;
   }
 
-  reset(): void { this.pressed.clear(); this.composing = false; this.altGraph = false; }
+  reset(): void { this.pressed.clear(); this.modified.clear(); this.composing = false; this.altGraph = false; }
 }

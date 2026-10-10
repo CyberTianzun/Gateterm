@@ -15,7 +15,7 @@ import { mountSettings } from "./settings";
 import { type Launcher, fetchLaunchers } from "./launchers";
 import { type MsgKey, localeTag, navigatorLanguages, resolveLocale, setLocale, subscribe, t } from "./i18n";
 import { mountNewSessionMenu } from "./new-session";
-import { browserShortcut, WindowsKeyboardAdapter, type ServerOs } from "./keys";
+import { browserShortcut, KeyboardAdapter, type ServerOs } from "./keys";
 import {
   type ChatWindow,
   type Message as ChatMessage,
@@ -53,7 +53,7 @@ let sessions: any[] = [];
 let attachedId: number | null = null;
 /** hello-ok 报来的服务端系统,决定部分按键的编码(见 keys.ts)。 */
 let serverOs: ServerOs = "";
-let keyboard: WindowsKeyboardAdapter | null = null;
+let keyboard: KeyboardAdapter | null = null;
 let term: Terminal | null = null;
 let fit: FitAddon | null = null;
 let webgl: WebglAddon | null = null;
@@ -337,9 +337,21 @@ function openTerminal(id: number) {
   applyRenderer(term);
   term.onData((d) => client.sendInput(TERM_CHANNEL, new TextEncoder().encode(d)));
   const terminal = term;
-  const adapter = keyboard = new WindowsKeyboardAdapter(
+  const adapter = keyboard = new KeyboardAdapter(
     /Mac/.test(navigator.platform) && !terminal.options.macOptionIsMeta,
   );
+  // xterm.js 不支持 XTMODKEYS,自己跟踪(见 keys.ts)。返回 false 让 xterm 继续它的默认处理。
+  terminal.parser.registerCsiHandler({ prefix: ">", final: "m" }, (params) => {
+    if (params[0] === 4) {
+      const level = params.length > 1 ? params[1] : 0;
+      if (level === 0 || level === 1 || level === 2) adapter.setModifyOtherKeys(level);
+    }
+    return false;
+  });
+  terminal.parser.registerEscHandler({ final: "c" }, () => {
+    adapter.setModifyOtherKeys(0);
+    return false;
+  });
   terminal.textarea!.addEventListener("compositionstart", () => adapter.setComposing(true));
   terminal.textarea!.addEventListener("compositionend", () => {
     // xterm 在下一轮事件循环才提交合成文字;在它之前不要截获结束合成的 Enter。
@@ -1081,6 +1093,8 @@ client.onControl = (msg) => {
       break;
     case "resync-begin":
       term?.reset();
+      // term.reset() 不经过解析器;重绘会把 modifyOtherKeys 再发回来
+      keyboard?.setModifyOtherKeys(0);
       break;
     case "session-exited":
       if (msg.channel === TERM_CHANNEL) closeTerminal();
