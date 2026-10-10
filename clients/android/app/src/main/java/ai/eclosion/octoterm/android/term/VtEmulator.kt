@@ -23,6 +23,9 @@ class VtEmulator(
         private set
     var bracketedPaste: Boolean = false
         private set
+    /** XTMODKEYS(`CSI > 4 ; Pv m`)。TerminalKeyboard 据此编码 Shift+Enter 等组合。 */
+    var modifyOtherKeys: Int = 0
+        private set
 
     /** 0 表示贴着最新一行。正数是向上翻了多少行。alt-screen 没有回滚。 */
     var scrollOffset: Int = 0
@@ -66,7 +69,11 @@ class VtEmulator(
     private var paramCount = 0
     private var paramNeg = false
     private var osc = StringBuilder()
-    private var decPrivate = false
+    /** CSI 的私有前缀(`<=>?`),0 表示没有。 */
+    private var csiPrefix = 0
+    /** 带中间字节(0x20..0x2F,如 `CSI 2 SP q`、`CSI ! p`)的序列一律不支持,整条忽略。 */
+    private var csiIntermediate = false
+    private val decPrivate get() = csiPrefix == '?'.code
 
     fun snapshot(): Array<Array<Cell>> {
         synchronized(lock) {
@@ -101,6 +108,7 @@ class VtEmulator(
             cursorVisible = true
             applicationCursor = false
             bracketedPaste = false
+            modifyOtherKeys = 0
             scrollOffset = 0
             mode1000 = false
             mode1002 = false
@@ -123,7 +131,8 @@ class VtEmulator(
             utf8Need = 0
             esc = Ground
             paramCount = 0
-            decPrivate = false
+            csiPrefix = 0
+            csiIntermediate = false
             osc.setLength(0)
             generation++
         }
@@ -353,7 +362,8 @@ class VtEmulator(
                 paramCount = 0
                 params[0] = 0
                 paramNeg = false
-                decPrivate = false
+                csiPrefix = 0
+                csiIntermediate = false
             }
             ']' -> {
                 esc = Osc
@@ -405,7 +415,8 @@ class VtEmulator(
 
     private fun csi(b: Int) {
         when (b.toChar()) {
-            '?' -> decPrivate = true
+            '<', '=', '>', '?' -> csiPrefix = b
+            in ' '..'/' -> csiIntermediate = true
             ';' -> {
                 if (paramCount < params.lastIndex) {
                     paramCount++
@@ -420,12 +431,23 @@ class VtEmulator(
                 params[idx] = params[idx] * 10 + (b - '0'.code)
             }
             else -> {
+                if (b !in 0x40..0x7e) {
+                    // 不是终结字节:放弃这条序列,ESC 则开始新的转义
+                    esc = if (b == 0x1b) Esc else Ground
+                    return
+                }
                 if (paramCount == 0 && params[0] == 0) {
                     // zero params: treat as empty
                 } else if (params[paramCount] != 0 || paramCount > 0) {
                     paramCount++
                 }
-                execCsi(b.toChar())
+                when {
+                    csiIntermediate -> Unit
+                    csiPrefix == '>'.code -> if (b == 'm'.code && p(0, 0) == 4) {
+                        modifyOtherKeys = p(1, 0).takeIf { it in 0..2 } ?: modifyOtherKeys
+                    }
+                    csiPrefix == 0 || decPrivate -> execCsi(b.toChar())
+                }
                 esc = Ground
             }
         }
@@ -471,7 +493,7 @@ class VtEmulator(
             }
             'J' -> eraseDisplay(if (paramCount == 0) 0 else params[0])
             'K' -> eraseLine(if (paramCount == 0) 0 else params[0])
-            'm' -> sgr()
+            'm' -> if (!decPrivate) sgr()
             'r' -> {
                 val top = (p(0, 1) - 1).coerceIn(0, rows - 1)
                 val bot = (if (paramCount > 1) params[1] else rows) - 1

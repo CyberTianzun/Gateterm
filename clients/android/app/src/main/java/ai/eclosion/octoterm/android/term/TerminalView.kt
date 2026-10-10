@@ -80,7 +80,7 @@ class TerminalView @JvmOverloads constructor(
                     val value = text.toString()
                     val asciiKey = value.length == 1 && value[0].code in 32..126
                     val modifiers = if (composing && !asciiKey) KeyModifiers() else softModifiers
-                    emit(keyboard.committedText(value, modifiers))
+                    emit(keyboard.committedText(value, modifiers, emulator.modifyOtherKeys))
                     if ((!composing || asciiKey) && value.length == 1 && value[0].code < 128 &&
                         TerminalKey.fromAscii(value[0]) != null
                     ) consumeModifiers()
@@ -104,7 +104,10 @@ class TerminalView @JvmOverloads constructor(
                 if (composing) return super.deleteSurroundingText(beforeLength, afterLength)
                 if (inputEnabled) {
                     repeat(beforeLength.coerceIn(0, 200_000)) {
-                        emit(keyboard.tap(KeyStroke(TerminalKey.Backspace, modifiers = softModifiers)))
+                        emit(keyboard.tap(
+                            KeyStroke(TerminalKey.Backspace, modifiers = softModifiers),
+                            modifyOtherKeys = emulator.modifyOtherKeys,
+                        ))
                     }
                     repeat(afterLength.coerceIn(0, 200_000)) {
                         emit(keyboard.tap(KeyStroke(TerminalKey.Delete, modifiers = softModifiers)))
@@ -187,7 +190,9 @@ class TerminalView @JvmOverloads constructor(
             key != TerminalKey.NumpadDecimal
         ) unicode = key.character
         val modifiers = AndroidKeyMapper.modifiers(event) + softModifiers
-        emit(keyboard.keyDown(id, KeyStroke(key, unicode, modifiers), emulator.applicationCursor))
+        emit(keyboard.keyDown(
+            id, KeyStroke(key, unicode, modifiers), emulator.applicationCursor, emulator.modifyOtherKeys,
+        ))
         if (key !in TerminalKey.ShiftLeft..TerminalKey.ScrollLock) consumeModifiers()
         return true
     }

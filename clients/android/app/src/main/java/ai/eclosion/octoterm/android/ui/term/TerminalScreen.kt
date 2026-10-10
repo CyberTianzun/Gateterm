@@ -167,7 +167,9 @@ fun TerminalScreen(
                 onKey = { stroke ->
                     if (!reconnecting) {
                         val modifiers = stroke.modifiers + KeyModifiers(shift = shift, ctrl = ctrl, alt = alt)
-                        onInput(keyboard.tap(stroke.copy(modifiers = modifiers), emulator.applicationCursor))
+                        onInput(keyboard.tap(
+                            stroke.copy(modifiers = modifiers), emulator.applicationCursor, emulator.modifyOtherKeys,
+                        ))
                         clearModifiers()
                     }
                 },

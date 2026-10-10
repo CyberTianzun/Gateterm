@@ -134,6 +134,42 @@ class VtEmulatorTest {
         assertEquals(33, plain[4].toInt() and 0xff)
         assertEquals(33, plain[5].toInt() and 0xff)
     }
+
+    @Test
+    fun prefixedAndIntermediateCsiDoNotLeakText() {
+        val t = VtEmulator(40, 5)
+        // Claude Code 启动时发的键盘协议序列,以及光标形状(带中间字节)
+        t.write("\u001b[>4;2m\u001b[?u\u001b[>5u\u001b[<u\u001b[>0q\u001b[2 q\u001b[!pX".toByteArray())
+        assertEquals('X', t.cell(0, 0).ch)
+        assertEquals(' ', t.cell(1, 0).ch)
+        assertEquals(0, t.cell(0, 0).attrs)
+    }
+
+    @Test
+    fun tracksModifyOtherKeys() {
+        val t = VtEmulator(20, 5)
+        assertEquals(0, t.modifyOtherKeys)
+        t.write("\u001b[>4;2m".toByteArray())
+        assertEquals(2, t.modifyOtherKeys)
+        t.write("\u001b[>4;1m".toByteArray())
+        assertEquals(1, t.modifyOtherKeys)
+        t.write("\u001b[>4m".toByteArray())
+        assertEquals(0, t.modifyOtherKeys)
+        // 跨 write 切开的序列;不认识的取值保持原状
+        t.write("\u001b[>4".toByteArray())
+        t.write(";2m".toByteArray())
+        assertEquals(2, t.modifyOtherKeys)
+        t.write("\u001b[>4;9m\u001b[>5;0m".toByteArray())
+        assertEquals(2, t.modifyOtherKeys)
+        // `CSI ? 4 m` 是查询,不是 SGR
+        t.write("\u001b[?4mA".toByteArray())
+        assertEquals(0, t.cell(0, 0).attrs)
+        t.write("\u001bc".toByteArray())
+        assertEquals(0, t.modifyOtherKeys)
+        t.write("\u001b[>4;2m".toByteArray())
+        t.reset()
+        assertEquals(0, t.modifyOtherKeys)
+    }
 }
 
 private fun row(t: VtEmulator, y: Int): String {

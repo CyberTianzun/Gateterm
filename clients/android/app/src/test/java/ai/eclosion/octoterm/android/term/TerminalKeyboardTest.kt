@@ -119,6 +119,46 @@ class TerminalKeyboardTest {
     }
 
     @Test
+    fun nonWindowsWithoutModifyOtherKeysKeepsShiftEnterAsReturn() {
+        val keyboard = TerminalKeyboard("macos")
+        assertEquals("\r", keyboard.tap(KeyStroke(TerminalKey.Enter, modifiers = KeyModifiers(shift = true))).text())
+        assertEquals("\r", keyboard.committedText("\n", KeyModifiers(shift = true)).text())
+    }
+
+    @Test
+    fun modifyOtherKeysEncodesOnlyCombinationsLegacyLoses() {
+        val keyboard = TerminalKeyboard("linux")
+        // [键, shift/alt/ctrl 掩码, 期望;null = 保持传统编码]
+        val cases = listOf(
+            Triple(TerminalKey.Enter, 1, "\u001b[27;2;13~"), Triple(TerminalKey.Enter, 4, "\u001b[27;5;13~"),
+            Triple(TerminalKey.Enter, 3, "\u001b[27;4;13~"), Triple(TerminalKey.NumpadEnter, 1, "\u001b[27;2;13~"),
+            Triple(TerminalKey.Enter, 0, "\r"), Triple(TerminalKey.Enter, 2, "\u001b\r"),
+            Triple(TerminalKey.Tab, 4, "\u001b[27;5;9~"), Triple(TerminalKey.Tab, 1, "\u001b[Z"),
+            Triple(TerminalKey.Backspace, 1, "\u001b[27;2;127~"), Triple(TerminalKey.Backspace, 4, "\b"),
+            Triple(TerminalKey.Backspace, 2, "\u001b\u007f"),
+            Triple(TerminalKey.Escape, 1, "\u001b[27;2;27~"), Triple(TerminalKey.Escape, 2, "\u001b\u001b"),
+            Triple(TerminalKey.Up, 1, "\u001b[1;2A"), Triple(TerminalKey.J, 4, "\n"),
+        )
+        for (level in 1..2) {
+            for ((key, mask, want) in cases) {
+                val m = KeyModifiers(shift = mask and 1 != 0, alt = mask and 2 != 0, ctrl = mask and 4 != 0)
+                assertEquals("$level/$key/$mask", want, keyboard.tap(KeyStroke(key, modifiers = m), modifyOtherKeys = level).text())
+            }
+            assertEquals("\u001b[27;2;13~", keyboard.committedText("\n", KeyModifiers(shift = true), level).text())
+            assertEquals("\u001b[27;2;13~",
+                keyboard.keyDown(9, KeyStroke(TerminalKey.Enter, modifiers = KeyModifiers(shift = true)), modifyOtherKeys = level).text())
+            assertEquals("", keyboard.keyUp(9, KeyModifiers())!!.text())
+        }
+    }
+
+    @Test
+    fun windowsIgnoresModifyOtherKeys() {
+        val keyboard = TerminalKeyboard("windows")
+        assertEquals("\u001b[13;28;13;1;16;1_\u001b[13;28;13;0;16;1_",
+            keyboard.tap(KeyStroke(TerminalKey.Enter, modifiers = KeyModifiers(shift = true)), modifyOtherKeys = 2).text())
+    }
+
+    @Test
     fun unicodeHardwareTextDoesNotCreateAnOrphanWindowsKeyUp() {
         val keyboard = TerminalKeyboard("windows")
         assertEquals("é", keyboard.keyDown(1, KeyStroke(TerminalKey.E, 'é'.code)).text())

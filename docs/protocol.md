@@ -202,11 +202,11 @@ Launcher { id:str, provider:str, name:str, detail:str, command:[str], cwd:str? }
   non-ASCII text, paste and terminal replies retain xterm's byte input path.
   On other systems the pty passes bytes through unchanged, so the client is the
   key encoder. When the application enables XTMODKEYS modifyOtherKeys
-  (`CSI > 4 ; Pv m`, `Pv` 1 or 2), the web client encodes Enter, Tab, Backspace
-  and Escape combinations whose plain VT encoding drops a modifier as
-  `CSI 27 ; mod ; code ~` (e.g. Shift+Enter → `CSI 27;2;13~`). Alt-only,
-  Shift+Tab and Ctrl+Backspace keep their well-known encodings; other keys and
-  the mode-off case keep xterm's encoding.
+  (`CSI > 4 ; Pv m`, `Pv` 1 or 2), the web and Android clients encode Enter,
+  Tab, Backspace and Escape combinations whose plain VT encoding drops a
+  modifier as `CSI 27 ; mod ; code ~` (e.g. Shift+Enter → `CSI 27;2;13~`).
+  Alt-only, Shift+Tab and Ctrl+Backspace keep their well-known encodings; other
+  keys and the mode-off case keep the plain VT encoding.
   Clipboard and browser shortcuts retain their browser default actions; keys
   reserved by the browser or OS cannot be forwarded if no DOM event is delivered.
   Missing `os` (older servers) means unknown: keep the plain VT encoding.

@@ -112,10 +112,15 @@ class TerminalKeyboard(val serverOs: String) {
 
     fun hasPressed(id: Long): Boolean = pressed.containsKey(id)
 
-    fun keyDown(id: Long, stroke: KeyStroke, applicationCursor: Boolean = false): ByteArray {
+    fun keyDown(
+        id: Long,
+        stroke: KeyStroke,
+        applicationCursor: Boolean = false,
+        modifyOtherKeys: Int = 0,
+    ): ByteArray {
         val win32 = serverOs == "windows" && stroke.codePoint in 0..127
         pressed[id] = Pressed(stroke, win32, character(stroke))
-        return if (win32) packet(stroke, true) else legacy(stroke, applicationCursor)
+        return if (win32) packet(stroke, true) else legacy(stroke, applicationCursor, modifyOtherKeys)
     }
 
     fun keyUp(id: Long, modifiers: KeyModifiers): ByteArray? {
@@ -125,18 +130,18 @@ class TerminalKeyboard(val serverOs: String) {
         } else byteArrayOf()
     }
 
-    fun tap(stroke: KeyStroke, applicationCursor: Boolean = false): ByteArray =
+    fun tap(stroke: KeyStroke, applicationCursor: Boolean = false, modifyOtherKeys: Int = 0): ByteArray =
         if (serverOs == "windows" && stroke.codePoint in 0..127) {
             packet(stroke, true) + packet(stroke, false)
-        } else legacy(stroke, applicationCursor)
+        } else legacy(stroke, applicationCursor, modifyOtherKeys)
 
     /** IME commits are text, never bracketed paste. Explicit modifiers apply to one ASCII key. */
-    fun committedText(text: String, modifiers: KeyModifiers = KeyModifiers()): ByteArray {
+    fun committedText(text: String, modifiers: KeyModifiers = KeyModifiers(), modifyOtherKeys: Int = 0): ByteArray {
         if (text.length == 1 && text[0].code < 128) {
             val key = TerminalKey.fromAscii(text[0])
             if (key != null && (modifiers.active || text == "\n" || text == "\r" || text == "\t")) {
                 val cp = if (modifiers.shift && text[0] in 'a'..'z') text[0].uppercaseChar().code else text[0].code
-                return tap(KeyStroke(key, cp, modifiers))
+                return tap(KeyStroke(key, cp, modifiers), modifyOtherKeys = modifyOtherKeys)
             }
         }
         return text.toByteArray(Charsets.UTF_8)
@@ -179,10 +184,16 @@ class TerminalKeyboard(val serverOs: String) {
         }
     }
 
-    private fun legacy(stroke: KeyStroke, applicationCursor: Boolean): ByteArray {
+    private fun legacy(stroke: KeyStroke, applicationCursor: Boolean, modifyOtherKeys: Int): ByteArray {
         val key = stroke.key
         val m = stroke.modifiers
         val modifier = 1 + (if (m.shift) 1 else 0) + (if (m.alt) 2 else 0) + (if (m.ctrl) 4 else 0)
+        if (modifyOtherKeys != 0) {
+            val other = OTHER_KEYS[key]
+            if (other != null && modifier - 1 !in other.second) {
+                return "\u001b[27;$modifier;${other.first}~".toByteArray(Charsets.US_ASCII)
+            }
+        }
         val letter = when (key) {
             TerminalKey.Up -> 'A'; TerminalKey.Down -> 'B'; TerminalKey.Right -> 'C'; TerminalKey.Left -> 'D'
             TerminalKey.Home -> 'H'; TerminalKey.End -> 'F'
@@ -211,6 +222,21 @@ class TerminalKeyboard(val serverOs: String) {
         val cp = if (key == TerminalKey.Backspace) { if (m.ctrl) 8 else 127 } else character(stroke)
         val text = String(Character.toChars(cp))
         return ((if (m.alt) "\u001b" else "") + text).toByteArray(Charsets.UTF_8)
+    }
+
+    private companion object {
+        /**
+         * 程序打开 modifyOtherKeys 后,传统编码丢修饰键的键改发 CSI 27;mod;code ~(与 web 端
+         * keys.ts 一致)。second 是保留传统编码的修饰掩码(shift=1 alt=2 ctrl=4):单独 Alt
+         * 的 ESC 前缀不丢信息,Shift+Tab(CSI Z)、Ctrl+Backspace(BS)是公认编码。
+         */
+        val OTHER_KEYS = mapOf(
+            TerminalKey.Enter to (13 to setOf(0, 2)),
+            TerminalKey.NumpadEnter to (13 to setOf(0, 2)),
+            TerminalKey.Tab to (9 to setOf(0, 1, 2)),
+            TerminalKey.Backspace to (127 to setOf(0, 2, 4)),
+            TerminalKey.Escape to (27 to setOf(0, 2)),
+        )
     }
 
     private fun controlCharacter(cp: Int, ctrl: Boolean): Int = when {
