@@ -170,6 +170,45 @@ class VtEmulatorTest {
         t.reset()
         assertEquals(0, t.modifyOtherKeys)
     }
+
+    @Test
+    fun colonSubParamsDoNotLeakText() {
+        val t = VtEmulator(40, 5)
+        t.write("\u001b[4:3mA\u001b[4:0mB\u001b[38:2::10:20:30mC\u001b[48:2:40:50:60mD\u001b[38:5:196mE".toByteArray())
+        assertEquals("ABCDE", row(t, 0).trimEnd())
+        assertEquals(Attr.UNDERLINE, t.cell(0, 0).attrs and Attr.UNDERLINE)
+        assertEquals(0, t.cell(1, 0).attrs and Attr.UNDERLINE)
+        assertEquals(Color.rgb(10, 20, 30), t.cell(2, 0).fg)
+        assertEquals(Color.rgb(40, 50, 60), t.cell(3, 0).bg)
+        assertEquals(Color.indexed(196), t.cell(4, 0).fg)
+    }
+
+    @Test
+    fun subParamGroupsMixWithPlainParams() {
+        val t = VtEmulator(40, 5)
+        // 1(粗体);4:3(下划线);38:2:1:2:3(真彩前景);7(反显)—— 每组互不串位
+        t.write("\u001b[1;4:3;38:2:1:2:3;7mX".toByteArray())
+        val c = t.cell(0, 0)
+        assertEquals(Attr.BOLD or Attr.UNDERLINE or Attr.INVERSE, c.attrs and (Attr.BOLD or Attr.UNDERLINE or Attr.INVERSE))
+        assertEquals(Color.rgb(1, 2, 3), c.fg)
+        assertEquals(0, c.attrs and Attr.DIM)
+    }
+
+    @Test
+    fun underlineColorIsSkippedNotMisreadAsAttributes() {
+        val t = VtEmulator(40, 5)
+        // 58;5;1 的 1 不是粗体,58;2;r;g;b 的 2 不是 dim;58:2::r:g:b 整组跳过
+        t.write("\u001b[58;5;1mA\u001b[58;2;9;9;9mB\u001b[58:2::1:2:3mC".toByteArray())
+        assertEquals("ABC", row(t, 0).trimEnd())
+        for (x in 0..2) assertEquals(0, t.cell(x, 0).attrs)
+    }
+
+    @Test
+    fun colonInNonSgrSequenceIsIgnoredWhole() {
+        val t = VtEmulator(40, 5)
+        t.write("ab\u001b[1:2HX".toByteArray())
+        assertEquals("abX", row(t, 0).trimEnd())
+    }
 }
 
 private fun row(t: VtEmulator, y: Int): String {

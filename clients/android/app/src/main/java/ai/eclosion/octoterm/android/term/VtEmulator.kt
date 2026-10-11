@@ -66,6 +66,9 @@ class VtEmulator(
     private var utf8Acc = 0
     private var esc = Ground
     private val params = IntArray(16)
+    /** subParam[i]:params[i] 前面是 `:`,即上一个参数的子参数(ITU T.416,如 `38:2::r:g:b`)。 */
+    private val subParam = BooleanArray(16)
+    private var csiHasSubParams = false
     private var paramCount = 0
     private var paramNeg = false
     private var osc = StringBuilder()
@@ -133,6 +136,7 @@ class VtEmulator(
             paramCount = 0
             csiPrefix = 0
             csiIntermediate = false
+            csiHasSubParams = false
             osc.setLength(0)
             generation++
         }
@@ -361,9 +365,11 @@ class VtEmulator(
                 esc = Csi
                 paramCount = 0
                 params[0] = 0
+                subParam[0] = false
                 paramNeg = false
                 csiPrefix = 0
                 csiIntermediate = false
+            csiHasSubParams = false
             }
             ']' -> {
                 esc = Osc
@@ -417,10 +423,12 @@ class VtEmulator(
         when (b.toChar()) {
             '<', '=', '>', '?' -> csiPrefix = b
             in ' '..'/' -> csiIntermediate = true
-            ';' -> {
+            ';', ':' -> {
+                if (b == ':'.code) csiHasSubParams = true
                 if (paramCount < params.lastIndex) {
                     paramCount++
                     params[paramCount] = 0
+                    subParam[paramCount] = b == ':'.code
                 }
             }
             in '0'..'9' -> {
@@ -446,6 +454,8 @@ class VtEmulator(
                     csiPrefix == '>'.code -> if (b == 'm'.code && p(0, 0) == 4) {
                         modifyOtherKeys = p(1, 0).takeIf { it in 0..2 } ?: modifyOtherKeys
                     }
+                    // 子参数只对 SGR 有定义,其他序列带 `:` 整条忽略
+                    csiHasSubParams && b != 'm'.code -> Unit
                     csiPrefix == 0 || decPrivate -> execCsi(b.toChar())
                 }
                 esc = Ground
@@ -572,6 +582,13 @@ class VtEmulator(
         }
         var i = 0
         while (i < paramCount) {
+            var end = i + 1
+            while (end < paramCount && subParam[end]) end++
+            if (end - i > 1) {
+                sgrWithSubParams(i, end)
+                i = end
+                continue
+            }
             when (val n = params[i]) {
                 0 -> {
                     fg = Color.DEFAULT_FG
@@ -607,6 +624,8 @@ class VtEmulator(
                     bg = Color.ansi(n - 40, bright = false)
                 }
                 48 -> i += applyExt(i, fg = false)
+                // 下划线颜色:不支持,但要跳过它的参数,免得 `58;5;1` 的 1 被当成粗体
+                58 -> i += applyExt(i, fg = null)
                 49 -> {
                     bg = Color.DEFAULT_BG
                     bgIndex = Color.INDEX_DEFAULT
@@ -624,37 +643,61 @@ class VtEmulator(
         }
     }
 
-    private fun applyExt(i: Int, fg: Boolean): Int {
+    /** 分号形式的 38/48/58,返回额外消耗的参数个数。fg 为 null 表示只跳过(58)。 */
+    private fun applyExt(i: Int, fg: Boolean?): Int {
         if (i + 1 >= paramCount) return 0
         return when (params[i + 1]) {
             5 -> {
                 if (i + 2 < paramCount) {
                     val idx = params[i + 2].coerceIn(0, 255)
-                    val c = Color.indexed(idx)
-                    if (fg) {
-                        this.fg = c
-                        fgIndex = idx
-                    } else {
-                        bg = c
-                        bgIndex = idx
-                    }
+                    setColor(fg, Color.indexed(idx), idx)
                 }
                 2
             }
             2 -> {
                 if (i + 4 < paramCount) {
-                    val c = Color.rgb(params[i + 2], params[i + 3], params[i + 4])
-                    if (fg) {
-                        this.fg = c
-                        fgIndex = Color.INDEX_RGB
-                    } else {
-                        bg = c
-                        bgIndex = Color.INDEX_RGB
-                    }
+                    setColor(fg, Color.rgb(params[i + 2], params[i + 3], params[i + 4]), Color.INDEX_RGB)
                 }
                 4
             }
             else -> 1
+        }
+    }
+
+    /** 冒号形式 `n:a:b…`,[i, end) 是一整组。未知的组整组跳过。 */
+    private fun sgrWithSubParams(i: Int, end: Int) {
+        when (params[i]) {
+            // 4:0 关下划线,4:1..5 是各种花式下划线,都近似成普通下划线
+            4 -> attrs = if (params[i + 1] == 0) attrs and Attr.UNDERLINE.inv() else attrs or Attr.UNDERLINE
+            38, 48 -> {
+                val fg = params[i] == 38
+                when (params[i + 1]) {
+                    5 -> if (end - i > 2) {
+                        val idx = params[i + 2].coerceIn(0, 255)
+                        setColor(fg, Color.indexed(idx), idx)
+                    }
+                    // 标准是 2:色彩空间:r:g:b,常见的还有省掉色彩空间的 2:r:g:b
+                    2 -> {
+                        val values = end - (i + 2)
+                        val r = if (values >= 4) i + 3 else i + 2
+                        if (values >= 3) setColor(fg, Color.rgb(params[r], params[r + 1], params[r + 2]), Color.INDEX_RGB)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun setColor(fg: Boolean?, color: Int, index: Int) {
+        when (fg) {
+            true -> {
+                this.fg = color
+                fgIndex = index
+            }
+            false -> {
+                bg = color
+                bgIndex = index
+            }
+            null -> Unit
         }
     }
 
