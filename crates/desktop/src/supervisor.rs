@@ -132,6 +132,15 @@ impl Supervisor {
             }
         });
         tracing::info!(%actual, "http 层已就绪");
+        // 和 octoterm-server 启动时同一个自检。desktop 的端口能在设置里改,每次重建
+        // HTTP 层都可能让已装的 hook 失效,所以放在这里而不是只在进程启动时查一次。
+        let port = actual.port();
+        tokio::task::spawn_blocking(move || {
+            let env = octoterm_server::agent::detect::DetectEnv::current();
+            for w in octoterm_server::agent::startup_warnings(&env, port) {
+                tracing::warn!("{w}");
+            }
+        });
         self.running = Some(Running { listen: actual, token, join });
         Ok(actual)
     }

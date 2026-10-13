@@ -8,7 +8,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { OctoClient } from "./client";
-import { type OctoConfig, loadConfig, saveConfig, toTerminalOptions, toPreviewOptions } from "./config";
+import { type OctoConfig, loadConfig, saveConfig, toTerminalOptions } from "./config";
 import { resolveTheme } from "./theme-catalog";
 import { applyUiColors } from "./appearance";
 import { mountSettings } from "./settings";
@@ -57,7 +57,6 @@ let keyboard: KeyboardAdapter | null = null;
 let term: Terminal | null = null;
 let fit: FitAddon | null = null;
 let webgl: WebglAddon | null = null;
-const previews = new Map<number, Terminal>();
 /** key = `${agent_id} ${agent_session_id}`,见 agents.ts */
 const agents: AgentMap = new Map();
 let transcriptEnabled = false;
@@ -147,9 +146,8 @@ subscribe(() => {
 
 /* ---------- 外观配置 ---------- */
 
-/** 主题/字体改动的唯一落点:界面变量、主终端、所有预览、渲染器,一次全刷。 */
+/** 主题/字体改动的唯一落点:界面变量、主终端、渲染器,一次全刷。 */
 function applyConfig(next: OctoConfig) {
-  const previewToggled = next.ui.sidebarPreview !== config.ui.sidebarPreview;
   config = next;
   saveConfig(config);
   // 语言真变了才会通知订阅者(setLocale 对同值是空操作),所以不必自己比一遍
@@ -163,10 +161,6 @@ function applyConfig(next: OctoConfig) {
     // 要一帧才把新的 cell 尺寸量出来,这里等一帧再上报,否则量到的还是旧值。
     requestAnimationFrame(refit);
   }
-  for (const p of previews.values()) p.options = toPreviewOptions(config);
-  // 预览开关是唯一需要重建侧边栏 DOM 的改动:其余(主题/字形)对已存在的预览
-  // 终端直接改 options 就够了。
-  if (previewToggled) renderSidebar();
 }
 
 /** WebGL 渲染器。装载失败(没有 WebGL2 / 上下文丢失)静默回落到 DOM 渲染器 ——
@@ -198,12 +192,10 @@ const settings = mountSettings({
   token,
 });
 
-/* ---------- sidebar:选择/预览/改名/结束都在这里 ---------- */
+/* ---------- sidebar:选择/改名/结束都在这里 ---------- */
 function renderSidebar() {
   const nav = $("session-nav");
   nav.innerHTML = "";
-  previews.forEach((p) => p.dispose());
-  previews.clear();
   if (sessions.length === 0) {
     nav.innerHTML = `<div class="empty">${t("session.empty")}</div>`;
     return;
@@ -215,7 +207,6 @@ function renderSidebar() {
     row.innerHTML = `
       <div class="sname"></div>
       <div class="smeta"></div>
-      <div class="preview"></div>
       <div class="sacts">
         ${showChat ? '<button type="button" data-act="view-toggle" aria-controls="chat-view"></button>' : ""}
         <button data-act="rename" title="${t("session.rename")}">✎</button>
@@ -229,15 +220,6 @@ function renderSidebar() {
       row.querySelector(".sname")!.prepend(agentBadge(agent));
     }
     row.querySelector(".smeta")!.textContent = `${s.cols}×${s.rows} · ${fmtTime(s.created_at)}`;
-    const previewBox = row.querySelector(".preview") as HTMLElement;
-    if (config.ui.sidebarPreview) {
-      const preview = new Terminal({ cols: s.cols, rows: s.rows, ...toPreviewOptions(config) });
-      preview.open(previewBox);
-      previews.set(s.id, preview);
-      client.send({ type: "preview", id: s.id });
-    } else {
-      previewBox.hidden = true;
-    }
     row.addEventListener("click", (ev) => {
       const act = (ev.target as Element).closest<HTMLButtonElement>("button[data-act]")?.dataset.act;
       if (act === "view-toggle") {
@@ -1081,11 +1063,6 @@ client.onControl = (msg) => {
       }
       void refreshPendingDetails();
       break;
-    case "preview-data": {
-      const p = previews.get(msg.id);
-      if (p) p.write(Uint8Array.from(atob(msg.data), (c) => c.charCodeAt(0)));
-      break;
-    }
     case "resized":
       // 服务端说了算:字节流是按这个尺寸换行的,自作主张按视口大小渲染会错位。
       // 视口比它大的部分留白(见 style.css 的居中),小则出现滚动条。

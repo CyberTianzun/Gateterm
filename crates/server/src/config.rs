@@ -64,12 +64,13 @@ pub struct LauncherSpec {
 
 /// `[agents]` —— agent 集成。
 ///
-/// `install_enabled` **默认关**:装 hook 会改用户的 `~/.claude/settings.json`,
-/// 并且改变这台机器上所有 Claude 会话的行为。这种事必须是显式选择,不能因为
-/// 「跑起来了」就自动发生。headless / 共享部署可以把它永久关掉。
+/// 两个开关**默认开**。它们只是「允许」:`install_enabled` 不会自动装任何东西,
+/// 真正改 `~/.claude/settings.json` 的仍然只有用户在设置页按下的「安装」(见
+/// `crate::agent::apply` —— 不做「每次启动重写」);`transcript_enabled` 只在有人
+/// 打开聊天视图时才读对话记录。headless / 共享部署可以在 `[agents]` 里显式关掉。
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub struct AgentsConfig {
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub install_enabled: bool,
     #[serde(default = "default_session_stale")]
     pub session_stale_secs: u64,
@@ -77,10 +78,10 @@ pub struct AgentsConfig {
     pub working_stale_secs: u64,
     /// 把**整段对话**送上网。
     ///
-    /// 默认关,而且是和 `install_enabled` **分开**的一个决定:装 hook 让我们看到
-    /// 「它在干什么」,这个开关让我们看到「它说了什么」—— 后者是代码、路径、命令、
-    /// 模型的思考过程,暴露面高一个数量级,不该靠前者顺带同意。
-    #[serde(default)]
+    /// 和 `install_enabled` 是**分开**的一个开关:装 hook 让我们看到「它在干什么」,
+    /// 这个开关让我们看到「它说了什么」—— 后者是代码、路径、命令、模型的思考过程,
+    /// 暴露面高一个数量级,所以要能单独关掉。
+    #[serde(default = "default_true")]
     pub transcript_enabled: bool,
     /// 一个挂起请求最多等多久。
     ///
@@ -89,6 +90,10 @@ pub struct AgentsConfig {
     /// 我们知道发生了什么,能记日志、能把状态改回去。
     #[serde(default = "default_pending_timeout")]
     pub pending_timeout_secs: u64,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_pending_timeout() -> u64 {
@@ -106,11 +111,11 @@ fn default_working_stale() -> u64 {
 impl Default for AgentsConfig {
     fn default() -> Self {
         Self {
-            install_enabled: false,
+            install_enabled: true,
             session_stale_secs: default_session_stale(),
             working_stale_secs: default_working_stale(),
             pending_timeout_secs: default_pending_timeout(),
-            transcript_enabled: false,
+            transcript_enabled: true,
         }
     }
 }
@@ -256,6 +261,18 @@ mod tests {
         assert_eq!(Config::default().window_size, WindowSize::Smallest);
         let cfg: Config = toml::from_str("window_size = \"latest\"").unwrap();
         assert_eq!(cfg.window_size, WindowSize::Latest);
+    }
+
+    /// agent 集成默认开;`[agents]` 里显式写 false 仍然能关掉。
+    #[test]
+    fn agent_switches_default_on_and_can_be_turned_off() {
+        let cfg: Config = toml::from_str("").unwrap();
+        assert!(cfg.agents.install_enabled && cfg.agents.transcript_enabled);
+        let cfg: Config = toml::from_str("[agents]\nsession_stale_secs = 60").unwrap();
+        assert!(cfg.agents.install_enabled && cfg.agents.transcript_enabled);
+        let cfg: Config =
+            toml::from_str("[agents]\ninstall_enabled = false\ntranscript_enabled = false").unwrap();
+        assert!(!cfg.agents.install_enabled && !cfg.agents.transcript_enabled);
     }
 
     #[test]

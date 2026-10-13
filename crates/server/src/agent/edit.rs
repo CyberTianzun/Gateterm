@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 
 /// 生成计划所需的上下文。
+#[derive(Clone)]
 pub struct InstallCtx {
     pub home: PathBuf,
     /// 当前监听端口。只影响**新写入**的 URL;删除时不看端口(见 `is_ours_any_port`)。
@@ -42,6 +43,38 @@ pub enum EditOp {
     EnsureHook { event: String, group: Value },
     /// 删掉该事件下所有我方 hook;被我们清空的组一并删掉,事件键空了也删掉。
     RemoveOurs { event: String },
+    /// 清空:扫遍 `hooks` 下的**每一个**事件,删掉所有我方 hook,不看端口、不看
+    /// 事件名在不在当前的托管清单里、也不看 URL 里写的是哪家 agent。
+    ///
+    /// 和 `RemoveOurs` 的区别正是它存在的理由:卸载只认「这个版本会装的那些事件」,
+    /// 旧版本装过、后来不再托管的事件,或者异常中断留下的半截条目,卸载够不着。
+    /// 「是不是我们的」仍然走同一个极严的判定(`is_ours_any_port`),所以清得再狠
+    /// 也碰不到用户自己的 hook。
+    PurgeOurs,
+    /// 整个文件归我们管:写成 `content`。
+    ///
+    /// 给那些没有「hook 配置」、只认「往某目录放一个文件」的 agent(pi 的扩展)。
+    /// 所有权靠文件开头的 [`OWNED_MARKER`] 认 —— 同名但没有标记的文件是用户的,
+    /// 拒绝覆盖(`apply` 回 `Invalid`)。
+    WriteOwnedFile { content: String },
+    /// 删掉我们写的那个文件。没有标记就不删,文件不在就什么都不做。
+    RemoveOwnedFile,
+}
+
+/// 整文件托管时写在第一行的所有权标记。改它等于让所有旧安装变成「不是我们的」,
+/// 卸载和清空都会够不着 —— 不要改。
+pub const OWNED_MARKER: &str = "octoterm-managed";
+
+/// 这段文本是不是我们整文件托管写出来的:只看第一行。
+pub fn is_owned_file(text: &str) -> bool {
+    text.lines().next().is_some_and(|l| l.contains(OWNED_MARKER))
+}
+
+impl EditOp {
+    /// 整文件操作走 `apply` 的另一条落盘路径(不解析 JSON)。
+    pub fn is_file_op(&self) -> bool {
+        matches!(self, Self::WriteOwnedFile { .. } | Self::RemoveOwnedFile)
+    }
 }
 
 pub fn apply_to_json(doc: &mut Value, op: &EditOp) -> Result<()> {
@@ -49,6 +82,20 @@ pub fn apply_to_json(doc: &mut Value, op: &EditOp) -> Result<()> {
         EditOp::EnsureHook { event, group } => ensure(doc, event, group),
         EditOp::RemoveOurs { event } => {
             remove_ours(doc, event);
+            Ok(())
+        }
+        EditOp::WriteOwnedFile { .. } | EditOp::RemoveOwnedFile => {
+            anyhow::bail!("整文件操作不能应用到 JSON 上")
+        }
+        EditOp::PurgeOurs => {
+            let events: Vec<String> = doc
+                .get("hooks")
+                .and_then(Value::as_object)
+                .map(|h| h.keys().cloned().collect())
+                .unwrap_or_default();
+            for event in events {
+                remove_ours(doc, &event);
+            }
             Ok(())
         }
     }
@@ -104,6 +151,49 @@ fn remove_ours(doc: &mut Value, event: &str) {
     if hooks.is_empty() {
         root.shift_remove("hooks");
     }
+}
+
+/// 这份配置是不是已经和「按当前服务装一遍」的结果一致。只读,不改 `doc`。
+///
+/// 回答的是启动自检要的那个问题:**装是装了,可它还对得上这个服务吗?** 端口变了、
+/// 新版本多托管了一个事件、Codex 那条命令里的二进制路径换了,都算对不上。
+///
+/// 故意不用「把计划应用一遍再比文本 / 比整棵树」:`ensure` 会把我们的组挪到数组
+/// 末尾,别的程序在我们之后追加了 hook 就会被误报成不一致。这里只看语义 ——
+///
+/// - 每条 `EnsureHook`:该事件下我方 hook **恰好一条**,且和计划写的一模一样;
+/// - 整份文件里没有任何一条我方 hook 指向别的端口(那是打不通的残留)。
+pub fn is_current(doc: &Value, edits: &[&EditOp], port: u16) -> bool {
+    let ensured = edits.iter().all(|op| match op {
+        EditOp::EnsureHook { event, group } => {
+            let want = group.get("hooks").and_then(Value::as_array).and_then(|l| l.first());
+            let ours: Vec<&Value> = hooks_in(doc, event).filter(|h| is_ours_any_port(h)).collect();
+            matches!((ours.as_slice(), want), ([only], Some(w)) if *only == w)
+        }
+        // 计划里只有「装」才有「对不对得上」可言
+        EditOp::RemoveOurs { .. } | EditOp::PurgeOurs => true,
+        // 整文件托管不在 JSON 里,由调用方直接比文本(见 `agent::install_is_current`)
+        EditOp::WriteOwnedFile { .. } | EditOp::RemoveOwnedFile => true,
+    });
+    let no_strays = doc
+        .get("hooks")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|h| h.keys())
+        .flat_map(|event| hooks_in(doc, event))
+        .all(|h| our_url(h).is_none_or(|u| u.port == port));
+    ensured && no_strays
+}
+
+fn hooks_in<'a>(doc: &'a Value, event: &str) -> impl Iterator<Item = &'a Value> {
+    doc.get("hooks")
+        .and_then(|h| h.get(event))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|g| g.get("hooks"))
+        .filter_map(Value::as_array)
+        .flatten()
 }
 
 /// 这条 hook 是不是我们在**当前端口**上写的。

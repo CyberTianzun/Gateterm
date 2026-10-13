@@ -116,15 +116,25 @@ session, so it asks for confirmation first if any are running.
 **The chat view, and what it exposes**: when a hosted session is running Claude
 Code, you can open it as a structured message stream instead of a VT screen. It
 reads the agent's own transcript — **read-only, never cached, never written** —
-and is gated by `agents.transcript_enabled`, **off by default**.
+and is gated by `agents.transcript_enabled` (on by default; set it to `false` under `[agents]` to turn it off).
 
 That is a separate switch from installing hooks on purpose: hooks let octoterm
 see *what it is doing*, this one lets it see *what was said* — code, paths,
 commands, the model's reasoning. An order of magnitude more exposure, and not
 something the first switch should quietly imply. **Read it together with the
-next paragraph**: the desktop app listens on every interface by default, so with
-both turned on, anyone on your LAN holding the token can read your whole
-conversation.
+next paragraph**: the desktop app listens on every interface by default, and
+both switches are on by default, so anyone on your LAN holding the token can
+read your whole conversation — turn it off on untrusted networks, or listen on
+127.0.0.1 instead.
+
+**Hook self-check and cleanup**: on every start (and whenever the desktop app
+restarts the server on a new port) octoterm checks that installed hooks match
+the running server — port, events, binary path — and prints a warning when they
+don't. It only reports; fixing is still the "Reinstall" button under Settings →
+AI integration. For leftovers, use "Purge" on the same page or run
+`octoterm-server purge-hooks`: it removes **every** hook octoterm ever wrote
+into an agent's config (any port, any event), leaves your own hooks alone, and
+backs the file up first.
 
 **It listens on `0.0.0.0:7683` by default — unlike `octoterm-server`.** Reaching
 your machine from a phone or tablet is the whole point of the desktop app, and a
@@ -183,7 +193,10 @@ clients available.
 2. **Agent integration.** A hosted session lets you take over an agent's
    prompts, answer its choices, and check its status from any device.
    **Claude Code works today** (hook install, live session state, remote
-   approval); Codex, pi and others come later.
+   approval, chat view). Codex is supported too (state, approval, chat view;
+   its hooks must be reviewed once with `/hooks`). **pi** is supported through a
+   generated extension at `~/.pi/agent/extensions/octoterm.ts` (state and chat
+   view; pi has no approval prompts, so there is nothing to approve remotely).
 3. **No file manager.** File management is very unlikely to ever be added —
    that's what the shell in your session is for.
 

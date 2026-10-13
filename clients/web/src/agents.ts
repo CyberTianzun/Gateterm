@@ -259,9 +259,8 @@ export type InstallOutcome = "ok" | "disabled" | "conflict" | "failed";
 /**
  * 装 / 卸 hook。
  *
- * `disabled`(403)不是错误,是「服务端把这个能力关着」—— 它默认就是关的,因为
- * 这个动作会去改用户的 `~/.claude/settings.json`。UI 要把它当成一句说明,
- * 而不是一条失败。
+ * `disabled`(403)不是错误,是「服务端把这个能力关着」—— 默认是开的,但部署方
+ * 可以在 config.toml 里关掉。UI 要把它当成一句说明,而不是一条失败。
  */
 export async function setAgentIntegration(
   token: string,
@@ -275,6 +274,26 @@ export async function setAgentIntegration(
     });
     if (r.ok) return "ok";
     if (r.status === 403) return "disabled";
+    if (r.status === 409) return "conflict";
+    return "failed";
+  } catch {
+    return "failed";
+  }
+}
+
+/**
+ * 清空:删掉这家配置里**所有** octoterm 写过的 hook —— 不论端口、不论事件。
+ *
+ * 卸载只认当前版本托管的那些事件;旧端口、旧版本、异常中断留下的残留只有这个
+ * 清得掉。服务端不对它做 `install_enabled` 门控(只删我们自己的东西),改前照样备份。
+ */
+export async function purgeAgentHooks(token: string, id: string): Promise<InstallOutcome> {
+  try {
+    const r = await fetch(`/api/agents/${encodeURIComponent(id)}/purge`, {
+      method: "POST",
+      headers: authHeaders(token),
+    });
+    if (r.ok) return "ok";
     if (r.status === 409) return "conflict";
     return "failed";
   } catch {

@@ -20,8 +20,10 @@ import { knownThemes, loadCatalog, catalogLoaded, resolveTheme } from "./theme-c
 import { LOCALES, LOCALE_NAMES, type LocalePref, type MsgKey, subscribe, t } from "./i18n";
 import {
   type AgentStatus,
+  type InstallOutcome,
   fetchAgentPlan,
   fetchAgents,
+  purgeAgentHooks,
   setAgentIntegration,
   summarizePlan,
 } from "./agents";
@@ -369,10 +371,6 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
       patch((c) => ({ ...c, ui: { ...c.ui, locale: lang.value as LocalePref } })),
     );
 
-    const prev = checkbox(cfg.ui.sidebarPreview);
-    prev.addEventListener("change", () =>
-      patch((c) => ({ ...c, ui: { ...c.ui, sidebarPreview: prev.checked } })),
-    );
     const webgl = checkbox(cfg.ui.webgl);
     webgl.addEventListener("change", () =>
       patch((c) => ({ ...c, ui: { ...c.ui, webgl: webgl.checked } })),
@@ -380,7 +378,6 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
 
     wrap.append(
       row(t("settings.ui.language"), lang, t("settings.ui.languageHint")),
-      row(t("settings.ui.sidebarPreview"), prev),
       row(t("settings.ui.webgl"), webgl, t("settings.ui.webglHint")),
     );
     return wrap;
@@ -495,6 +492,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
         const badge =
           a.integration === "installed" ? t("agent.installed")
           : a.integration === "stale-port" ? t("agent.stalePort")
+          : a.integration === "outdated" ? t("agent.outdated")
           : t("agent.notInstalled");
         head.append(el("span", "agent-badge", badge));
         card.append(head);
@@ -502,6 +500,8 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
         // 「装完还要做一步」和「冲突」是两回事,分开显示 —— 前者是流程,后者是风险
         if (a.activation === "codex-hooks-review") {
           card.append(el("div", "agent-activation", t("agent.activation.codex-hooks-review")));
+        } else if (a.activation === "pi-reload") {
+          card.append(el("div", "agent-activation", t("agent.activation.pi-reload")));
         }
         for (const c of a.conflicts) card.append(el("div", "agent-conflict", c));
         if (a.conflicts.length > 0) card.append(el("div", "set-hint", t("agent.conflictNote")));
@@ -541,19 +541,38 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
           preview.hidden = false;
           previewBtn.textContent = t("agent.previewHide");
         });
-        btn.addEventListener("click", async () => {
-          btn.disabled = true;
-          const outcome = await setAgentIntegration(host.token(), a.id, !installed);
-          btn.disabled = false;
+        const run = async (b: HTMLButtonElement, action: () => Promise<InstallOutcome>) => {
+          b.disabled = true;
+          const outcome = await action();
+          b.disabled = false;
           if (outcome === "ok") {
             void refreshAgents();
             return;
           }
           status.textContent =
             outcome === "disabled" ? t("agent.disabledHint") : t("agent.installFailed");
-        });
+        };
+        btn.addEventListener("click", () =>
+          run(btn, () => setAgentIntegration(host.token(), a.id, !installed)),
+        );
         const acts = el("div", "agent-acts");
-        acts.append(btn, previewBtn, status);
+        acts.append(btn);
+        // 装了但对不上当前服务(端口变了 / 版本变了):安装是幂等的,重装一次就对齐
+        if (a.integration === "stale-port" || a.integration === "outdated") {
+          const reinstall = el("button", "agent-act", t("agent.reinstall"));
+          reinstall.addEventListener("click", () =>
+            run(reinstall, () => setAgentIntegration(host.token(), a.id, true)),
+          );
+          acts.append(reinstall);
+        }
+        // 清空对「没装」也开放:残留恰恰常出现在 UI 认为没装的时候(只剩不再托管的事件)
+        const purge = el("button", "agent-preview-btn agent-purge", t("agent.purge"));
+        purge.title = t("agent.purgeHint");
+        purge.addEventListener("click", () => {
+          if (!confirm(t("agent.purgeConfirm", { name: a.name }))) return;
+          void run(purge, () => purgeAgentHooks(host.token(), a.id));
+        });
+        acts.append(previewBtn, purge, status);
         card.append(acts, preview);
         list.appendChild(card);
       }

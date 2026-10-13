@@ -50,7 +50,6 @@ export interface OctoConfig {
     /** 桌面上的侧边栏位置;窄屏的 left/right 仍使用对应一侧的抽屉。 */
     sidebarPosition: "left" | "right" | "hidden";
     /** 侧边栏里的小终端预览。关掉能省掉每个会话一个 Terminal 实例。 */
-    sidebarPreview: boolean;
     /** WebGL 渲染器。关掉回落到 DOM 渲染器。 */
     webgl: boolean;
   };
@@ -104,7 +103,7 @@ export function defaultConfig(prefersDark = true): OctoConfig {
       minimumContrastRatio: 1,
       drawBoldTextInBrightColors: true,
     },
-    ui: { locale: "auto", sidebarPosition: "left", sidebarPreview: true, webgl: true },
+    ui: { locale: "auto", sidebarPosition: "left", webgl: true },
   };
 }
 
@@ -255,7 +254,6 @@ function sanitizeRest(
     ui: {
       locale: pick(u.locale, ["auto", ...LOCALES] as const, d.ui.locale, "ui.locale", warn),
       sidebarPosition: pick(u.sidebarPosition, ["left", "right", "hidden"] as const, d.ui.sidebarPosition, "ui.sidebarPosition", warn),
-      sidebarPreview: bool(u.sidebarPreview, d.ui.sidebarPreview, "ui.sidebarPreview", warn),
       webgl: bool(u.webgl, d.ui.webgl, "ui.webgl", warn),
     },
   };
@@ -280,22 +278,6 @@ export function toTerminalOptions(cfg: OctoConfig): ITerminalOptions {
     customGlyphs: cfg.terminal.customGlyphs,
     minimumContrastRatio: cfg.terminal.minimumContrastRatio,
     drawBoldTextInBrightColors: cfg.terminal.drawBoldTextInBrightColors,
-  };
-}
-
-/** 侧边栏预览:共享配色和字形,但字号钉死(要塞进 96px 高的小格子),
- *  也不需要滚动缓冲和光标。 */
-export function toPreviewOptions(cfg: OctoConfig): ITerminalOptions {
-  return {
-    theme: cfg.theme.colors,
-    fontFamily: cfg.font.family,
-    fontSize: 5,
-    lineHeight: 1,
-    letterSpacing: 0,
-    customGlyphs: cfg.terminal.customGlyphs,
-    scrollback: 0,
-    disableStdin: true,
-    cursorInactiveStyle: "none",
   };
 }
 

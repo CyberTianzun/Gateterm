@@ -24,7 +24,6 @@ const {
   importConfigJson,
   exportConfigJson,
   toTerminalOptions,
-  toPreviewOptions,
   CONFIG_VERSION,
 } = cfgmod;
 
@@ -231,13 +230,4 @@ test("toTerminalOptions 映射到 xterm 选项", () => {
   // 不能悄悄带上构造期才该设的选项 —— term.options 是逐键合并的
   assert.equal("allowProposedApi" in o, false);
   assert.equal("cols" in o, false);
-});
-
-test("预览终端共享配色但钉死字号且禁用输入", () => {
-  const d = defaultConfig();
-  const o = toPreviewOptions(d);
-  assert.deepEqual(o.theme, d.theme.colors);
-  assert.equal(o.fontSize, 5);
-  assert.equal(o.disableStdin, true);
-  assert.equal(o.scrollback, 0);
 });

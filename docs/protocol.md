@@ -35,7 +35,7 @@ scope:         everything on the wire between a client and octoterm-server
 | protocol integration tests | `crates/server/tests/ws_{auth,control,attach,geometry}.rs` |
 | side-channel integration tests | `crates/server/tests/http_launchers.rs` |
 | agent integration (server side) | `crates/server/src/agent/` |
-| agent integration tests | `crates/server/tests/agent_{detect,edit,install,hook,pending,codex}.rs` |
+| agent integration tests | `crates/server/tests/agent_{detect,edit,install,purge,hook,pending,codex,pi}.rs` |
 | chat view (transcript reading) | `crates/server/src/agent/{transcript,claude_transcript,codex_transcript}.rs` |
 | chat view tests | `crates/server/tests/agent_{transcript,window,messages}.rs` |
 
@@ -80,7 +80,9 @@ scope:         everything on the wire between a client and octoterm-server
 - **T10a** A **mutating subset** exists under `/api/agents/`. These routes are
   `POST`, change state outside octoterm (they edit another program's
   configuration file), and are gated by server configuration
-  (`agents.install_enabled`, default off) — a disabled deployment answers `403`.
+  (`agents.install_enabled`, default on) — a disabled deployment answers `403`.
+  `purge` is the one exception: it only ever removes octoterm's own hooks, so it
+  is not gated.
   They are still session-independent: nothing here concerns a session, a channel
   or a byte stream. Rationale for keeping them off the control channel: a new
   client→server control message is breaking (X3) and would force a proto bump
@@ -96,10 +98,11 @@ scope:         everything on the wire between a client and octoterm-server
 | route | reply | notes |
 | --- | --- | --- |
 | `GET /api/launchers` | `{ "launchers": [Launcher] }` | see §2.2 |
-| `GET /api/agents` | `{ "agents": [AgentStatus] }` | which agents are installed on the host, and whether octoterm's integration is in place |
+| `GET /api/agents` | `{ "agents": [AgentStatus] }` | which agents are installed on the host, and whether octoterm's integration is in place (`integration`: `not-installed` \| `installed` \| `stale-port` \| `outdated`) |
 | `GET /api/agents/{id}/plan` | `{ "install": [...], "uninstall": [...] }` | dry run: what editing the agent's config would do |
 | `POST /api/agents/{id}/install` | `{ "changed": bool, "files": [...] }` | T10a; `403` when disabled |
 | `POST /api/agents/{id}/uninstall` | same | T10a |
+| `POST /api/agents/{id}/purge` | same | T10a, ungated: removes every octoterm hook in that agent's config regardless of port or event |
 | `GET /api/agents/sessions` | `{ "sessions": [AgentSession], "transcript_enabled": bool }` | full snapshot plus permission to read chat transcripts; a client re-fetches this after every reconnect (A5) |
 | `GET /api/agents/pending` | `{ "pending": [PendingRequest] }` | what is blocked waiting for a human, with the tool name and arguments needed to decide |
 | `POST /api/agents/answer` | `200` / `404` / `409` | T10a; answers one pending request. `409` = someone already answered it |

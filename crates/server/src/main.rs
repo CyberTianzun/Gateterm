@@ -15,6 +15,10 @@ enum Cmd {
         /// `http://127.0.0.1:<port>/hook/<agent>/<event>`
         url: String,
     },
+    /// 清空本机所有 agent 配置里 octoterm 写过的 hook(不论端口、不论事件),改前备份。
+    ///
+    /// 给异常残留兜底用:server 起不来、端口早就换过好几轮、设置页打不开的时候也能清。
+    PurgeHooks,
 }
 
 #[derive(Parser)]
@@ -47,6 +51,9 @@ async fn main() -> anyhow::Result<()> {
     if let Some(Cmd::Hook { url }) = Args::parse().cmd {
         std::process::exit(octoterm_server::agent::hook_cli::run(&url));
     }
+    if let Some(Cmd::PurgeHooks) = Args::parse().cmd {
+        std::process::exit(purge_hooks());
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -74,7 +81,50 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("    (token 为本次启动随机生成;用 --token 或配置文件可固定)");
     }
     let listen_port = listen.port();
+    // 端口一变,已装的 hook 就打不通了,而 agent 对此毫无症状 —— 只能在这里喊一声。
+    let home = octoterm_server::agent::detect::DetectEnv::current();
+    for w in tokio::task::spawn_blocking(move || octoterm_server::agent::startup_warnings(&home, listen_port))
+        .await
+        .unwrap_or_default()
+    {
+        eprintln!("warning: {w}");
+    }
     let agents = config.agents;
     let agent_sessions = std::sync::Arc::new(octoterm_server::agent::store::AgentSessionStore::new());
     serve(listener, AppState { manager, token, launchers, listen_port, agents, agent_sessions }).await
+}
+
+/// `purge-hooks` 子命令。逐家清,一家失败不影响其他家(局部失败原则),有失败则退出码 1。
+fn purge_hooks() -> i32 {
+    use octoterm_server::agent::{self, apply, detect::DetectEnv, edit::InstallCtx};
+    let Some(backup_dir) = apply::default_backup_dir() else {
+        eprintln!("无法确定备份目录,放弃清空");
+        return 1;
+    };
+    // 显式敲命令就是显式动作,不看 `install_enabled`(和 HTTP 的 purge 同理)
+    let opts = apply::ApplyOpts { enabled: true, backup_dir, backup_keep: 5 };
+    // 端口只影响新写入的 URL,清空不看它,随便给一个
+    let ctx = InstallCtx { home: DetectEnv::current().home, port: 0, include_blocking: true };
+    let mut failed = false;
+    for a in agent::registry() {
+        let result = agent::plan_purge(a.as_ref(), &ctx)
+            .map_err(|e| e.to_string())
+            .and_then(|plan| apply::apply(&plan, &opts).map_err(|e| e.to_string()));
+        match result {
+            Ok(outcomes) => {
+                for o in outcomes {
+                    match (o.changed, o.backup) {
+                        (false, _) => println!("{}: {} 里没有 octoterm 的 hook", a.name(), o.path.display()),
+                        (true, Some(b)) => println!("{}: 已清空 {}(备份 {})", a.name(), o.path.display(), b.display()),
+                        (true, None) => println!("{}: 已清空 {}", a.name(), o.path.display()),
+                    }
+                }
+            }
+            Err(e) => {
+                failed = true;
+                eprintln!("{}: 清空失败:{e}", a.name());
+            }
+        }
+    }
+    i32::from(failed)
 }

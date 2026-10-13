@@ -37,6 +37,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/agents/{id}/plan", get(crate::agent::routes::plan))
         .route("/api/agents/{id}/install", post(crate::agent::routes::install))
         .route("/api/agents/{id}/uninstall", post(crate::agent::routes::uninstall))
+        .route("/api/agents/{id}/purge", post(crate::agent::routes::purge))
         .route("/api/agents/sessions", get(crate::agent::routes::sessions))
         .route("/api/agents/pending", get(crate::agent::routes::pending))
         .route("/api/agents/messages", get(crate::agent::routes::messages))

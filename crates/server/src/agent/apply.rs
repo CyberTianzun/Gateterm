@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::edit::{apply_to_json, ConfigEdit};
+use super::edit::{apply_to_json, is_owned_file, ConfigEdit, EditOp};
 
 pub struct ApplyOpts {
     /// `agents.install_enabled`。默认关 —— 写别人的配置文件必须是显式选择。
@@ -78,7 +78,57 @@ pub fn apply(edits: &[ConfigEdit], opts: &ApplyOpts) -> Result<Vec<Outcome>, App
             paths.push(&e.path);
         }
     }
-    paths.into_iter().map(|path| apply_one(path, edits, opts)).collect()
+    paths
+        .into_iter()
+        .map(|path| {
+            let ops: Vec<&EditOp> = edits.iter().filter(|e| e.path == path).map(|e| &e.op).collect();
+            if ops.iter().any(|op| op.is_file_op()) {
+                apply_file(path, &ops, opts)
+            } else {
+                apply_one(path, edits, opts)
+            }
+        })
+        .collect()
+}
+
+/// 整文件托管的落盘。和 JSON 那条路同样的顺序:读原文 → 判所有权 → 备份 → 原子写。
+///
+/// 同一路径上只取最后一个整文件操作 —— 计划里不会混着出现,出现了也以最后的为准。
+fn apply_file(path: &Path, ops: &[&EditOp], opts: &ApplyOpts) -> Result<Outcome, ApplyError> {
+    let original = match std::fs::read_to_string(path) {
+        Ok(s) => Some(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(io_err(path, e)),
+    };
+    let unchanged = Ok(Outcome { path: path.to_path_buf(), changed: false, backup: None });
+    let foreign = original.as_deref().is_some_and(|t| !is_owned_file(t));
+    match ops.iter().rev().find(|op| op.is_file_op()) {
+        Some(EditOp::WriteOwnedFile { content }) => {
+            if foreign {
+                return Err(ApplyError::Invalid {
+                    path: path.to_path_buf(),
+                    detail: "同名文件不是 octoterm 写的,拒绝覆盖".into(),
+                });
+            }
+            if original.as_deref() == Some(content.as_str()) {
+                return unchanged;
+            }
+            let backup = match original.as_deref() {
+                Some(text) => Some(save_backup(path, text, opts)?),
+                None => None,
+            };
+            write_atomic(path, content)?;
+            Ok(Outcome { path: path.to_path_buf(), changed: true, backup })
+        }
+        Some(EditOp::RemoveOwnedFile) => {
+            // 不在、或不是我们的:什么都不做。卸载 / 清空绝不删用户的文件。
+            let Some(text) = original.filter(|_| !foreign) else { return unchanged };
+            let backup = save_backup(path, &text, opts)?;
+            std::fs::remove_file(path).map_err(|e| io_err(path, e))?;
+            Ok(Outcome { path: path.to_path_buf(), changed: true, backup: Some(backup) })
+        }
+        _ => unchanged,
+    }
 }
 
 fn apply_one(path: &Path, edits: &[ConfigEdit], opts: &ApplyOpts) -> Result<Outcome, ApplyError> {
@@ -99,6 +149,12 @@ fn apply_one(path: &Path, edits: &[ConfigEdit], opts: &ApplyOpts) -> Result<Outc
     for edit in edits.iter().filter(|e| e.path == path) {
         apply_to_json(&mut doc, &edit.op)
             .map_err(|e| ApplyError::Invalid { path: path.to_path_buf(), detail: e.to_string() })?;
+    }
+
+    // 文件本来不存在、编辑完也还是空的(卸载 / 清空一个没装过的 agent)—— 不凭空
+    // 造一个 `{}` 出来。没装过 Codex 的机器上不该因为点了「清空」就多出 hooks.json。
+    if original.is_none() && doc.as_object().is_some_and(|o| o.is_empty()) {
+        return Ok(Outcome { path: path.to_path_buf(), changed: false, backup: None });
     }
 
     let rendered = render(&doc);

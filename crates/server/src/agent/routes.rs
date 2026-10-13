@@ -41,8 +41,12 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response
 /// (R13:客户端中立)。
 fn describe(e: &ConfigEdit) -> serde_json::Value {
     let (action, event, spec) = match &e.op {
-        EditOp::EnsureHook { event, group } => ("ensure", event, Some(group.clone())),
-        EditOp::RemoveOurs { event } => ("remove", event, None),
+        EditOp::EnsureHook { event, group } => ("ensure", event.as_str(), Some(group.clone())),
+        EditOp::RemoveOurs { event } => ("remove", event.as_str(), None),
+        EditOp::PurgeOurs => ("purge", "*", None),
+        // 整文件托管没有「事件」,预演里显示成一个文件级动作
+        EditOp::WriteOwnedFile { .. } => ("ensure", "(extension file)", None),
+        EditOp::RemoveOwnedFile => ("remove", "(extension file)", None),
     };
     serde_json::json!({
         "path": e.path.to_string_lossy(),
@@ -113,6 +117,30 @@ pub async fn uninstall(
     mutate(state, id, headers, false).await
 }
 
+/// `POST /api/agents/{id}/purge` —— 清空:删掉这家配置里**所有**我方 hook。
+///
+/// 卸载只认当前版本托管的那些事件;旧版本装过的事件、异常中断留下的半截条目,
+/// 只有这个够得着(见 `EditOp::PurgeOurs`)。
+///
+/// **不受 `install_enabled` 门控**:它只会删我们自己写的东西,而关掉安装开关的
+/// 部署恰恰最需要一个清理残留的出口。备份照做。
+pub async fn purge(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !bearer_ok(&headers, &state.token) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let Some((adapter, ctx)) = ctx_for(&state, &id, true) else {
+        return (StatusCode::NOT_FOUND, "no such agent").into_response();
+    };
+    let Ok(plan) = crate::agent::plan_purge(adapter.as_ref(), &ctx) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "plan failed").into_response();
+    };
+    run_plan(plan, true, true).await
+}
+
 async fn mutate(state: AppState, id: String, headers: HeaderMap, installing: bool) -> Response {
     if !bearer_ok(&headers, &state.token) {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
@@ -122,18 +150,18 @@ async fn mutate(state: AppState, id: String, headers: HeaderMap, installing: boo
     let Some((adapter, ctx)) = ctx_for(&state, &id, blocking) else {
         return (StatusCode::NOT_FOUND, "no such agent").into_response();
     };
-    let Some(backup_dir) = default_backup_dir() else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "cannot resolve backup dir").into_response();
-    };
-    let opts = ApplyOpts {
-        enabled: state.agents.install_enabled,
-        backup_dir,
-        backup_keep: 5,
-    };
     let plan = if installing { adapter.plan_install(&ctx) } else { adapter.plan_uninstall(&ctx) };
     let Ok(plan) = plan else {
         return (StatusCode::INTERNAL_SERVER_ERROR, "plan failed").into_response();
     };
+    run_plan(plan, state.agents.install_enabled, blocking).await
+}
+
+async fn run_plan(plan: Vec<ConfigEdit>, enabled: bool, blocking: bool) -> Response {
+    let Some(backup_dir) = default_backup_dir() else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "cannot resolve backup dir").into_response();
+    };
+    let opts = ApplyOpts { enabled, backup_dir, backup_keep: 5 };
     // 落盘是阻塞 IO
     match tokio::task::spawn_blocking(move || apply(&plan, &opts)).await {
         Ok(Ok(outcomes)) => Json(serde_json::json!({

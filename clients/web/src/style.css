@@ -85,14 +85,7 @@ body[data-sidebar-position="right"] #sidebar { order: 2; border-right: 0; border
 }
 .srow.active .sname { color: var(--accent); }
 .srow.has-chat .sname { padding-right: 84px; }
-.srow .smeta { color: var(--dim); font-size: 12px; margin-bottom: 6px; }
-.srow .preview {
-  height: 96px;
-  overflow: hidden;
-  border-radius: 6px;
-  background: #000;
-  border: 1px solid var(--line);
-}
+.srow .smeta { color: var(--dim); font-size: 12px; }
 .srow .sacts {
   position: absolute;
   top: 6px;
@@ -231,6 +224,7 @@ body[data-sidebar-position="hidden"] #menu { display: none; }
 .set-bar { display: flex; flex-wrap: wrap; gap: 8px; }
 .set-bar .danger { margin-left: auto; }
 .set-bar .danger:hover { border-color: var(--danger); color: var(--danger); }
+.agent-purge:hover { border-color: var(--danger); color: var(--danger); }
 
 .set-search { width: 100%; }
 .theme-grid {
