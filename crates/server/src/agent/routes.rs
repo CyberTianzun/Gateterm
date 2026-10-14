@@ -294,11 +294,7 @@ pub async fn hook(
     };
 
     let event = crate::agent::edit::event_of_slug(&event_slug);
-    let agent_session_id = payload
-        .get("session_id")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("default")
-        .to_string();
+    let agent_session_id = adapter.agent_session_id(&payload).unwrap_or_else(|| "default".to_string());
 
     if adapter.is_blocking(&event) {
         return blocking_hook(&state, adapter.as_ref(), &agent_session_id, session, &payload).await;

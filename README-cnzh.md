@@ -164,7 +164,8 @@ octoterm 目前是**实验性 demo**,已提供浏览器端和 Android 原生客�
    查看它的状态。**Claude Code 已可用**(装 hook、会话状态、远程授权、聊天视图);
    Codex 也已支持(状态、授权、聊天视图;hook 要在 Codex 里用 `/hooks` 审核一次);
    **pi** 通过生成的扩展 `~/.pi/agent/extensions/octoterm.ts` 支持(状态与聊天视图;
-   pi 本身没有授权审批,所以没有远程授权可做);
+   pi 本身没有授权审批,所以没有远程授权可做);**Grok**(xAI 的 `grok`)通过
+   `~/.grok/hooks/octoterm.json` 支持会话状态(聊天视图待接入;它同样没有授权审批事件);
 3. **不做文件管理**:文件管理基本不可能加——那是会话里 shell 自己的事。
 
 ## 已知限制

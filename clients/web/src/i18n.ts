@@ -122,6 +122,7 @@ const zh = {
   "agent.previewTelemetryOnly": "只装状态上报,不装授权拦截(见上方冲突)",
   "agent.activation.codex-hooks-review": "装好之后还要在 Codex 里执行 /hooks 审核一遍才会生效 —— 这是 Codex 自己的安全闸,只能由你来点头。每次重装(端口或程序位置变了)之后都要重新审核",
   "agent.activation.pi-reload": "装的是一个 pi 扩展,新启动的 pi 自动加载;已经在跑的 pi 要执行 /reload 或重启。pi 没有授权审批,只上报状态和聊天记录",
+  "agent.activation.grok-reload": "装在 ~/.grok/hooks/ 里,新启动的 grok 自动生效;已经在跑的要在 /hooks 里重新加载或重启。grok 没有授权审批,只上报状态",
   "session.empty": "还没有会话,点右上角 + 新建",
 
   /* ---------- 新建会话菜单 ---------- */
@@ -309,6 +310,7 @@ const en: Record<MsgKey, string> = {
   "agent.previewTelemetryOnly": "Status reporting only, no approval interception (see the conflict above)",
   "agent.activation.codex-hooks-review": "After installing, run /hooks inside Codex to review them — that gate is Codex's own, and only you can clear it. Every reinstall (new port or binary location) needs a fresh review",
   "agent.activation.pi-reload": "This installs a pi extension. New pi sessions load it automatically; running ones need /reload or a restart. pi has no approval prompts, so only status and chat are reported",
+  "agent.activation.grok-reload": "Installed under ~/.grok/hooks/. New grok sessions pick it up; running ones need a reload from /hooks or a restart. grok has no approval prompts, so only status is reported",
   "session.empty": "No sessions yet — use + above to start one",
 
   "ns.filter": "Filter…",

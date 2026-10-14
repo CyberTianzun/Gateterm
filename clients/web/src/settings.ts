@@ -503,6 +503,8 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
           card.append(el("div", "agent-activation", t("agent.activation.codex-hooks-review")));
         } else if (a.activation === "pi-reload") {
           card.append(el("div", "agent-activation", t("agent.activation.pi-reload")));
+        } else if (a.activation === "grok-reload") {
+          card.append(el("div", "agent-activation", t("agent.activation.grok-reload")));
         }
         for (const c of a.conflicts) card.append(el("div", "agent-conflict", c));
         if (a.conflicts.length > 0) card.append(el("div", "set-hint", t("agent.conflictNote")));

@@ -20,6 +20,7 @@ pub mod codex_transcript;
 pub mod codex_trust;
 pub mod detect;
 pub mod edit;
+pub mod grok;
 pub mod hook_cli;
 pub mod pi;
 pub mod pi_transcript;
@@ -116,6 +117,12 @@ pub trait AgentAdapter: Send + Sync {
         true
     }
 
+    /// 从 hook payload 里取 agent 自己的会话 id。多数家叫 `session_id`;Grok 是驼峰的
+    /// `sessionId`。取不到返回 `None`,由调用方兜底。
+    fn agent_session_id(&self, body: &serde_json::Value) -> Option<String> {
+        body.get("session_id").and_then(serde_json::Value::as_str).map(str::to_string)
+    }
+
     /// 把 agent 方言的 hook payload 归一化成统一更新。
     ///
     /// **不认识的事件返回 `None`,当作忽略而不是错误** —— agent 升级会带来新事件,
@@ -149,7 +156,7 @@ pub trait AgentAdapter: Send + Sync {
 }
 
 pub fn registry() -> Vec<Box<dyn AgentAdapter>> {
-    vec![Box::new(claude_code::ClaudeCode), Box::new(codex::Codex), Box::new(pi::Pi)]
+    vec![Box::new(claude_code::ClaudeCode), Box::new(codex::Codex), Box::new(pi::Pi), Box::new(grok::Grok)]
 }
 
 pub fn find(id: &str) -> Option<Box<dyn AgentAdapter>> {

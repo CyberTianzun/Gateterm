@@ -197,6 +197,8 @@ clients available.
    its hooks must be reviewed once with `/hooks`). **pi** is supported through a
    generated extension at `~/.pi/agent/extensions/octoterm.ts` (state and chat
    view; pi has no approval prompts, so there is nothing to approve remotely).
+   **Grok** (xAI's `grok`) is supported through `~/.grok/hooks/octoterm.json`
+   (session state; chat view still to come; it has no approval event either).
 3. **No file manager.** File management is very unlikely to ever be added —
    that's what the shell in your session is for.
 

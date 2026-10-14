@@ -54,23 +54,10 @@ fn hooks_path(home: &Path) -> PathBuf {
     home_dir(home).join("hooks.json")
 }
 
-/// 命令串:`"<octoterm 二进制>" hook <url>`。
-///
-/// 二进制路径用 `current_exe()`。它会跟着安装位置走,所以「换了个地方放二进制」之后
-/// 需要重装一次 —— 和端口变了要重装是同一类问题,由 `StalePort` 之外的自检去报
-/// (目前只报端口,路径漂移是已知缺口)。
-fn command_for(port: u16, event: &str) -> String {
-    let exe = std::env::current_exe()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "octoterm-server".into());
-    let url = format!("http://127.0.0.1:{port}/hook/codex/{}", slug_of_event(event));
-    format!("\"{exe}\" hook {url}")
-}
-
 fn hook_spec(port: u16, event: &str, blocking: bool) -> Value {
     json!({
         "type": "command",
-        "command": command_for(port, event),
+        "command": super::hook_cli::command_for("codex", port, event),
         "timeout": if blocking { BLOCKING_TIMEOUT_SECS } else { TELEMETRY_TIMEOUT_SECS },
     })
 }
