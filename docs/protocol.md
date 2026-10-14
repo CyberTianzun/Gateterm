@@ -98,7 +98,7 @@ scope:         everything on the wire between a client and octoterm-server
 | route | reply | notes |
 | --- | --- | --- |
 | `GET /api/launchers` | `{ "launchers": [Launcher] }` | see §2.2 |
-| `GET /api/agents` | `{ "agents": [AgentStatus] }` | which agents are installed on the host, and whether octoterm's integration is in place (`integration`: `not-installed` \| `installed` \| `stale-port` \| `outdated`) |
+| `GET /api/agents` | `{ "agents": [AgentStatus] }` | which agents are installed on the host, and whether octoterm's integration is in place (`integration`: `not-installed` \| `installed` \| `stale-port` \| `outdated` \| `needs-activation`; the last one means installed and current, but the agent itself has not approved the hooks yet — e.g. Codex hooks not reviewed via `/hooks` — so they never fire) |
 | `GET /api/agents/{id}/plan` | `{ "install": [...], "uninstall": [...] }` | dry run: what editing the agent's config would do |
 | `POST /api/agents/{id}/install` | `{ "changed": bool, "files": [...] }` | T10a; `403` when disabled |
 | `POST /api/agents/{id}/uninstall` | same | T10a |

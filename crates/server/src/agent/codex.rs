@@ -19,6 +19,10 @@
 //!    用户必须在 Codex 的 TUI 里跑 `/hooks` review 之后,那些条目才会被写进去。
 //!    **我们绝不替它写**:那是 Codex 有意设的闸,防的正是「第三方悄悄让 Codex 执行
 //!    任意命令」。我们只负责把 hook 写好,并把这一步告诉用户。
+//!
+//!    没审核过的 hook 会被 Codex **静默跳过**,所以「装了」≠「生效」,报成
+//!    `NeedsActivation`。重装、换端口、换二进制位置都会改 hook 内容,让之前的审核失效。
+//!    怎么判断见 [`Codex::activated`]。
 
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -188,6 +192,19 @@ impl AgentAdapter for Codex {
         Some("codex-hooks-review")
     }
 
+    /// 先问 Codex 自己(`hooks/list`,见 [`super::codex_trust`]),那是权威答案。
+    /// 问不了(没在 PATH 上、超时、协议变了)才回落到读 config.toml 的粗判断。
+    fn activated(&self, env: &DetectEnv, ctx: &InstallCtx) -> bool {
+        let hooks = hooks_path(&ctx.home);
+        if let (Some(exe), Some(path)) = (detect::on_path(env, "codex"), env.path.as_deref())
+            && let Some(ok) =
+                super::codex_trust::query(&exe, path, &home_dir(&ctx.home), &hooks, ctx.port)
+        {
+            return ok;
+        }
+        trusted_by_config(&hooks, &home_dir(&ctx.home).join("config.toml"), ctx.port)
+    }
+
     fn parse(&self, event: &str, body: &Value) -> Option<Update> {
         let state = state_of(event)?;
         let detail = match event {
@@ -267,6 +284,32 @@ impl AgentAdapter for Codex {
     }
 }
 
+/// 回落用的粗判断:只读 Codex 自己写的 config.toml。
+///
+/// 两个条件都满足才算放行:我们的每一条 hook 在 `hooks.state` 里都有带 `trusted_hash`
+/// 的键;hooks.json 没有在 config.toml 最后一次写入之后被改过(改过 = 旧哈希大概率对不上)。
+/// **会漏报**:审核之后 Codex 又因为别的原因(比如换模型)重写了 config.toml,内容已变
+/// 的 hook 就看不出来 —— 所以它只是问不到 Codex 时的退路。
+fn trusted_by_config(hooks: &Path, config: &Path, port: u16) -> bool {
+    let Some(doc) = read_hooks(hooks) else { return true };
+    // 审核之后 hooks.json 又被改过:旧的 trusted_hash 大概率已经对不上
+    if let (Some(h), Some(c)) = (mtime(hooks), mtime(config))
+        && h > c
+    {
+        return false;
+    }
+    let trusted = read_trusted_keys(config);
+    let prefix = hooks.to_string_lossy();
+    managed_events().all(|(event, _)| {
+        let snake = slug_of_event(event).replace('-', "_");
+        groups_of(&doc, event).enumerate().all(|(gi, group)| {
+            group.iter().enumerate().filter(|(_, h)| is_ours(h, port)).all(|(hi, _)| {
+                trusted.contains(&format!("{prefix}:{snake}:{gi}:{hi}"))
+            })
+        })
+    })
+}
+
 fn is_our_shape(hook: &Value) -> bool {
     hook.get("command")
         .and_then(Value::as_str)
@@ -274,12 +317,39 @@ fn is_our_shape(hook: &Value) -> bool {
 }
 
 fn hooks_of<'a>(doc: &'a Value, event: &str) -> impl Iterator<Item = &'a Value> {
+    groups_of(doc, event).flatten()
+}
+
+/// 每个 group 的 hook 列表,**保留 group 下标** —— Codex 的信任键就是按
+/// `<event>:<group 下标>:<hook 下标>` 记的。坏掉的 group 记成空列表,不吞掉下标。
+fn groups_of<'a>(doc: &'a Value, event: &str) -> impl Iterator<Item = &'a Vec<Value>> {
+    static EMPTY: Vec<Value> = Vec::new();
     doc.get("hooks")
         .and_then(|h| h.get(event))
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|g| g.get("hooks"))
-        .filter_map(Value::as_array)
+        .map(|g| g.get("hooks").and_then(Value::as_array).unwrap_or(&EMPTY))
+}
+
+fn mtime(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).ok()?.modified().ok()
+}
+
+/// `~/.codex/config.toml` 里 `[hooks.state."<键>"]` 带 `trusted_hash` 的那些键。只读。
+fn read_trusted_keys(config: &Path) -> Vec<String> {
+    let Some(doc) = std::fs::read_to_string(config)
+        .ok()
+        .and_then(|t| t.parse::<toml::Table>().ok())
+    else {
+        return Vec::new();
+    };
+    doc.get("hooks")
+        .and_then(|h| h.get("state"))
+        .and_then(toml::Value::as_table)
+        .into_iter()
         .flatten()
+        .filter(|(_, v)| v.get("trusted_hash").is_some())
+        .map(|(k, _)| k.clone())
+        .collect()
 }

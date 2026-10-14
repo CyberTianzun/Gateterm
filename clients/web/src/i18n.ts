@@ -104,6 +104,7 @@ const zh = {
   "agent.notInstalled": "未安装",
   "agent.stalePort": "已安装,但端口对不上(远程接管此刻不生效)",
   "agent.outdated": "已安装,但和当前服务不一致(部分事件可能不生效)",
+  "agent.needsActivation": "已安装,但还没放行,暂不生效(按下方提示完成最后一步)",
   "agent.reinstall": "重新安装",
   "agent.purge": "清空",
   "agent.purgeHint": "删掉这个 AI 配置里所有 octoterm 写过的 hook(不论端口和事件),用于清理残留;改前会备份",
@@ -119,7 +120,7 @@ const zh = {
   "agent.previewAdd": "写入这些事件的 hook:",
   "agent.previewRemove": "移除这些事件的 hook:",
   "agent.previewTelemetryOnly": "只装状态上报,不装授权拦截(见上方冲突)",
-  "agent.activation.codex-hooks-review": "装好之后还要在 Codex 里执行 /hooks 审核一遍才会生效 —— 这是 Codex 自己的安全闸,只能由你来点头",
+  "agent.activation.codex-hooks-review": "装好之后还要在 Codex 里执行 /hooks 审核一遍才会生效 —— 这是 Codex 自己的安全闸,只能由你来点头。每次重装(端口或程序位置变了)之后都要重新审核",
   "agent.activation.pi-reload": "装的是一个 pi 扩展,新启动的 pi 自动加载;已经在跑的 pi 要执行 /reload 或重启。pi 没有授权审批,只上报状态和聊天记录",
   "session.empty": "还没有会话,点右上角 + 新建",
 
@@ -290,6 +291,7 @@ const en: Record<MsgKey, string> = {
   "agent.notInstalled": "Not installed",
   "agent.stalePort": "Installed, but pointing at a different port (remote takeover is inactive)",
   "agent.outdated": "Installed, but out of sync with this server (some events may not fire)",
+  "agent.needsActivation": "Installed, but not yet approved — inactive until you finish the step below",
   "agent.reinstall": "Reinstall",
   "agent.purge": "Purge",
   "agent.purgeHint": "Remove every hook octoterm ever wrote into this AI's config (any port, any event) to clean up leftovers; backed up first",
@@ -305,7 +307,7 @@ const en: Record<MsgKey, string> = {
   "agent.previewAdd": "Hooks written for these events:",
   "agent.previewRemove": "Hooks removed for these events:",
   "agent.previewTelemetryOnly": "Status reporting only, no approval interception (see the conflict above)",
-  "agent.activation.codex-hooks-review": "After installing, run /hooks inside Codex to review them — that gate is Codex's own, and only you can clear it",
+  "agent.activation.codex-hooks-review": "After installing, run /hooks inside Codex to review them — that gate is Codex's own, and only you can clear it. Every reinstall (new port or binary location) needs a fresh review",
   "agent.activation.pi-reload": "This installs a pi extension. New pi sessions load it automatically; running ones need /reload or a restart. pi has no approval prompts, so only status and chat are reported",
   "session.empty": "No sessions yet — use + above to start one",
 

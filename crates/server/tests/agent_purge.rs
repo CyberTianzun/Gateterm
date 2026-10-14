@@ -167,7 +167,8 @@ fn foreign_hook_appended_after_ours_is_still_current() {
 fn codex_command_with_other_binary_is_outdated() {
     let e = env();
     e.install("codex", 7683);
-    assert_eq!(e.integration("codex", 7683), Integration::Installed);
+    // 没在 Codex 里审核过,所以是「待放行」而不是「已装」(见 agent_codex_trust.rs)
+    assert_eq!(e.integration("codex", 7683), Integration::NeedsActivation);
     let text = fs::read_to_string(e.codex_hooks()).unwrap();
     let exe = std::env::current_exe().unwrap().to_string_lossy().replace('\\', "\\\\");
     fs::write(e.codex_hooks(), text.replace(&exe, "/old/place/octoterm-server")).unwrap();

@@ -231,7 +231,7 @@ export interface AgentStatus {
   id: string;
   name: string;
   detected: { installed: boolean; confidence: string; reason: string; detail: string };
-  /** "not-installed" | "installed" | "stale-port" */
+  /** "not-installed" | "installed" | "stale-port" | "outdated" | "needs-activation" */
   integration: string;
   /**
    * 装完还需要用户做什么才生效。机器可读的键,文案在客户端。

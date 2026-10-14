@@ -493,6 +493,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
           a.integration === "installed" ? t("agent.installed")
           : a.integration === "stale-port" ? t("agent.stalePort")
           : a.integration === "outdated" ? t("agent.outdated")
+          : a.integration === "needs-activation" ? t("agent.needsActivation")
           : t("agent.notInstalled");
         head.append(el("span", "agent-badge", badge));
         card.append(head);

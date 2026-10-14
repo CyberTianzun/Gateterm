@@ -17,6 +17,7 @@ pub mod claude_code;
 pub mod claude_transcript;
 pub mod codex;
 pub mod codex_transcript;
+pub mod codex_trust;
 pub mod detect;
 pub mod edit;
 pub mod hook_cli;
@@ -63,6 +64,10 @@ pub enum Integration {
     ///
     /// 和 `StalePort` 一样没有外部症状 —— 部分事件静默失灵 —— 所以同样要单独报。
     Outdated,
+    /// 装得和当前服务完全一致,但 agent 自己还没放行,hook 不会被调用。目前只有
+    /// Codex:它按 `trusted_hash` 逐条门控,没在 `/hooks` 里审核过(或审核之后内容
+    /// 又变了)的 hook 一律**静默跳过**。要做的是 `activation` 那一步,不是重装。
+    NeedsActivation,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -102,6 +107,13 @@ pub trait AgentAdapter: Send + Sync {
     /// 装完之后还需要用户做什么才生效。返回机器可读的键,`None` 表示装完即生效。
     fn activation(&self) -> Option<&'static str> {
         None
+    }
+
+    /// `activation` 那一步是不是已经做了。**只读**地看 agent 自己的记录,看不出来就当
+    /// 做了 —— 这是给用户的提示,宁可漏报也不该把能用的集成报成不能用。
+    fn activated(&self, env: &detect::DetectEnv, ctx: &edit::InstallCtx) -> bool {
+        let _ = (env, ctx);
+        true
     }
 
     /// 把 agent 方言的 hook payload 归一化成统一更新。
@@ -202,6 +214,8 @@ pub fn scan(env: &detect::DetectEnv, port: u16) -> Vec<AgentStatus> {
                 let ctx = edit::InstallCtx { include_blocking: conflicts.is_empty(), ..ctx.clone() };
                 if !install_is_current(a.as_ref(), &ctx) {
                     integration = Integration::Outdated;
+                } else if !a.activated(env, &ctx) {
+                    integration = Integration::NeedsActivation;
                 }
             }
             AgentStatus {
@@ -233,6 +247,14 @@ pub fn startup_warnings(env: &detect::DetectEnv, port: u16) -> Vec<String> {
             let why = match a.integration {
                 Integration::StalePort => format!("装的 hook 指向的不是当前端口 {port}"),
                 Integration::Outdated => "装的 hook 和当前服务不一致(端口、事件或程序路径有变化)".to_string(),
+                Integration::NeedsActivation => {
+                    return Some(format!(
+                        "{name}: hook 已装好,但还没在 {name} 里放行,不会被调用(会话识别、聊天视图都不生效)。\
+                         {path}\n      {hint}",
+                        name = a.name,
+                        hint = activation_hint(a.activation),
+                    ));
+                }
                 Integration::Installed | Integration::NotInstalled => return None,
             };
             Some(format!(
@@ -242,4 +264,13 @@ pub fn startup_warnings(env: &detect::DetectEnv, port: u16) -> Vec<String> {
             ))
         })
         .collect()
+}
+
+/// 启动日志里「放行那一步怎么做」。客户端按 `activation` 键自己出文案,这里只服务日志。
+fn activation_hint(key: Option<&str>) -> &'static str {
+    match key {
+        Some("codex-hooks-review") => "在 octoterm 里启动 codex,执行 /hooks 逐条审核通过,再重启 codex",
+        Some("pi-reload") => "在 pi 里执行 /reload 或重启 pi",
+        _ => "按设置页「AI 集成」里的提示完成最后一步",
+    }
 }
