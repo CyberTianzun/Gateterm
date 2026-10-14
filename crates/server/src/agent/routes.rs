@@ -310,10 +310,24 @@ pub async fn hook(
         return ignored();
     };
 
-    let snapshot =
-        state.agent_sessions.apply(adapter.id(), &agent_session_id, Some(session), update);
+    let (snapshot, superseded) = if supersedes(&event) {
+        state.agent_sessions.apply_superseding(adapter.id(), &agent_session_id, Some(session), update)
+    } else {
+        (state.agent_sessions.apply(adapter.id(), &agent_session_id, Some(session), update), Vec::new())
+    };
+    for gone in superseded {
+        state.manager.publish(gone.to_msg());
+    }
     state.manager.publish(snapshot.to_msg());
     StatusCode::OK.into_response()
+}
+
+/// 这个事件能不能顶替同一终端里同家 agent 的旧会话(见 `AgentSessionStore::apply_superseding`)。
+///
+/// 只认「用户直接驱动」的两种:会话开始、用户提交提示词。子代理不会发这两种,所以
+/// 它们用自己的会话 id 发来的工具事件不会把主会话挤掉。
+fn supersedes(event: &str) -> bool {
+    matches!(event, "SessionStart" | "UserPromptSubmit")
 }
 
 /// 挂起项的看守。

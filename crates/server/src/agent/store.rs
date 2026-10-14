@@ -267,9 +267,14 @@ pub enum Sweep {
 ///
 /// 1. **托管会话没了 ⇒ 立即删**。pty 子进程退出意味着里面的 agent 必死,这是比任何
 ///    超时都硬的证据,所以排在一切时间判断之前。
-/// 2. **正在等人的一律不扫**。人可能在睡觉。挂起请求自己有超时(`pending_timeout_secs`),
+/// 2. **托管会话还在 ⇒ 不按时间删**。agent 停在那里等你输入时本来就一个事件都不发,
+///    「很久没动静」不等于「退出了」—— 按时间删的结果是聊天视图在用户眼前凭空消失
+///    (实际发生过:Codex 闲置 10 分钟后被扫掉)。真正退出的由两条更硬的证据收走:
+///    终端关了(第 1 条),或同一终端里同一家 agent 开了新会话(见 `apply_superseding`)。
+///    `session_stale_secs` 因此只管**没有关联终端**的会话。
+/// 3. **正在等人的一律不扫**。人可能在睡觉。挂起请求自己有超时(`pending_timeout_secs`),
 ///    到点了会把 `pending` 摘掉,那时这条会话才重新进入清理的视野。
-/// 3. 空闲基准取 `max(updated_at, acked_at)` —— 用户刚看过一眼的会话不该因为
+/// 4. 空闲基准取 `max(updated_at, acked_at)` —— 用户刚看过一眼的会话不该因为
 ///    「很久没有新事件」被扫掉。
 ///
 /// 注意 `MarkIdle` **不刷新时间戳**。参考实现在这里踩过坑:刷新之后「超时转 idle」
@@ -289,7 +294,7 @@ pub fn decide(
         return None;
     }
     let age = now.saturating_sub(s.updated_at.max(s.acked_at));
-    if age > session_stale_secs {
+    if s.session.is_none() && age > session_stale_secs {
         return Some(Sweep::Drop);
     }
     if age > working_stale_secs
@@ -305,7 +310,7 @@ impl AgentSessionStore {
         Self::default()
     }
 
-    /// 应用一次更新,返回更新后的快照。会话不存在就地创建。
+    /// 应用一次更新,返回更新后的快照。会话不存在就地创建。不顶替任何会话。
     pub fn apply(
         &self,
         agent_id: &str,
@@ -313,9 +318,55 @@ impl AgentSessionStore {
         session: Option<u64>,
         up: Update,
     ) -> AgentSession {
+        self.apply_inner(agent_id, agent_session_id, session, up, false).0
+    }
+
+    /// 同 [`Self::apply`],另外返回被顶替掉的旧会话(状态已标成 `Done`,调用方负责广播)。
+    ///
+    /// **顶替**:一个终端的前台同一时刻只跑得了一个同家 agent。同一终端里出现了同一家
+    /// agent 的**新**会话(用户退出 codex 又开了一个,或 Claude 里 `/clear`),旧的那个
+    /// 必然已经结束 —— 这是按时间清理之外收走已退出会话的主要途径。不同家的 agent
+    /// 互不顶替:先 codex 后 claude 时两边的记录都还有用。
+    ///
+    /// **只该用在「用户直接驱动」的事件上**(会话开始、用户提交提示词),见
+    /// `routes::supersedes`。子代理会用自己的会话 id 发工具事件(Grok 文档写明了,
+    /// 其他家没排除),拿任意事件来顶替,子代理一动就会把主会话挤掉。
+    pub fn apply_superseding(
+        &self,
+        agent_id: &str,
+        agent_session_id: &str,
+        session: Option<u64>,
+        up: Update,
+    ) -> (AgentSession, Vec<AgentSession>) {
+        self.apply_inner(agent_id, agent_session_id, session, up, true)
+    }
+
+    fn apply_inner(
+        &self,
+        agent_id: &str,
+        agent_session_id: &str,
+        session: Option<u64>,
+        up: Update,
+        supersede: bool,
+    ) -> (AgentSession, Vec<AgentSession>) {
         let supports = crate::agent::find(agent_id).is_some_and(|a| a.supports_transcript());
         let key = (agent_id.to_string(), agent_session_id.to_string());
         let mut guard = self.sessions.lock().unwrap();
+        let mut superseded = Vec::new();
+        if supersede
+            && let Some(host) = session
+            && !guard.contains_key(&key)
+        {
+            guard.retain(|_, s| {
+                let replaced = s.agent_id == agent_id && s.session == Some(host) && s.pending.is_none();
+                if replaced {
+                    let mut gone = s.clone();
+                    gone.state = AgentState::Done;
+                    superseded.push(gone);
+                }
+                !replaced
+            });
+        }
         let entry = guard.entry(key).or_insert_with(|| AgentSession {
             agent_id: agent_id.to_string(),
             agent_session_id: agent_session_id.to_string(),
@@ -351,7 +402,7 @@ impl AgentSessionStore {
             entry.session = session;
         }
         entry.updated_at = now();
-        entry.clone()
+        (entry.clone(), superseded)
     }
 
     /// 记下推导出来的记录路径,免得每次拉消息都重新去文件系统里找一遍。
@@ -632,16 +683,27 @@ mod tests {
         assert_eq!(decide(301, &s, true, 600, 300), None);
     }
 
+    /// 没有关联终端的会话才按时间清理。
     #[test]
-    fn very_old_session_is_dropped() {
-        let s = session(AgentState::Idle, 0);
+    fn very_old_unhosted_session_is_dropped() {
+        let mut s = session(AgentState::Idle, 0);
+        s.session = None;
         assert_eq!(decide(601, &s, true, 600, 300), Some(Sweep::Drop));
+    }
+
+    /// 终端还在时,闲置多久都不删 —— agent 等你输入时本来就不发事件(Codex 闲置
+    /// 10 分钟后聊天视图凭空消失,就是按时间删出来的)。
+    #[test]
+    fn hosted_idle_session_survives_any_age() {
+        let s = session(AgentState::Idle, 0);
+        assert_eq!(decide(1_000_000, &s, true, 600, 300), None);
     }
 
     /// 用户点过「知道了」之后倒计时应当从那一刻重新开始。
     #[test]
     fn ack_extends_the_clock() {
         let mut s = session(AgentState::Idle, 0);
+        s.session = None;
         s.acked_at = 600;
         assert_eq!(decide(900, &s, true, 600, 300), None);
         assert_eq!(decide(1201, &s, true, 600, 300), Some(Sweep::Drop));
@@ -655,7 +717,7 @@ mod tests {
         store.apply(
             "claude-code",
             "s1",
-            Some(1),
+            None,
             Update { state: Some(AgentState::Working), ..Default::default() },
         );
         let before = store.list()[0].updated_at;
@@ -677,5 +739,53 @@ mod tests {
         assert_eq!(changed.len(), 1);
         assert_eq!(changed[0].state, AgentState::Done);
         assert!(store.list().is_empty());
+    }
+
+    /// 同一终端里同一家 agent 开了新会话 ⇒ 旧的必然结束了,标成 Done 交给调用方广播。
+    #[test]
+    fn new_session_of_same_agent_in_same_terminal_supersedes_old() {
+        let store = AgentSessionStore::new();
+        store.apply("codex", "old", Some(2), Update::default());
+        store.apply("codex", "elsewhere", Some(3), Update::default());
+        let (_, gone) = store.apply_superseding("codex", "new", Some(2), Update::default());
+        assert_eq!(gone.len(), 1);
+        assert_eq!((gone[0].agent_session_id.as_str(), gone[0].state), ("old", AgentState::Done));
+        let mut left: Vec<_> = store.list().into_iter().map(|s| s.agent_session_id).collect();
+        left.sort();
+        assert_eq!(left, ["elsewhere", "new"]);
+        // 已有会话的后续事件不再顶替任何人
+        let (_, gone) = store.apply_superseding("codex", "new", Some(2), Update::default());
+        assert!(gone.is_empty());
+    }
+
+    /// 普通事件(子代理的工具调用就是这种)不顶替:否则子代理一动,主会话就被挤掉。
+    #[test]
+    fn plain_apply_never_supersedes() {
+        let store = AgentSessionStore::new();
+        store.apply("grok", "main", Some(2), Update::default());
+        store.apply("grok", "subagent", Some(2), Update::default());
+        assert_eq!(store.list().len(), 2);
+    }
+
+    /// 不同家的 agent 互不顶替:先 codex 后 claude 时两边的记录都还有用。
+    /// 等人回答的也不顶替 —— 那个请求还挂着,得等它自己收场。
+    #[test]
+    fn other_agents_and_pending_requests_are_not_superseded() {
+        let store = AgentSessionStore::new();
+        store.apply("codex", "c", Some(2), Update::default());
+        store.apply("claude-code", "w", Some(2), Update::default());
+        let _rx = store.insert_pending(PendingRequest {
+            id: "p1".into(),
+            agent_id: "claude-code".into(),
+            agent_session_id: "w".into(),
+            session: Some(2),
+            tool_name: None,
+            tool_input: serde_json::Value::Null,
+            created_at: 0,
+            expires_at: 0,
+        });
+        let (_, gone) = store.apply_superseding("claude-code", "x", Some(2), Update::default());
+        assert!(gone.is_empty());
+        assert_eq!(store.list().len(), 3);
     }
 }

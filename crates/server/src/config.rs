@@ -72,6 +72,8 @@ pub struct LauncherSpec {
 pub struct AgentsConfig {
     #[serde(default = "default_true")]
     pub install_enabled: bool,
+    /// 多久没有事件就清掉一个 agent 会话。**只对没有关联终端的会话生效** —— 终端还在时
+    /// 不按时间清理,见 `crate::agent::store::decide`。
     #[serde(default = "default_session_stale")]
     pub session_stale_secs: u64,
     #[serde(default = "default_working_stale")]
