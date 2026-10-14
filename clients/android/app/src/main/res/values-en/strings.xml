@@ -88,4 +88,22 @@
 
     <string name="locale_action">Language</string>
     <string name="locale_auto">Follow system</string>
+
+    <string name="chat_open">Chat</string>
+    <string name="chat_open_desc">Switch to the chat view</string>
+    <string name="chat_back_to_terminal">Terminal</string>
+    <string name="chat_back_to_terminal_desc">Switch back to the terminal view</string>
+    <string name="chat_empty">No messages in this session yet</string>
+    <string name="chat_loading">Reading the transcript…</string>
+    <string name="chat_thinking">Thinking</string>
+    <string name="chat_tool_result_error">failed</string>
+    <string name="chat_show_more">Show more</string>
+    <string name="chat_show_less">Show less</string>
+    <string name="chat_open_terminal_instead">Open the terminal instead</string>
+    <string name="chat_fallback_no_agent">No running agent was recognised in this session. The chat view reads the agent\'s own transcript, and hooks are what report it — check Settings → Agents on the computer to see whether they are installed.</string>
+    <string name="chat_fallback_disabled">The chat view is turned off on the server. Set transcript_enabled = true under [agents] in config.toml (or remove the line), then restart it.</string>
+    <string name="chat_fallback_no_path">No transcript location for this session yet — it may have just started, or hooks are not installed</string>
+    <string name="chat_fallback_unsupported">%1$s\'s transcript format is not wired up yet. The terminal view still works.</string>
+    <string name="chat_fallback_unreadable">Could not read the transcript</string>
+    <string name="chat_fallback_parse_failed">The transcript format was not understood</string>
 </resources>

@@ -1,5 +1,6 @@
 package ai.eclosion.octoterm.android.wire
 
+import ai.eclosion.octoterm.android.agent.AgentSessions
 import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
@@ -77,6 +78,8 @@ object ControlJson {
             "resync-begin" -> ServerMsg.ResyncBegin(obj.getInt("channel"))
             "resync-end" -> ServerMsg.ResyncEnd(obj.getInt("channel"), obj.optLong("seq"))
             "session-exited" -> ServerMsg.SessionExited(obj.getInt("channel"), obj.getLong("id"))
+            // 字段不全就当不认识:X2 要求客户端忽略看不懂的消息,而不是断线
+            "agent-event" -> AgentSessions.parseSession(obj)?.let(ServerMsg::AgentEvent) ?: ServerMsg.Unknown(type)
             else -> ServerMsg.Unknown(type)
         }
     }

@@ -90,4 +90,22 @@
     <string name="locale_auto">跟随系统</string>
     <string name="locale_zh" translatable="false">简体中文</string>
     <string name="locale_en" translatable="false">English</string>
+
+    <string name="chat_open">聊天</string>
+    <string name="chat_open_desc">切换到聊天视图</string>
+    <string name="chat_back_to_terminal">终端</string>
+    <string name="chat_back_to_terminal_desc">切换回终端视图</string>
+    <string name="chat_empty">这个会话还没有消息</string>
+    <string name="chat_loading">正在读取对话记录…</string>
+    <string name="chat_thinking">思考过程</string>
+    <string name="chat_tool_result_error">失败</string>
+    <string name="chat_show_more">展开</string>
+    <string name="chat_show_less">收起</string>
+    <string name="chat_open_terminal_instead">用终端打开</string>
+    <string name="chat_fallback_no_agent">这个会话里没有认出正在运行的 AI —— 聊天视图要靠 agent 自己写的对话记录，而它是通过 hook 报上来的。到电脑上的「设置 → AI 集成」看看装没装。</string>
+    <string name="chat_fallback_disabled">服务端关闭了聊天视图。把 config.toml 里 [agents] 段下的 transcript_enabled 改成 true（或删掉这一行），然后重启服务端。</string>
+    <string name="chat_fallback_no_path">还没拿到这个会话的对话记录位置 —— 它可能刚开始，或者 hook 没装</string>
+    <string name="chat_fallback_unsupported">还读不了 %1$s 的对话记录 —— 它的记录格式还没接进来。终端视图不受影响。</string>
+    <string name="chat_fallback_unreadable">读不到对话记录</string>
+    <string name="chat_fallback_parse_failed">对话记录的格式看不懂</string>
 </resources>

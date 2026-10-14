@@ -41,6 +41,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,6 +60,7 @@ import ai.eclosion.octoterm.android.term.TerminalView
 import ai.eclosion.octoterm.android.term.TerminalKeyboard
 import ai.eclosion.octoterm.android.term.KeyModifiers
 import ai.eclosion.octoterm.android.term.VtEmulator
+import ai.eclosion.octoterm.android.ui.connections.ChatUiState
 import ai.eclosion.octoterm.android.wire.SessionInfo
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -86,6 +89,10 @@ fun TerminalScreen(
     onCopy: () -> Unit,
     onPaste: () -> Unit,
     onJumpToBottom: () -> Unit,
+    chat: ChatUiState,
+    chatOpen: Boolean,
+    chatAvailable: Boolean,
+    onToggleChat: () -> Unit,
 ) {
     var ctrl by remember(activeId) { mutableStateOf(false) }
     var alt by remember(activeId) { mutableStateOf(false) }
@@ -112,6 +119,16 @@ fun TerminalScreen(
         termView?.softModifiers = KeyModifiers()
     }
     fun releaseKeyboard() { termView?.releaseKeys(); clearModifiers() }
+    fun toggleChat() {
+        if (!chatOpen) {
+            // 进聊天前把键盘收掉:按住的修饰键要释放,软键盘也不该盖在聊天上
+            releaseKeyboard()
+            termView?.windowToken?.let {
+                context.getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(it, 0)
+            }
+        }
+        onToggleChat()
+    }
     DisposableEffect(keyboard, lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) {
@@ -129,7 +146,8 @@ fun TerminalScreen(
     LaunchedEffect(keyboard, reconnecting) {
         if (reconnecting) { keyboard.reset(); clearModifiers() }
     }
-    BackHandler { releaseKeyboard(); onBack() }
+    // 聊天视图里按返回 = 回终端,不是直接退出会话
+    BackHandler { if (chatOpen) onToggleChat() else { releaseKeyboard(); onBack() } }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -142,10 +160,24 @@ fun TerminalScreen(
                         )
                     }
                 },
+                actions = {
+                    // 只有本会话里有读得了记录的 agent 才给入口;已经在聊天里时回终端永远可以
+                    if (chatOpen || chatAvailable) {
+                        val desc = stringResource(
+                            if (chatOpen) R.string.chat_back_to_terminal_desc else R.string.chat_open_desc,
+                        )
+                        TextButton(
+                            onClick = ::toggleChat,
+                            modifier = Modifier.semantics { contentDescription = desc },
+                        ) {
+                            Text(stringResource(if (chatOpen) R.string.chat_back_to_terminal else R.string.chat_open))
+                        }
+                    }
+                },
             )
         },
         bottomBar = {
-            ExtraKeysBar(
+            if (!chatOpen) ExtraKeysBar(
                 ctrl = ctrl,
                 alt = alt,
                 shift = shift,
@@ -216,7 +248,16 @@ fun TerminalScreen(
             if (reconnecting) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
             }
-            Box(
+            if (chatOpen) {
+                ChatView(
+                    chat = chat,
+                    onOpenTerminal = onToggleChat,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .navigationBarsPadding(),
+                )
+            } else Box(
                 Modifier
                     .fillMaxWidth()
                     .weight(1f)

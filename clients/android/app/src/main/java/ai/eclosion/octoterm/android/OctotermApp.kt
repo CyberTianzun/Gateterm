@@ -125,6 +125,10 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                         onCopy = viewModel::copySelection,
                         onPaste = viewModel::pasteClipboard,
                         onJumpToBottom = viewModel::jumpToBottom,
+                        chat = state.chat,
+                        chatOpen = state.chatOpen,
+                        chatAvailable = state.chatAvailable,
+                        onToggleChat = viewModel::toggleChat,
                     )
                 } else {
                     BackHandler(onBack = viewModel::disconnect)

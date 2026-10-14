@@ -10,6 +10,13 @@ import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.AP
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import ai.eclosion.octoterm.android.agent.AgentSession
+import ai.eclosion.octoterm.android.agent.AgentState
+import ai.eclosion.octoterm.android.agent.AgentSessions
+import ai.eclosion.octoterm.android.agent.Chat
+import ai.eclosion.octoterm.android.agent.ChatFallback
+import ai.eclosion.octoterm.android.agent.ChatMessage
+import ai.eclosion.octoterm.android.agent.ChatWindow
 import ai.eclosion.octoterm.android.appearance.AppearanceCodec
 import ai.eclosion.octoterm.android.appearance.AppearanceStore
 import ai.eclosion.octoterm.android.appearance.TermAppearance
@@ -35,6 +42,7 @@ import android.os.Looper
 import android.os.SystemClock
 import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -91,6 +99,25 @@ data class LauncherMenuState(
     val items: List<Launcher> = emptyList(),
 )
 
+/** 聊天视图里没有消息可看时,说明为什么。 */
+sealed class ChatNotice {
+    /** 这个会话里没认出 agent */
+    data object NoAgent : ChatNotice()
+    /** 服务端说读不了,带上是哪一家,好让文案说清楚 */
+    data class Server(val reason: ChatFallback, val agentId: String) : ChatNotice()
+}
+
+/**
+ * 聊天视图。`sessionId` 记的是**为哪个会话打开的** —— 只有它等于当前会话时才显示,
+ * 所以切标签、关会话时不需要到处同步一个开关。
+ */
+data class ChatUiState(
+    val sessionId: Long? = null,
+    val messages: List<ChatMessage> = emptyList(),
+    val notice: ChatNotice? = null,
+    val loading: Boolean = false,
+)
+
 data class ConnectionUiState(
     val connections: List<ServerConnection> = emptyList(),
     val screen: AppScreen = AppScreen.List,
@@ -112,7 +139,15 @@ data class ConnectionUiState(
     val selection: TermSelection? = null,
     val scrollOffset: Int = 0,
     val mouseTracking: Boolean = false,
-)
+    /** key = "agent_id agent_session_id",见 `AgentSession.key` */
+    val agents: Map<String, AgentSession> = emptyMap(),
+    /** 服务端是否允许读对话记录。只认快照里明确的 true */
+    val transcriptEnabled: Boolean = false,
+    val chat: ChatUiState = ChatUiState(),
+) {
+    val chatOpen: Boolean get() = chat.sessionId != null && chat.sessionId == attachedId
+    val chatAvailable: Boolean get() = AgentSessions.chatAvailable(agents, attachedId, transcriptEnabled)
+}
 
 class ConnectionViewModel(
     private val app: Application,
@@ -129,6 +164,15 @@ class ConnectionViewModel(
     private var httpOrigin: String? = null
     private var httpToken: String? = null
     private var awaitingCreated = false
+    private var agentJob: Job? = null
+    private var agentAgain = false
+    /** 每次 agent 表被事件改动就 +1:拉取期间到达的事件不能被较旧的快照覆盖 */
+    private var agentRevision = 0L
+    private var chatJob: Job? = null
+    private var chatAgain = false
+    private var chatCursor: String? = null
+    /** 当前消息属于哪个 agent 会话。换了 agent 就得整段重拉,旧游标对新记录没有意义 */
+    private var chatAgentKey: String? = null
     @Volatile
     var painted: TermFrame = TermFrame.Empty
         private set
@@ -302,6 +346,9 @@ class ConnectionViewModel(
                     )
                 }
                 next.send(ClientMsg.ListSessions)
+                // 断线期间漏掉的 agent-event 靠这次全量拉取补齐(协议 A5),不做增量对账
+                agentRevision++
+                refreshAgents()
             }
         }
         next.onReconnecting = { onMain { _state.update { it.copy(reconnecting = true) } } }
@@ -353,6 +400,9 @@ class ConnectionViewModel(
     }
 
     fun disconnect() {
+        resetChat()
+        agentJob?.cancel()
+        agentJob = null
         closeAllSessions()
         dropClient()
         httpOrigin = null
@@ -365,6 +415,9 @@ class ConnectionViewModel(
                 openSessionIds = emptyList(),
                 reconnecting = false,
                 serverOs = "",
+                agents = emptyMap(),
+                transcriptEnabled = false,
+                chat = ChatUiState(),
                 pendingRename = null,
                 launcherMenu = LauncherMenuState(),
                 selection = null,
@@ -406,6 +459,7 @@ class ConnectionViewModel(
     }
 
     fun openSession(sessionId: Long) {
+        if (_state.value.chat.sessionId != sessionId) resetChat()
         val existing = opens[sessionId]
         if (existing != null) {
             activeId = sessionId
@@ -442,12 +496,14 @@ class ConnectionViewModel(
 
     /** 回到会话列表，已经打开的会话保持 attach。 */
     fun leaveTerminal() {
+        resetChat()
         activeId = null
         _state.update { it.copy(attachedId = null, selection = null) }
     }
 
     fun closeOpenSession(id: Long) {
         val open = opens.remove(id) ?: return
+        if (_state.value.chat.sessionId == id) resetChat()
         client?.detach(open.channel)
         open.paintGate.onDetached()
         if (activeId == id) {
@@ -690,6 +746,7 @@ class ConnectionViewModel(
                 if (open != null) closeOpenSession(open.id)
                 client?.send(ClientMsg.ListSessions)
             }
+            is ServerMsg.AgentEvent -> onAgentEvent(msg.session)
             is ServerMsg.Error -> {
                 _messages.tryEmit(UserMessage.AuthFailed(msg.message))
                 val channel = msg.channel
@@ -699,6 +756,140 @@ class ConnectionViewModel(
                 }
             }
             else -> Unit
+        }
+    }
+
+    /** 聊天 ⇄ 终端。只有本会话有读得了记录的 agent 时才能进聊天;回终端永远可以。 */
+    fun toggleChat() {
+        val st = _state.value
+        if (st.chatOpen) {
+            resetChat()
+            return
+        }
+        val sessionId = st.attachedId ?: return
+        if (!st.chatAvailable) return
+        _state.update { it.copy(chat = ChatUiState(sessionId = sessionId, loading = true)) }
+        // 进聊天视图才去拉 —— 不看的时候不该白读别人的文件
+        refreshChat(incremental = false)
+    }
+
+    private fun onAgentEvent(ev: AgentSession) {
+        agentRevision++
+        val agents = AgentSessions.applyEvent(_state.value.agents, ev)
+        _state.update { it.copy(agents = agents) }
+        // 新出现的 agent 还不知道能不能读记录 —— 事件不带这一项,要快照来补
+        if (agents[ev.key]?.supportsTranscript == null && ev.state != AgentState.Done) {
+            refreshAgents()
+        }
+        closeChatIfUnavailable()
+        // 有事件才可能有新消息 —— 所以不做轮询
+        if (_state.value.chatOpen && ev.session == _state.value.chat.sessionId) refreshChat(incremental = true)
+    }
+
+    /** 全量快照。并发的请求合并成「再拉一次」,不叠加。 */
+    private fun refreshAgents() {
+        if (agentJob?.isActive == true) {
+            agentAgain = true
+            return
+        }
+        val origin = httpOrigin ?: return
+        val token = httpToken ?: return
+        agentJob = viewModelScope.launch {
+            do {
+                agentAgain = false
+                val revision = agentRevision
+                val snapshot = withContext(Dispatchers.IO) { AgentSessions.fetch(http, origin, token) }
+                if (revision != agentRevision) {
+                    agentAgain = true
+                    continue
+                }
+                _state.update {
+                    it.copy(
+                        agents = AgentSessions.replaceAll(snapshot.sessions),
+                        transcriptEnabled = snapshot.transcriptEnabled,
+                    )
+                }
+                closeChatIfUnavailable()
+                // 重连期间可能漏了事件:开着聊天就补拉一次
+                if (_state.value.chatOpen) refreshChat(incremental = true)
+            } while (agentAgain)
+        }
+    }
+
+    private fun closeChatIfUnavailable() {
+        val st = _state.value
+        if (st.chat.sessionId != null && !st.chatAvailable) resetChat()
+    }
+
+    private fun resetChat() {
+        chatJob?.cancel()
+        chatJob = null
+        chatAgain = false
+        chatCursor = null
+        chatAgentKey = null
+        if (_state.value.chat != ChatUiState()) _state.update { it.copy(chat = ChatUiState()) }
+    }
+
+    /**
+     * 拉一次消息。`incremental` 为真时带上游标;拉取串行化,期间再来的请求合并成「再拉一次」。
+     *
+     * 服务端说 `more` 就接着拉 —— 那表示被字节上限截断了。但**只有游标真的动了才继续**:
+     * 游标原地不动还接着拉就是死循环(web 端复现过)。
+     */
+    private fun refreshChat(incremental: Boolean) {
+        if (chatJob?.isActive == true) {
+            chatAgain = true
+            return
+        }
+        val origin = httpOrigin ?: return
+        val token = httpToken ?: return
+        chatJob = viewModelScope.launch {
+            var inc = incremental
+            do {
+                chatAgain = false
+                val st = _state.value
+                val sessionId = st.chat.sessionId
+                if (sessionId == null || !st.chatOpen) return@launch
+                val agent = AgentSessions.chatAgentFor(st.agents, sessionId)
+                if (agent == null) {
+                    // 说清楚,并给一条出路 —— 沉默会让人以为是坏了
+                    _state.update { it.copy(chat = it.chat.copy(notice = ChatNotice.NoAgent, loading = false)) }
+                    return@launch
+                }
+                if (agent.key != chatAgentKey) inc = false
+                val after = if (inc) chatCursor else null
+                val win = withContext(Dispatchers.IO) {
+                    Chat.fetch(http, origin, token, agent.agentId, agent.agentSessionId, after)
+                }
+                val now = _state.value
+                if (now.chat.sessionId != sessionId || !now.chatOpen) return@launch
+                if (AgentSessions.chatAgentFor(now.agents, sessionId)?.key != agent.key) {
+                    // 拉取期间换了 agent:这份结果作废,从头拉新的那个
+                    chatAgain = true
+                    continue
+                }
+                when (win) {
+                    is ChatWindow.Terminal -> _state.update {
+                        it.copy(chat = it.chat.copy(notice = ChatNotice.Server(win.reason, agent.agentId), loading = false))
+                    }
+                    is ChatWindow.Transcript -> {
+                        val advanced = !inc || win.cursor != chatCursor
+                        chatCursor = win.cursor
+                        chatAgentKey = agent.key
+                        _state.update {
+                            it.copy(
+                                chat = it.chat.copy(
+                                    messages = Chat.merge(if (inc) it.chat.messages else emptyList(), win),
+                                    notice = null,
+                                    loading = false,
+                                ),
+                            )
+                        }
+                        if (win.more && advanced) chatAgain = true
+                    }
+                }
+                inc = true
+            } while (chatAgain)
         }
     }
 

@@ -1,5 +1,7 @@
 package ai.eclosion.octoterm.android.wire
 
+import ai.eclosion.octoterm.android.agent.AgentSession
+
 data class SessionInfo(
     val id: Long,
     val name: String,
@@ -45,5 +47,7 @@ sealed class ServerMsg {
     data class ResyncBegin(val channel: Int) : ServerMsg()
     data class ResyncEnd(val channel: Int, val seq: Long) : ServerMsg()
     data class SessionExited(val channel: Int, val id: Long) : ServerMsg()
+    /** 托管会话里的 coding agent 状态变了。不带 `supports_transcript`,见 `AgentSessions.applyEvent` */
+    data class AgentEvent(val session: AgentSession) : ServerMsg()
     data class Unknown(val type: String) : ServerMsg()
 }
