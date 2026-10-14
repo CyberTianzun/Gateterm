@@ -67,6 +67,10 @@ async fn main() -> anyhow::Result<()> {
     let base = config.listen.unwrap_or_else(octoterm_server::config::default_listen);
     let listen = octoterm_server::config::effective_listen(base, args.host, args.port);
     let (token, generated) = octoterm_server::config::resolve_token(args.token, config.token);
+    // 必须在任何会话 spawn 之前:密钥要跨重启不变,见 `store::hook_token`
+    octoterm_server::agent::store::init_hook_token(
+        octoterm_server::agent::store::default_hook_token_path().as_deref(),
+    );
     let manager = SessionManager::new(1 << 20, args.window_size.unwrap_or(config.window_size));
     let launchers = std::sync::Arc::new(octoterm_server::launcher::providers(&config.launchers));
     let listener = tokio::net::TcpListener::bind(listen).await?;

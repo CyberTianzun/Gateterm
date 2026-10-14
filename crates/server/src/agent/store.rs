@@ -14,28 +14,111 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use octoterm_protocol::{AgentState, ServerMsg};
 use serde::Serialize;
 
-/// 进程级 hook 密钥。
+/// hook 密钥。
 ///
-/// 为什么可以是进程级、不落盘:写进 `settings.json` 的是字面量
-/// `$OCTOTERM_HOOK_TOKEN`,插值发生在 hook 触发的那一刻,取自 Claude 进程的环境,
-/// 而那份环境是 octoterm 在 spawn 这个会话时给的。会话与 server 进程同生共死,
-/// 不存在「老会话拿着旧密钥」的窗口。
+/// 写进 `settings.json` 的是字面量 `$OCTOTERM_HOOK_TOKEN`,插值发生在 hook 触发的那一刻,
+/// 取自 agent 进程的环境,而那份环境是 octoterm 在 spawn 这个会话时给的。
 ///
 /// 顺带一个恰好正确的副作用:**环境变量就是能力本身**。在 octoterm 之外启动的
-/// Claude 拿不到这个变量,hook 照样触发,但没有 `Authorization` 头 —— 401 拒收。
+/// agent 拿不到这个变量,hook 照样触发,但没有 `Authorization` 头 —— 安静收下、什么都不做。
 /// 「只管托管会话」这条边界由机制保证,不需要额外的判别逻辑。
-/// 运维方可以用同名环境变量固定它(和 `--token` 固定客户端 token 是同一个道理:
-/// 不固定的话每次重启都换,只是 hook 这边不受影响 —— 值是 spawn 时现给的)。
-/// 主要用途是端到端测试:外部起的 Claude 需要拿到和 server 一致的值。
+///
+/// **为什么要落盘**(见 [`init_hook_token`]):本来「会话与 server 同生共死,不存在老会话
+/// 拿着旧密钥」,但 Codex 打破了这个前提 —— 它的 TUI 把会话交给一个常驻的共享守护进程
+/// (`codex app-server --managed-daemon`),hook 由守护进程执行,用的是**第一次拉起它的
+/// 那个终端**的环境。server 一重启就换密钥的话,守护进程手里的永远是旧的,所有事件被
+/// 静默丢弃,只能杀掉守护进程重来。
+///
+/// 优先级:同名环境变量(运维 / 端到端测试固定它) > 入口初始化时读到或生成的文件 >
+/// 进程内随机值。没人调 [`init_hook_token`] 时(库的使用方、测试)就是最后一种,不碰磁盘。
 pub fn hook_token() -> &'static str {
-    static TOKEN: OnceLock<String> = OnceLock::new();
-    TOKEN.get_or_init(|| {
-        std::env::var("OCTOTERM_HOOK_TOKEN")
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string())
+    HOOK_TOKEN.get_or_init(|| env_hook_token().unwrap_or_else(random_hook_token))
+}
+
+static HOOK_TOKEN: OnceLock<String> = OnceLock::new();
+
+/// 入口(`octoterm-server` / desktop)启动时调一次,让密钥跨重启保持不变。
+///
+/// 必须在第一次 spawn 会话之前调;之后再调不改变已经定下的值。读写失败就退回进程内
+/// 随机值并打一条警告 —— 密钥只关乎 hook,不能因为它让整个服务起不来。
+pub fn init_hook_token(path: Option<&std::path::Path>) -> &'static str {
+    HOOK_TOKEN.get_or_init(|| {
+        if let Some(t) = env_hook_token() {
+            return t;
+        }
+        match path.map(load_or_create_hook_token) {
+            Some(Ok(t)) => t,
+            Some(Err(e)) => {
+                tracing::warn!(error = %e, "hook 密钥读写失败,本次用临时值(重启后 Codex 守护进程里的会失效)");
+                random_hook_token()
+            }
+            None => random_hook_token(),
+        }
     })
+}
+
+/// 和备份放在一起:octoterm 自己的配置目录。
+pub fn default_hook_token_path() -> Option<std::path::PathBuf> {
+    directories::ProjectDirs::from("", "", "octoterm").map(|d| d.config_dir().join("hook-token"))
+}
+
+fn env_hook_token() -> Option<String> {
+    std::env::var("OCTOTERM_HOOK_TOKEN")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn random_hook_token() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
+/// 读已有的密钥;没有(或内容不像密钥)就生成一个写进去,权限 0600。
+///
+/// 用 `create_new` 写:desktop 和独立 server 同时首次启动时,后到的那个读先到的写好的值,
+/// 两边最终一致。内容坏了(空、带空白、太短)视为没有,覆盖重写。
+pub fn load_or_create_hook_token(path: &std::path::Path) -> std::io::Result<String> {
+    if let Some(t) = read_hook_token(path)? {
+        return Ok(t);
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let token = random_hook_token();
+    let _ = std::fs::remove_file(path); // 坏内容;不存在时这里本来就会失败
+    match write_new_private(path, &token) {
+        Ok(()) => Ok(token),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            read_hook_token(path)?.ok_or_else(|| std::io::Error::other("hook 密钥文件内容无效"))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn read_hook_token(path: &std::path::Path) -> std::io::Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(t) => {
+            let t = t.trim();
+            let valid = t.len() >= 16 && t.chars().all(|c| c.is_ascii_alphanumeric());
+            Ok(valid.then(|| t.to_string()))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+fn write_new_private(path: &std::path::Path, token: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path)?;
+    f.write_all(token.as_bytes())?;
+    f.sync_all()
 }
 
 fn now() -> u64 {
@@ -467,6 +550,34 @@ impl AgentSessionStore {
 
 #[cfg(test)]
 mod tests {
+    use super::{load_or_create_hook_token, read_hook_token};
+
+    #[test]
+    fn hook_token_survives_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sub").join("hook-token");
+        let first = load_or_create_hook_token(&path).unwrap();
+        assert_eq!(load_or_create_hook_token(&path).unwrap(), first);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+    }
+
+    #[test]
+    fn broken_hook_token_file_is_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hook-token");
+        for bad in ["", "   \n", "short", "has space in it 1234567890"] {
+            std::fs::write(&path, bad).unwrap();
+            let t = load_or_create_hook_token(&path).unwrap();
+            assert!(t.len() >= 16, "{bad:?}");
+            assert_eq!(read_hook_token(&path).unwrap().as_deref(), Some(t.as_str()));
+        }
+    }
+
     use super::*;
 
     fn session(state: AgentState, updated_at: u64) -> AgentSession {

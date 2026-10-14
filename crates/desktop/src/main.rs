@@ -83,6 +83,10 @@ fn main() -> Result<()> {
             .context("无法创建 tokio runtime"),
     )?;
 
+    // 必须在任何会话 spawn 之前:密钥要跨重启不变,见 `store::hook_token`
+    octoterm_server::agent::store::init_hook_token(
+        octoterm_server::agent::store::default_hook_token_path().as_deref(),
+    );
     let mut sup = Supervisor::new(1 << 20, config.window_size, &config.launchers, config.agents);
     // 监听失败同样不是退出的理由:端口被占用时用户要能打开设置窗口换一个端口。
     // 配置文件没写 listen 时用 desktop 自己的默认:全网卡。理由与前提见
