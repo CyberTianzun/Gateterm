@@ -114,6 +114,25 @@ fn parses_camel_case_payloads() {
     );
 }
 
+/// 会话关闭时 grok 还会补一个 `reason: "shutdown"` 的 Stop,而且可能晚于 SessionEnd
+/// 到达。不忽略它,刚结束的会话会被重新建回来(实测发生过)。
+#[test]
+fn shutdown_stop_is_ignored_but_turn_end_is_not() {
+    let g = find("grok").unwrap();
+    assert!(g.parse("Stop", &json!({ "reason": "shutdown" })).is_none());
+    assert!(g.parse("Stop", &json!({ "reason": "channel_closed" })).is_none());
+    assert!(g.parse("Stop", &json!({ "reason": "end_turn" })).is_some());
+}
+
+/// 实测 payload 里带着 Claude 兼容的 `transcript_path`,聊天视图直接用它。
+#[test]
+fn transcript_path_comes_from_the_payload() {
+    let g = find("grok").unwrap();
+    let up = g.parse("Stop", &json!({ "reason": "end_turn", "transcript_path": "/x/updates.jsonl" })).unwrap();
+    assert_eq!(up.transcript.as_deref(), Some("/x/updates.jsonl"));
+    assert!(g.supports_transcript());
+}
+
 /// 子代理有自己的会话。不上报:它不是终端前的那个会话。
 #[test]
 fn subagent_events_are_not_reported() {

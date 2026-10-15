@@ -21,6 +21,7 @@ pub mod codex_trust;
 pub mod detect;
 pub mod edit;
 pub mod grok;
+pub mod grok_transcript;
 pub mod hook_cli;
 pub mod pi;
 pub mod pi_transcript;

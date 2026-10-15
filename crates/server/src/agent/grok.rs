@@ -10,11 +10,15 @@
 //!    URL 里的 `$VAR` 倒是会展开,可变量为空时它会报 hook 错误 —— 于是在 octoterm 之外
 //!    开的每个 grok 会话都会满屏报错。command 走 [`super::hook_cli`]:环境里没有我们的
 //!    变量就静默退出,什么都不发。
-//! 3. **payload 是驼峰的**:`sessionId`、`toolName`、`notificationType`。
+//! 3. **payload 是驼峰的**:`sessionId`、`toolName`、`notificationType`。另外也带着
+//!    Claude 兼容的 `session_id` 和 `transcript_path`(实测),记录路径直接从这里拿。
 //! 4. **没有授权审批事件**。`PreToolUse` 回 allow 只表示「不拦」,不会替用户批准,
-//!    所以只上报状态,不做阻塞式事件。
+//!    所以只上报状态和聊天记录(见 [`super::grok_transcript`]),不做阻塞式事件。
 //! 5. **子代理有自己的会话**,事件带 `subagentType`。这些事件不上报:它们不是终端前的
 //!    那个会话,混进来会在列表上多出一条、聊天视图也会看错对象。
+//! 6. **会话结束时还会再来一个 `Stop`**,`reason` 是 `shutdown` / `channel_closed`(正常
+//!    回合结束是 `end_turn`),而且 hook 是并发跑的,它可能晚于 `SessionEnd` 到达。不忽略
+//!    它的话,刚结束的会话会被它重新建回来、一直挂在列表上(实测发生过)。
 //!
 //! 它也会读 `~/.claude/settings.json` 里的 hook(Claude Code 兼容)。如果同时装了
 //! Claude Code 集成,grok 会以 Claude 的身份打过来,但它丢掉了 `headers`,请求不带
@@ -160,6 +164,10 @@ impl AgentAdapter for Grok {
             return None;
         }
         let (state, detail) = match event {
+            // 会话关闭时附带的那个 Stop,见模块文档第 6 条
+            "Stop" if matches!(str_field(body, "reason").as_deref(), Some("shutdown" | "channel_closed")) => {
+                return None;
+            }
             "SessionStart" | "Stop" | "StopFailure" | "StopCancelled" => (AgentState::Idle, None),
             "UserPromptSubmit" => (AgentState::Thinking, None),
             "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
@@ -180,8 +188,20 @@ impl AgentAdapter for Grok {
             detail,
             cwd: str_field(body, "cwd"),
             title: None,
-            transcript: None,
+            transcript: str_field(body, "transcript_path").or_else(|| str_field(body, "transcriptPath")),
         })
+    }
+
+    fn supports_transcript(&self) -> bool {
+        true
+    }
+
+    fn parse_transcript(&self, text: &str, base_offset: u64) -> Vec<super::transcript::Message> {
+        super::grok_transcript::parse(text, base_offset)
+    }
+
+    fn locate_transcript(&self, home: &Path, agent_session_id: &str) -> Option<PathBuf> {
+        super::grok_transcript::locate(home, agent_session_id)
     }
 
     fn is_blocking(&self, _event: &str) -> bool {
