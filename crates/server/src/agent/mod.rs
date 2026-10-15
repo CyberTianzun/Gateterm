@@ -22,6 +22,8 @@ pub mod detect;
 pub mod edit;
 pub mod grok;
 pub mod grok_transcript;
+pub mod antigravity;
+pub mod antigravity_transcript;
 pub mod hook_cli;
 pub mod pi;
 pub mod pi_transcript;
@@ -149,6 +151,13 @@ pub trait AgentAdapter: Send + Sync {
         Vec::new()
     }
 
+    /// 非阻塞事件回给 agent 的响应体。`None` = 空 body(多数家空输出就是「没意见」)。
+    ///
+    /// Antigravity 要求每个 hook 都在 stdout 输出 JSON 对象,这时返回 `Some({})`。
+    fn telemetry_reply(&self) -> Option<serde_json::Value> {
+        None
+    }
+
     /// 这个事件是不是「阻塞式」的 —— agent 会挂在 socket 上等我们写响应。
     fn is_blocking(&self, event: &str) -> bool;
 
@@ -157,7 +166,13 @@ pub trait AgentAdapter: Send + Sync {
 }
 
 pub fn registry() -> Vec<Box<dyn AgentAdapter>> {
-    vec![Box::new(claude_code::ClaudeCode), Box::new(codex::Codex), Box::new(pi::Pi), Box::new(grok::Grok)]
+    vec![
+        Box::new(claude_code::ClaudeCode),
+        Box::new(codex::Codex),
+        Box::new(pi::Pi),
+        Box::new(grok::Grok),
+        Box::new(antigravity::Antigravity),
+    ]
 }
 
 pub fn find(id: &str) -> Option<Box<dyn AgentAdapter>> {
@@ -174,9 +189,8 @@ pub fn plan_purge(adapter: &dyn AgentAdapter, ctx: &edit::InstallCtx) -> anyhow:
         if out.iter().any(|o| o.path == e.path) {
             continue;
         }
-        // 整文件托管的,「清空」就是删掉那个文件(只删带标记的,见 apply_file)
-        let op = if e.op.is_file_op() { edit::EditOp::RemoveOwnedFile } else { edit::EditOp::PurgeOurs };
-        out.push(edit::ConfigEdit { path: e.path, op });
+        // 整文件 / 整键托管的,「清空」就是删掉那一份(只删我们的,见 apply)
+        out.push(edit::ConfigEdit { op: e.op.purge_op(), path: e.path });
     }
     Ok(out)
 }

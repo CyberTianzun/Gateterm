@@ -123,6 +123,7 @@ const zh = {
   "agent.activation.codex-hooks-review": "装好之后还要在 Codex 里执行 /hooks 审核一遍才会生效 —— 这是 Codex 自己的安全闸,只能由你来点头。每次重装(端口或程序位置变了)之后都要重新审核",
   "agent.activation.pi-reload": "装的是一个 pi 扩展,新启动的 pi 自动加载;已经在跑的 pi 要执行 /reload 或重启。pi 没有授权审批,只上报状态和聊天记录",
   "agent.activation.grok-reload": "装在 ~/.grok/hooks/ 里,新启动的 grok 自动生效;已经在跑的要在 /hooks 里重新加载或重启。grok 没有授权审批,只上报状态和聊天记录",
+  "agent.activation.antigravity-restart": "写在 ~/.gemini/config/hooks.json 的 octoterm 条目里,新启动的 agy 自动生效,已经在跑的要重启。只上报状态和聊天记录,不碰 agy 的授权确认",
   "session.empty": "还没有会话,点右上角 + 新建",
 
   /* ---------- 新建会话菜单 ---------- */
@@ -311,6 +312,7 @@ const en: Record<MsgKey, string> = {
   "agent.activation.codex-hooks-review": "After installing, run /hooks inside Codex to review them — that gate is Codex's own, and only you can clear it. Every reinstall (new port or binary location) needs a fresh review",
   "agent.activation.pi-reload": "This installs a pi extension. New pi sessions load it automatically; running ones need /reload or a restart. pi has no approval prompts, so only status and chat are reported",
   "agent.activation.grok-reload": "Installed under ~/.grok/hooks/. New grok sessions pick it up; running ones need a reload from /hooks or a restart. grok has no approval prompts, so only status and chat are reported",
+  "agent.activation.antigravity-restart": "Written as the octoterm entry in ~/.gemini/config/hooks.json. New agy sessions pick it up; running ones need a restart. Only status and chat are reported — agy\u2019s own permission prompts are left alone",
   "session.empty": "No sessions yet — use + above to start one",
 
   "ns.filter": "Filter…",

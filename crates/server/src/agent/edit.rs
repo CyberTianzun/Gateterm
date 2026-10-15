@@ -59,6 +59,14 @@ pub enum EditOp {
     WriteOwnedFile { content: String },
     /// 删掉我们写的那个文件。没有标记就不删,文件不在就什么都不做。
     RemoveOwnedFile,
+    /// 共用配置文件里,整个顶层键归我们管:写成 `value`。
+    ///
+    /// 给那些「顶层是具名 hook、底下才是事件」的配置(Antigravity 的
+    /// `~/.gemini/config/hooks.json`,几个 Antigravity 产品共用,不能整份接管)。
+    /// 所有权靠内容认:同名键底下只要有一条命令不是我们的,就是用户的,拒绝覆盖。
+    SetOwnedKey { key: String, value: Value },
+    /// 删掉我们的那个顶层键。不是我们的、或不存在,就什么都不做。
+    RemoveOwnedKey { key: String },
 }
 
 /// 整文件托管时写在第一行的所有权标记。改它等于让所有旧安装变成「不是我们的」,
@@ -75,6 +83,40 @@ impl EditOp {
     pub fn is_file_op(&self) -> bool {
         matches!(self, Self::WriteOwnedFile { .. } | Self::RemoveOwnedFile)
     }
+
+    /// 「清空」时对同一个文件该做什么。整文件 / 整键托管的删掉那一份;按事件挂 hook 的
+    /// 扫遍所有事件(见 [`EditOp::PurgeOurs`])。
+    pub fn purge_op(&self) -> EditOp {
+        match self {
+            Self::WriteOwnedFile { .. } | Self::RemoveOwnedFile => Self::RemoveOwnedFile,
+            Self::SetOwnedKey { key, .. } | Self::RemoveOwnedKey { key } => Self::RemoveOwnedKey { key: key.clone() },
+            Self::EnsureHook { .. } | Self::RemoveOurs { .. } | Self::PurgeOurs => Self::PurgeOurs,
+        }
+    }
+}
+
+/// 这一块配置是不是我们写的:底下至少有一条命令,而且**每一条**都是我们的
+/// (不看端口)。混着一条别人的命令就不是 —— 宁可拒绝覆盖,也不能吞掉用户的 hook。
+pub fn is_owned_value(v: &Value) -> bool {
+    let mut commands = Vec::new();
+    collect_hook_handlers(v, &mut commands);
+    !commands.is_empty() && commands.iter().all(|h| is_ours_any_port(h))
+}
+
+/// 一块配置里所有带 `command` 的处理器对象(任意深度)。
+pub fn collect_hook_handlers<'a>(v: &'a Value, out: &mut Vec<&'a Value>) {
+    match v {
+        Value::Object(map) => {
+            if map.get("command").is_some_and(Value::is_string) {
+                out.push(v);
+            }
+            for child in map.values() {
+                collect_hook_handlers(child, out);
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|c| collect_hook_handlers(c, out)),
+        _ => {}
+    }
 }
 
 pub fn apply_to_json(doc: &mut Value, op: &EditOp) -> Result<()> {
@@ -86,6 +128,25 @@ pub fn apply_to_json(doc: &mut Value, op: &EditOp) -> Result<()> {
         }
         EditOp::WriteOwnedFile { .. } | EditOp::RemoveOwnedFile => {
             anyhow::bail!("整文件操作不能应用到 JSON 上")
+        }
+        EditOp::SetOwnedKey { key, value } => {
+            let obj = doc.as_object_mut().context("配置根不是 JSON 对象")?;
+            if let Some(existing) = obj.get(key)
+                && !is_owned_value(existing)
+            {
+                anyhow::bail!("`{key}` 已经存在,而且不是 octoterm 写的,拒绝覆盖");
+            }
+            obj.insert(key.clone(), value.clone());
+            Ok(())
+        }
+        EditOp::RemoveOwnedKey { key } => {
+            if let Some(obj) = doc.as_object_mut()
+                && obj.get(key).is_some_and(is_owned_value)
+            {
+                // shift_remove:保持其余键的顺序,理由见 `remove_ours`
+                obj.shift_remove(key);
+            }
+            Ok(())
         }
         EditOp::PurgeOurs => {
             let events: Vec<String> = doc
@@ -170,8 +231,9 @@ pub fn is_current(doc: &Value, edits: &[&EditOp], port: u16) -> bool {
             let ours: Vec<&Value> = hooks_in(doc, event).filter(|h| is_ours_any_port(h)).collect();
             matches!((ours.as_slice(), want), ([only], Some(w)) if *only == w)
         }
+        EditOp::SetOwnedKey { key, value } => doc.get(key) == Some(value),
         // 计划里只有「装」才有「对不对得上」可言
-        EditOp::RemoveOurs { .. } | EditOp::PurgeOurs => true,
+        EditOp::RemoveOurs { .. } | EditOp::PurgeOurs | EditOp::RemoveOwnedKey { .. } => true,
         // 整文件托管不在 JSON 里,由调用方直接比文本(见 `agent::install_is_current`)
         EditOp::WriteOwnedFile { .. } | EditOp::RemoveOwnedFile => true,
     });

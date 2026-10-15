@@ -198,7 +198,10 @@ clients available.
    generated extension at `~/.pi/agent/extensions/octoterm.ts` (state and chat
    view; pi has no approval prompts, so there is nothing to approve remotely).
    **Grok** (xAI's `grok`) is supported through `~/.grok/hooks/octoterm.json`
-   (state and chat view; it has no approval event either).
+   (state and chat view; it has no approval event either). **Antigravity CLI**
+   (Google's `agy`) is supported through an `octoterm` entry in the shared
+   `~/.gemini/config/hooks.json` (state and chat view; its own permission
+   prompts are left alone).
 3. **No file manager.** File management is very unlikely to ever be added —
    that's what the shell in your session is for.
 

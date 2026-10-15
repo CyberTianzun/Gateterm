@@ -166,6 +166,8 @@ octoterm 目前是**实验性 demo**,已提供浏览器端和 Android 原生客�
    **pi** 通过生成的扩展 `~/.pi/agent/extensions/octoterm.ts` 支持(状态与聊天视图;
    pi 本身没有授权审批,所以没有远程授权可做);**Grok**(xAI 的 `grok`)通过
    `~/.grok/hooks/octoterm.json` 支持(状态与聊天视图;它同样没有授权审批事件);
+   **Antigravity CLI**(Google 的 `agy`)通过共用的 `~/.gemini/config/hooks.json` 里的
+   `octoterm` 条目支持(状态与聊天视图;不接管它的授权确认);
 3. **不做文件管理**:文件管理基本不可能加——那是会话里 shell 自己的事。
 
 ## 已知限制

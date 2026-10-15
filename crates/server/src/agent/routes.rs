@@ -41,12 +41,19 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response
 /// (R13:客户端中立)。
 fn describe(e: &ConfigEdit) -> serde_json::Value {
     let (action, event, spec) = match &e.op {
-        EditOp::EnsureHook { event, group } => ("ensure", event.as_str(), Some(group.clone())),
-        EditOp::RemoveOurs { event } => ("remove", event.as_str(), None),
-        EditOp::PurgeOurs => ("purge", "*", None),
+        EditOp::EnsureHook { event, group } => ("ensure", event.clone(), Some(group.clone())),
+        EditOp::RemoveOurs { event } => ("remove", event.clone(), None),
+        EditOp::PurgeOurs => ("purge", "*".into(), None),
         // 整文件托管没有「事件」,预演里显示成一个文件级动作
-        EditOp::WriteOwnedFile { .. } => ("ensure", "(extension file)", None),
-        EditOp::RemoveOwnedFile => ("remove", "(extension file)", None),
+        EditOp::WriteOwnedFile { .. } => ("ensure", "(extension file)".into(), None),
+        EditOp::RemoveOwnedFile => ("remove", "(extension file)".into(), None),
+        // 整键托管:一条编辑就装齐所有事件,预演里把事件名列出来
+        EditOp::SetOwnedKey { key, value } => {
+            let events: Vec<&str> =
+                value.as_object().into_iter().flat_map(|o| o.keys()).map(String::as_str).collect();
+            ("ensure", format!("{key}: {}", events.join(", ")), Some(value.clone()))
+        }
+        EditOp::RemoveOwnedKey { key } => ("remove", format!("{key}: *"), None),
     };
     serde_json::json!({
         "path": e.path.to_string_lossy(),
@@ -315,7 +322,10 @@ pub async fn hook(
         state.manager.publish(gone.to_msg());
     }
     state.manager.publish(snapshot.to_msg());
-    StatusCode::OK.into_response()
+    match adapter.telemetry_reply() {
+        Some(body) => (StatusCode::OK, Json(body)).into_response(),
+        None => StatusCode::OK.into_response(),
+    }
 }
 
 /// 这个事件能不能顶替同一终端里同家 agent 的旧会话(见 `AgentSessionStore::apply_superseding`)。

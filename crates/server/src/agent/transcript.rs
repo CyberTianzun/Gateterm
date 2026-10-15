@@ -302,8 +302,18 @@ pub fn flatten_tool_input(input: &serde_json::Value) -> String {
         return clamp_text(s.to_string());
     }
     if let Some(obj) = input.as_object() {
-        // `target_file` 是 grok 的 read_file 用的
-        for key in ["command", "file_path", "target_file", "path", "url", "pattern", "prompt"] {
+        // `target_file` 是 grok 的 read_file;`CommandLine` / `AbsolutePath` 是 Antigravity 的
+        for key in [
+            "command",
+            "CommandLine",
+            "file_path",
+            "target_file",
+            "AbsolutePath",
+            "path",
+            "url",
+            "pattern",
+            "prompt",
+        ] {
             if let Some(v) = obj.get(key).and_then(|v| v.as_str()) {
                 return clamp_text(v.to_string());
             }
