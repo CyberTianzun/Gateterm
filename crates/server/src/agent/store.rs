@@ -293,6 +293,11 @@ pub fn decide(
     if s.pending.is_some() {
         return None;
     }
+    // agent 自己报了结束(SessionEnd)。客户端收到事件时已经移除了,表里留着只会越积越多 ——
+    // 终端还在时不按时间删,这类会话就只剩这一条出路
+    if s.state == AgentState::Done {
+        return Some(Sweep::Drop);
+    }
     let age = now.saturating_sub(s.updated_at.max(s.acked_at));
     if s.session.is_none() && age > session_stale_secs {
         return Some(Sweep::Drop);
@@ -681,6 +686,13 @@ mod tests {
     fn idle_session_is_not_marked_again() {
         let s = session(AgentState::Idle, 0);
         assert_eq!(decide(301, &s, true, 600, 300), None);
+    }
+
+    /// agent 报了结束的,下一轮清理就删 —— 终端还在时不按时间删,不然它们会一直留着。
+    #[test]
+    fn done_session_is_dropped_even_while_host_lives() {
+        let s = session(AgentState::Done, 0);
+        assert_eq!(decide(1, &s, true, 600, 300), Some(Sweep::Drop));
     }
 
     /// 没有关联终端的会话才按时间清理。
