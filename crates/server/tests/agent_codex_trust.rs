@@ -52,9 +52,10 @@ impl Env {
             let snake = snake(event);
             for (gi, g) in groups.as_array().unwrap().iter().enumerate() {
                 for hi in 0..g["hooks"].as_array().unwrap().len() {
+                    // TOML quoted keys must escape Windows path separators.
+                    let key = toml::Value::String(format!("{}:{snake}:{gi}:{hi}", self.hooks().display()));
                     out += &format!(
-                        "\n[hooks.state.\"{}:{snake}:{gi}:{hi}\"]\ntrusted_hash = \"sha256:00\"\n",
-                        self.hooks().display()
+                        "\n[hooks.state.{key}]\ntrusted_hash = \"sha256:00\"\n"
                     );
                 }
             }

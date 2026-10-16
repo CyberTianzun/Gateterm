@@ -140,7 +140,7 @@ object AppearanceCodec {
             0x565F89, 0xF7768E, 0x9ECE6A, 0xE0AF68,
             0x7AA2F7, 0xBB9AF7, 0x7DCFFF, 0xC0CAF5,
         ),
-        fontSizeSp = 14f,
+        fontSizeSp = 12f,
         font = TermFontKind.Mono,
         scrollback = 20_000,
     )
@@ -157,7 +157,7 @@ object AppearanceCodec {
             0x666666, 0xF14C4C, 0x23D18B, 0xF5F543,
             0x3B8EEA, 0xD670D6, 0x29B8DB, 0xE5E5E5,
         ),
-        fontSizeSp = 14f,
+        fontSizeSp = 12f,
         font = TermFontKind.Mono,
         scrollback = 20_000,
     )
@@ -174,7 +174,7 @@ object AppearanceCodec {
             0x666666, 0xCD3131, 0x14CE14, 0xB5BA00,
             0x0451A5, 0xBC05BC, 0x0598BC, 0xA5A5A5,
         ),
-        fontSizeSp = 14f,
+        fontSizeSp = 12f,
         font = TermFontKind.Mono,
         scrollback = 20_000,
     )

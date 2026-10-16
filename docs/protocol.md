@@ -628,3 +628,46 @@ Every item MUST be answered in the proposal.
   octoterm. It is specified in
   `docs/superpowers/specs/2026-08-18-octoterm-agent-integration-design.md`.
   Clients neither see nor depend on it.
+
+### 15.1 Host agent session history
+
+All history endpoints require `Authorization: Bearer <token>` and obey
+`agents.transcript_enabled`. They use HTTP without changing `proto_version`.
+Disabling transcript reading returns 403 before any history files are scanned.
+
+- `GET /api/agents/history?q=&agent_id=&offset=0&limit=50&refresh=false`
+  returns `{sessions, agents, total, next_offset, truncated, skipped, indexing,
+  max_sessions}`. `limit`
+  is clamped to 1–100. `next_offset: null` marks the end. Search is over indexed
+  title, cwd, agent name and session ID. Server startup schedules a background
+  index of at most 1000 distinct sessions. Requests read only their page from
+  this index; they do not perform disk scans. `refresh=true` schedules a background
+  rebuild; concurrent rebuilds are coalesced and the previous snapshot remains
+  readable. `indexing` distinguishes a pending index from empty history, and
+  `max_sessions` gives the limit to display at the end of the list. Each entry contains
+  `{agent_id, agent_name, agent_session_id, title, cwd, updated_at,
+  terminal_session, can_resume, unavailable_reason}`. Timestamps are Unix
+  seconds; `terminal_session` is an optional live Octoterm session ID. Clients
+  MUST distinguish a truncated scan or skipped records from a complete result.
+- `GET /api/agents/history/messages?agent_id=...&agent_session_id=...`
+  returns the same normalized transcript window shape as A9, limited to the
+  recent window. This is a preview snapshot; it does not follow live updates.
+  Paths are resolved from the server-owned catalog.
+- `POST /api/agents/history/open` accepts only
+  `{agent_id, agent_session_id}` and returns `{session: SessionInfo, reused: bool}`.
+  The server first resolves an existing live terminal; otherwise it creates a
+  managed PTY with the provider resume arguments and original cwd. Clients MUST
+  attach using the existing WebSocket protocol after receiving the session ID.
+  A host-wide lock and remembered launch identity prevent duplicate concurrent
+  resumes while provider hooks are starting. This operation never injects a
+  resume command into an unrelated existing shell.
+
+Errors have shape `{error: reason}`: 401 `unauthorized`, 403 `disabled`, 404
+`not-found`, 409 `missing-directory`, `missing-cli`, `unsupported-agent` or
+`unreadable`, and 500 `unreadable` or `spawn-failed`. Clients translate reasons
+and MUST NOT present failures as empty history. The request cannot supply a
+command, working directory or transcript path. File discovery skips symlinks
+and subagent files, caps directory visits at 20,000 and the indexed distinct
+session count at 1000, and reads bounded metadata samples. Candidate duplicates
+and unreadable files do not consume session slots. Live terminal associations are refreshed
+on each list request independently of the cached disk scan.

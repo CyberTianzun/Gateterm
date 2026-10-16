@@ -25,6 +25,7 @@ pub mod grok_transcript;
 pub mod antigravity;
 pub mod antigravity_transcript;
 pub mod hook_cli;
+pub mod history;
 pub mod pi;
 pub mod pi_transcript;
 pub mod routes;

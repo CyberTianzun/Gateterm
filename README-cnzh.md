@@ -125,7 +125,11 @@ cargo run -p octoterm-desktop
 
 `clients/android` 是 Kotlin + Jetpack Compose 原生客户端,支持连接管理、服务端
 启动项、多个会话、回滚与文字选择。界面和终端默认随系统切换 `2026 Light` /
-`2026 Dark`;软键盘弹出时缩小终端视口,快捷键栏可左右滑动。
+`2026 Dark`;软键盘弹出时缩小终端视口,快捷键栏默认双行、可左右滑动。
+首页右上角的设置统一管理语言、外观和快捷键行数,可切换单行 / 双行。按钮为 35dp 方形。
+服务端识别出当前终端中的 Agent 后,快捷键自动切换为 Agent 布局,将 `P↑`、`P↓`
+和多行输入键放在最前面。通过「设置 → Agent 快捷键布局 → 配置」可按 Agent 分别选择
+`⌃J`、`⇧↵` 或两者,调整其他优先键的顺序,也可为某个 Agent 使用普通终端布局。
 
 连接 Windows 服务端时,键盘适配层保留 Shift+Enter、Ctrl+J、Alt+方向键等组合键
 的身份与修饰状态。快捷栏包含 Esc、Ctrl+C、方向键、Home、End、PgUp/PgDn 等。
@@ -140,6 +144,22 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 Windows 使用 `gradlew.bat`。安装后添加服务端地址和 token,也可以从剪贴板导入
 服务端访问 URL。
+
+## Agent 会话历史
+
+Web 侧栏的历史按钮、Android 服务端页面的「Agent 会话历史」可浏览宿主机已有的
+Claude Code、Codex、pi、Grok 和 Antigravity CLI 记录,包括在 Octoterm 之外开始的对话。
+支持按 Agent、标题、原工作目录和会话 ID 搜索,并预览最近的对话。
+
+已关联到运行中 Octoterm 终端的记录可直接进入终端;其他记录在原工作目录中启动一个
+新的 Octoterm 终端并恢复。需要服务端 PATH 中有对应 CLI、原目录仍存在且记录包含恢复
+所需信息。pi 使用原会话文件恢复。恢复请求在服务端合并,多端同时点击也不会重复启动。
+
+历史读取沿用 `[agents].transcript_enabled` 和服务端 bearer token。服务端启动时异步
+构建最多 1000 个去重会话的内存索引,客户端默认每页加载 50 条元数据,列表末尾提示上限。
+对话正文只在预览时读取。刷新在后台重建索引,不阻塞分页请求;达到扫描上限或遇到坏记录
+时界面会提示。当前读取
+各 Agent 的默认用户目录,不扫描 WSL、其他用户目录或自定义存储位置。
 
 ## 架构
 

@@ -244,6 +244,8 @@ const ANSWERED_MEMORY: usize = 64;
 
 #[derive(Default)]
 pub struct AgentSessionStore {
+    pub(crate) history: Mutex<super::history::Catalog>,
+    pub(crate) history_open: tokio::sync::Mutex<()>,
     sessions: Mutex<HashMap<(String, String), AgentSession>>,
     pending: Mutex<HashMap<String, PendingEntry>>,
     answered: Mutex<VecDeque<String>>,

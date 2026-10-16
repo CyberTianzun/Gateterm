@@ -23,6 +23,8 @@ import {
   fetchMessages,
   mergeWindow,
 } from "./chat";
+import { renderMessages } from "./chat-view";
+import { mountHistory } from "./history-view";
 import {
   type AgentMap,
   type AgentSession,
@@ -80,6 +82,11 @@ const narrowSidebar = window.matchMedia("(max-width: 768px)");
 // 语言先于任何一次渲染定下来:下面 mountSettings / mountNewSessionMenu 在模块
 // 求值时就会铺一批静态文案,那时 t() 必须已经指向对的词条表。
 applyLocale();
+mountHistory($("open-history"), token, (session) => {
+  if (!sessions.some((s) => s.id === session.id)) sessions.push(session);
+  openTerminal(session.id);
+  client.send({ type: "list-sessions" });
+});
 
 function token(): string {
   const fromHash = new URLSearchParams(location.hash.slice(1)).get("token");
@@ -297,6 +304,8 @@ function showError(message: string) {
 function openTerminal(id: number) {
   setDrawer(false);
   if (attachedId === id) {
+    viewMode = "terminal";
+    showView();
     term?.focus();
     return;
   }
@@ -598,48 +607,8 @@ async function refreshChat(incremental: boolean) {
   if (win.more && advanced) void refreshChat(true);
 }
 
-function blockNode(b: ChatMessage["blocks"][number]): HTMLElement {
-  const el = document.createElement("div");
-  if (b.kind === "text") {
-    el.className = "cb-text";
-    el.textContent = b.text;
-  } else if (b.kind === "thinking") {
-    // 思考过程常常比正文还长,默认折叠 —— 但**不隐藏**:它是这类 agent 最有信息量
-    // 的部分之一,用户要能一眼看到「有」并自己展开
-    const d = document.createElement("details");
-    d.className = "cb-thinking";
-    const sum = document.createElement("summary");
-    sum.textContent = t("chat.thinking");
-    const body = document.createElement("div");
-    body.textContent = b.text;
-    d.append(sum, body);
-    return d;
-  } else if (b.kind === "tool-use") {
-    el.className = "cb-tool";
-    const name = document.createElement("span");
-    name.className = "cb-tool-name";
-    name.textContent = b.name;
-    const input = document.createElement("code");
-    input.textContent = b.input;
-    el.append(name, input);
-  } else {
-    el.className = "cb-result" + (b.ok ? "" : " is-error");
-    if (!b.ok) {
-      const tag = document.createElement("span");
-      tag.className = "cb-result-tag";
-      tag.textContent = t("chat.toolResultError");
-      el.appendChild(tag);
-    }
-    const pre = document.createElement("pre");
-    pre.textContent = b.text;
-    el.appendChild(pre);
-  }
-  return el;
-}
-
 function renderChat() {
   const box = $("chat-view");
-  box.innerHTML = "";
   if (chatFallback) {
     const wrap = document.createElement("div");
     wrap.className = "chat-fallback";
@@ -652,22 +621,14 @@ function renderChat() {
       showView();
     });
     wrap.append(why, go);
-    box.appendChild(wrap);
+    box.replaceChildren(wrap);
     return;
   }
   if (chatMessages.length === 0) {
     box.innerHTML = `<div class="empty">${t("chat.empty")}</div>`;
     return;
   }
-  // 贴着底部时才自动跟随;用户往上翻看历史时不该被拽回来
-  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-  for (const m of chatMessages) {
-    const row = document.createElement("div");
-    row.className = `cmsg c-${m.role}`;
-    for (const b of m.blocks) row.appendChild(blockNode(b));
-    box.appendChild(row);
-  }
-  if (atBottom) box.scrollTop = box.scrollHeight;
+  renderMessages(box, chatMessages, JSON.stringify([attachedId, keyOf(attachedAgent()!)]));
 }
 
 /** 状态胶囊。列表页和侧边栏共用同一个,保证两处看到的是一回事。 */

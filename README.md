@@ -153,7 +153,13 @@ Linux is not supported.
 management, server launchers, multiple sessions, scrollback and text selection.
 The UI and terminal follow the system using `2026 Light` / `2026 Dark`. The
 terminal viewport shrinks above the soft keyboard, and shortcut keys scroll
-horizontally.
+horizontally in two rows by default. The home screen settings icon combines
+language, appearance and the one/two-row shortcut preference. Keys are 35dp square.
+When the server identifies the active terminal's agent, the shortcut bar switches
+to an agent layout with Page Up, Page Down and multiline keys first. Under
+**Settings → Agent shortcut layouts → Configure**, each agent can independently
+use Ctrl+J, Shift+Enter or both, reorder other priority keys, or use the regular
+terminal layout. Preferences are saved locally.
 
 For Windows servers, the keyboard adapter preserves key identity and modifiers
 for Shift+Enter, Ctrl+J, Alt+arrows and other combinations. The shortcut bar
@@ -169,6 +175,28 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 Use `gradlew.bat` on Windows. After installation, add the server address and
 token, or import the server access URL from the clipboard.
+
+## Agent session history
+
+Use the history button in the web sidebar or **Agent session history** on the
+Android server screen to browse host-side Claude Code, Codex, pi, Grok and
+Antigravity CLI records, including conversations started outside Octoterm.
+Filter by agent or search titles, working directories and session IDs, and
+preview recent messages.
+
+An associated live Octoterm terminal opens directly. Otherwise, resuming creates
+a new Octoterm terminal in the original directory. The corresponding CLI must
+be on the server PATH, the directory must exist, and the record must contain
+the required metadata. pi resumes using its original session file. Concurrent
+resume requests share the same terminal.
+
+History uses the server bearer token and `[agents].transcript_enabled`. Startup
+asynchronously indexes at most 1000 distinct recent sessions. Clients load 50
+metadata entries per page and display the limit at the end of the list. Transcript
+bodies load only for previews. Refresh rebuilds the index in the background while
+reads use the previous snapshot. Discovery and reads remain bounded; the UI
+reports incomplete scans and unreadable records. This version reads default
+agent stores for the server user, excluding WSL, other users and custom roots.
 
 ## Architecture
 

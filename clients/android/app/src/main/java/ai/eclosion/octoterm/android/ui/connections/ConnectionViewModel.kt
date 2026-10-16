@@ -13,6 +13,10 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import ai.eclosion.octoterm.android.agent.AgentSession
 import ai.eclosion.octoterm.android.agent.AgentState
 import ai.eclosion.octoterm.android.agent.AgentSessions
+import ai.eclosion.octoterm.android.agent.AgentHistory
+import ai.eclosion.octoterm.android.agent.HistoryEntry
+import ai.eclosion.octoterm.android.agent.HistoryPage
+import ai.eclosion.octoterm.android.agent.HistoryFailure
 import ai.eclosion.octoterm.android.agent.Chat
 import ai.eclosion.octoterm.android.agent.ChatFallback
 import ai.eclosion.octoterm.android.agent.ChatMessage
@@ -29,6 +33,7 @@ import ai.eclosion.octoterm.android.launcher.Launcher
 import ai.eclosion.octoterm.android.launcher.Launchers
 import ai.eclosion.octoterm.android.net.OctoClient
 import ai.eclosion.octoterm.android.term.TermFrame
+import ai.eclosion.octoterm.android.term.AgentKeyLayout
 import ai.eclosion.octoterm.android.term.TermPaintGate
 import ai.eclosion.octoterm.android.term.TermSelection
 import ai.eclosion.octoterm.android.term.VtEmulator
@@ -136,6 +141,8 @@ data class ConnectionUiState(
     val launcherMenu: LauncherMenuState = LauncherMenuState(),
     val appearance: TermAppearance = AppearanceCodec.default(),
     val appearanceFollowsSystem: Boolean = true,
+    val extraKeyRows: Int = 2,
+    val agentKeyLayouts: Map<String, AgentKeyLayout> = emptyMap(),
     val selection: TermSelection? = null,
     val scrollOffset: Int = 0,
     val mouseTracking: Boolean = false,
@@ -185,6 +192,8 @@ class ConnectionViewModel(
             connections = sorted(store.load()),
             appearance = appearanceStore.load(systemDark),
             appearanceFollowsSystem = appearanceStore.followsSystem(),
+            extraKeyRows = appearanceStore.extraKeyRows(),
+            agentKeyLayouts = appearanceStore.agentKeyLayouts(),
         ),
     )
     val state: StateFlow<ConnectionUiState> = _state.asStateFlow()
@@ -458,6 +467,36 @@ class ConnectionViewModel(
         )
     }
 
+    suspend fun loadHistory(query: String, agent: String, offset: Int, refresh: Boolean): HistoryPage {
+        val origin = httpOrigin ?: throw HistoryFailure("unreadable")
+        val token = httpToken ?: throw HistoryFailure("unreadable")
+        return withContext(Dispatchers.IO) { AgentHistory.fetch(http, origin, token, query, agent, offset, refresh) }
+    }
+
+    suspend fun previewHistory(entry: HistoryEntry): ChatWindow {
+        val origin = httpOrigin ?: throw HistoryFailure("unreadable")
+        val token = httpToken ?: throw HistoryFailure("unreadable")
+        return withContext(Dispatchers.IO) { AgentHistory.messages(http, origin, token, entry) }
+    }
+
+    suspend fun resumeHistory(entry: HistoryEntry) {
+        val connection = client ?: throw HistoryFailure("unreadable")
+        if (_state.value.reconnecting) throw HistoryFailure("unreadable")
+        val origin = httpOrigin ?: throw HistoryFailure("unreadable")
+        val token = httpToken ?: throw HistoryFailure("unreadable")
+        val session = withContext(Dispatchers.IO) { AgentHistory.open(http, origin, token, entry) }
+        if (client !== connection || _state.value.screen !is AppScreen.Server) return
+        _state.update { state -> state.copy(sessions = (state.sessions + session).distinctBy { it.id }) }
+        if (session.id !in opens && opens.size >= MAX_OPEN) {
+            // Make room in the local render cache; the detached remote terminal keeps running.
+            opens.keys.firstOrNull { it != activeId }?.let(::closeOpenSession)
+        }
+        openSession(session.id)
+        connection.send(ClientMsg.ListSessions)
+        agentRevision++
+        refreshAgents()
+    }
+
     fun openSession(sessionId: Long) {
         if (_state.value.chat.sessionId != sessionId) resetChat()
         val existing = opens[sessionId]
@@ -594,6 +633,19 @@ class ConnectionViewModel(
     }
 
     fun setFontSize(size: Float) = updateAppearance(_state.value.appearance.withFontSize(size))
+
+    fun setExtraKeyRows(rows: Int) {
+        val next = rows.coerceIn(1, 2)
+        appearanceStore.saveExtraKeyRows(next)
+        _state.update { it.copy(extraKeyRows = next) }
+    }
+
+    fun setAgentKeyLayout(agentId: String, layout: AgentKeyLayout) {
+        val next = _state.value.agentKeyLayouts.toMutableMap()
+        if (layout == AgentKeyLayout()) next.remove(agentId) else next[agentId] = layout
+        appearanceStore.saveAgentKeyLayouts(next)
+        _state.update { it.copy(agentKeyLayouts = next) }
+    }
 
     fun setFont(kind: TermFontKind) = updateAppearance(_state.value.appearance.withFont(kind))
 

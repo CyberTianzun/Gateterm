@@ -2,6 +2,8 @@ package ai.eclosion.octoterm.android.ui.appearance
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -32,6 +34,8 @@ import ai.eclosion.octoterm.android.R
 import ai.eclosion.octoterm.android.appearance.AppearanceCodec
 import ai.eclosion.octoterm.android.appearance.TermAppearance
 import ai.eclosion.octoterm.android.appearance.TermFontKind
+import ai.eclosion.octoterm.android.i18n.LocalePref
+import ai.eclosion.octoterm.android.term.AgentKeyLayout
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,13 +50,19 @@ fun AppearanceScreen(
     onTheme: (String) -> Unit,
     onCopy: () -> Unit,
     onImport: () -> Unit,
+    localePref: LocalePref,
+    onLocalePref: (LocalePref) -> Unit,
+    extraKeyRows: Int,
+    onExtraKeyRows: (Int) -> Unit,
+    agentKeyLayouts: Map<String, AgentKeyLayout>,
+    onAgentKeyLayout: (String, AgentKeyLayout) -> Unit,
 ) {
     var scrollDraft by remember(appearance.scrollback) { mutableStateOf(appearance.scrollback.toString()) }
     val systemThemeName = AppearanceCodec.default(isSystemInDarkTheme()).name
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.appearance_title)) },
+                title = { Text(stringResource(R.string.settings_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
@@ -71,7 +81,32 @@ fun AppearanceScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 8.dp),
         ) {
-            Text(stringResource(R.string.appearance_theme), style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.locale_action), style = MaterialTheme.typography.titleMedium)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                LocalePref.entries.forEach { pref ->
+                    FilterChip(
+                        selected = localePref == pref,
+                        onClick = { onLocalePref(pref) },
+                        label = { Text(stringResource(when (pref) {
+                            LocalePref.Auto -> R.string.locale_auto
+                            LocalePref.ZhCN -> R.string.locale_zh
+                            LocalePref.En -> R.string.locale_en
+                        })) },
+                    )
+                }
+            }
+            Text(stringResource(R.string.settings_keyboard_rows), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (rows in 1..2) {
+                    FilterChip(
+                        selected = extraKeyRows == rows,
+                        onClick = { onExtraKeyRows(rows) },
+                        label = { Text(stringResource(if (rows == 1) R.string.settings_keyboard_one_row else R.string.settings_keyboard_two_rows)) },
+                    )
+                }
+            }
+            AgentKeyboardSettings(agentKeyLayouts, onAgentKeyLayout)
+            Text(stringResource(R.string.appearance_theme), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
             FilterChip(
                 selected = followsSystem,
                 onClick = onFollowSystem,

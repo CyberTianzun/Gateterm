@@ -95,7 +95,9 @@ async fn main() -> anyhow::Result<()> {
     }
     let agents = config.agents;
     let agent_sessions = std::sync::Arc::new(octoterm_server::agent::store::AgentSessionStore::new());
-    serve(listener, AppState { manager, token, launchers, listen_port, agents, agent_sessions }).await
+    let state = AppState { manager, token, launchers, listen_port, agents, agent_sessions };
+    octoterm_server::agent::history::start_index(&state, false);
+    serve(listener, state).await
 }
 
 /// `purge-hooks` 子命令。逐家清,一家失败不影响其他家(局部失败原则),有失败则退出码 1。

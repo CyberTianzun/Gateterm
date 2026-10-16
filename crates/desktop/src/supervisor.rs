@@ -126,6 +126,7 @@ impl Supervisor {
             agents: self.agents,
             agent_sessions: self.agent_sessions.clone(),
         };
+        octoterm_server::agent::history::start_index(&state, false);
         let join = tokio::spawn(async move {
             if let Err(e) = serve(listener, state).await {
                 tracing::error!(error = %format!("{e:#}"), "http 层异常退出");

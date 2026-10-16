@@ -50,6 +50,7 @@ body[data-sidebar-position="right"] #sidebar { order: 2; border-right: 0; border
 }
 #logo { flex: 1; font-weight: 700; font-size: 15px; letter-spacing: 0.4px; }
 #new-session,
+#open-history,
 #back-to-list,
 #sidebar-position,
 #open-settings { width: 28px; height: 28px; padding: 0; font-size: 16px; line-height: 1; }
@@ -604,30 +605,31 @@ body[data-sidebar-position="hidden"] #menu { display: none; }
 
 /* 思考默认折叠,但不隐藏 —— 用户要能一眼看到「有」,再自己决定展不展开 */
 .cb-thinking { margin: 6px 0; opacity: 0.8; }
-.cb-thinking > summary { cursor: pointer; font-size: 12px; }
+.cb-thinking > summary,
+.cb-tool > summary,
+.cb-result > summary {
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cb-thinking > summary:focus-visible,
+.cb-tool > summary:focus-visible,
+.cb-result > summary:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .cb-thinking > div { white-space: pre-wrap; margin-top: 4px; padding-left: 12px; }
 
-.cb-tool {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-  margin: 4px 0;
-  font-size: 12px;
-}
-.cb-tool-name { font-weight: 600; flex: none; }
-.cb-tool code {
-  overflow-x: auto;
-  white-space: pre;
-  opacity: 0.85;
-}
+.cb-tool, .cb-result { margin: 4px 0; min-width: 0; }
+.cb-label { font-weight: 600; margin-right: 8px; }
+.cb-preview { opacity: 0.75; font-family: monospace; }
 
-.cb-result { margin: 4px 0; }
+.cb-tool pre,
 .cb-result pre {
-  margin: 0;
+  margin: 4px 0 0;
   padding: 6px 8px;
-  max-height: 12em;
   overflow: auto;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   background: rgba(128, 128, 128, 0.12);
   border-radius: 4px;
   font-size: 12px;
@@ -644,3 +646,28 @@ body[data-sidebar-position="hidden"] #menu { display: none; }
   padding: 24px;
   opacity: 0.85;
 }
+
+.history-dialog {
+  margin: auto;
+  width: min(920px, 96vw);
+  max-height: 92dvh;
+  overflow-y: auto;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.history-dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
+.history-toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 14px; }
+.history-toolbar input { flex: 1; min-width: 160px; }
+.history-toolbar input, .history-toolbar select {
+  color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 6px;
+}
+.history-status, .history-preview { padding: 12px 14px; }
+.history-row { padding: 12px 14px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.history-row h3 { font-size: 14px; font-weight: 600; white-space: pre-wrap; }
+.history-meta { font-size: 12px; color: var(--dim); overflow-wrap: anywhere; }
+.history-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.history-preview { border-top: 1px solid var(--line); }
+.history-preview h3 { font-size: 14px; margin-bottom: 8px; }
+.history-transcript { max-height: 55dvh; overflow: auto; }

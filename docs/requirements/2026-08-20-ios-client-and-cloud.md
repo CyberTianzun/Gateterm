@@ -457,6 +457,31 @@ Agent 反馈类型与 Android 共享客户端核心。
 6. 最后把确认的需求拆成:iOS spec、Cloud spec、server connector spec、Cloud protocol
    spec 与里程碑计划。
 
+## Windows / xtool 构建可行性补充（2026-10-16）
+
+当前仓库只有本需求草案,尚无 `clients/ios`、Swift 源码、`Package.swift` 或 Xcode
+工程,因此目前没有可直接交给 xtool 编译的 iOS 客户端。
+
+根据 [xtool 官方说明](https://github.com/xtool-org/xtool),它可以把 SwiftPM package
+构建为 iOS App,并完成开发签名及真机安装。
+[Windows 安装指南](https://github.com/xtool-org/xtool/blob/main/Documentation/xtool.docc/Installation-Linux.md)
+使用 WSL,需要 Linux Swift 工具链、从 Apple 下载的 Xcode.xip 中提取的 iOS SDK,
+真机安装还需要打通 USB 连接及 Apple 开发签名。这里的 Windows 支持走 WSL 路径。
+
+对本项目的判断是:xtool 可以作为未来 SwiftPM iOS 客户端的候选开发构建入口,但
+尚未验证本文设想的完整客户端。正式选型前应完成以下验证:
+
+1. 使用 SwiftPM、`xtool.yml` 和 SwiftUI 建立最小 App,验证连接管理、现有 HTTP/WS
+   协议及聊天记录读取,并通过 `xtool dev` 在 iPhone 上启动。
+2. 单独验证固定版本 Ghostty 的 iOS 依赖、链接与资源打包。xtool 能编译 Swift App
+   并不能证明 Ghostty 的 Zig/C/Metal 构建及 native surface 在这条链路上可用;
+   是否需要由 macOS CI 预先产出 XCFramework,应由前述 Ghostty spike 决定。
+3. 分别验证所需 entitlements、APNs 真机收发和最终分发方式。开发签名安装成功不能
+   代替 TestFlight / App Store 流程验收。
+
+本次仅核对仓库现状与上游文档,没有安装 xtool、生成签名凭据或执行 iOS 构建。
+这项评估不变更前述待 Review 的产品和 renderer 决策。
+
 ## 参考资料
 
 - [octoterm wire protocol](../protocol.md)

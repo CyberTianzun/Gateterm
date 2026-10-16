@@ -49,6 +49,9 @@ import ai.eclosion.octoterm.android.R
 import ai.eclosion.octoterm.android.connection.ServerConnection
 import ai.eclosion.octoterm.android.launcher.Launcher
 import ai.eclosion.octoterm.android.wire.SessionInfo
+import ai.eclosion.octoterm.android.agent.ChatWindow
+import ai.eclosion.octoterm.android.agent.HistoryEntry
+import ai.eclosion.octoterm.android.agent.HistoryPage
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,11 +73,16 @@ fun ServerHomeScreen(
     onOpenSession: (Long) -> Unit,
     onRename: (SessionInfo) -> Unit,
     onKill: (Long) -> Unit,
+    onLoadHistory: suspend (String, String, Int, Boolean) -> HistoryPage,
+    onPreviewHistory: suspend (HistoryEntry) -> ChatWindow,
+    onResumeHistory: suspend (HistoryEntry) -> Unit,
 ) {
+    var historyOpen by remember { mutableStateOf(false) }
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(connection.title()) },
+                actions = { TextButton(onClick = { historyOpen = true }) { Text(stringResource(R.string.history_title)) } },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
@@ -156,6 +164,11 @@ fun ServerHomeScreen(
             onPick = onPickLauncher,
         )
     }
+    if (historyOpen) HistoryDialog(
+        reconnecting = reconnecting,
+        onDismiss = { historyOpen = false },
+        onLoad = onLoadHistory, onPreview = onPreviewHistory, onResume = onResumeHistory,
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

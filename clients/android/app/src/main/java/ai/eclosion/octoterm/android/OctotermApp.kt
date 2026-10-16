@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ai.eclosion.octoterm.android.i18n.LocaleStore
+import ai.eclosion.octoterm.android.term.AgentKeyboardLayouts
 import ai.eclosion.octoterm.android.ui.appearance.AppearanceScreen
 import ai.eclosion.octoterm.android.ui.connections.AppScreen
 import ai.eclosion.octoterm.android.ui.connections.ConnectionEditorScreen
@@ -55,13 +56,7 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                     onRequestDelete = viewModel::requestDelete,
                     onConfirmDelete = viewModel::confirmDelete,
                     onDismissDelete = viewModel::dismissDelete,
-                    localePref = localePref,
-                    onLocalePref = { pref ->
-                        LocaleStore.save(context, pref)
-                        localePref = pref
-                        LocaleStore.apply(pref)
-                    },
-                    onAppearance = viewModel::openAppearance,
+                    onSettings = viewModel::openAppearance,
                 )
             }
             AppScreen.Appearance -> {
@@ -77,6 +72,16 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                     onTheme = viewModel::selectTheme,
                     onCopy = viewModel::copyAppearance,
                     onImport = viewModel::importAppearanceFromClipboard,
+                    localePref = localePref,
+                    onLocalePref = { pref ->
+                        LocaleStore.save(context, pref)
+                        localePref = pref
+                        LocaleStore.apply(pref)
+                    },
+                    extraKeyRows = state.extraKeyRows,
+                    onExtraKeyRows = viewModel::setExtraKeyRows,
+                    agentKeyLayouts = state.agentKeyLayouts,
+                    onAgentKeyLayout = viewModel::setAgentKeyLayout,
                 )
             }
             is AppScreen.Editor -> {
@@ -103,7 +108,6 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                         viewModel.leaveTerminal()
                     } else TerminalScreen(
                         title = viewModel.attachedSession()?.name ?: connection.title(),
-                        tabs = viewModel.openTabs(),
                         activeId = activeId,
                         reconnecting = state.reconnecting,
                         serverOs = state.serverOs,
@@ -111,12 +115,13 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                         frame = viewModel.painted,
                         generation = state.termGeneration,
                         appearance = state.appearance,
+                        extraKeyRows = state.extraKeyRows,
+                        agentId = AgentKeyboardLayouts.agentForTerminal(state.agents, activeId),
+                        agentKeyLayouts = state.agentKeyLayouts,
                         selection = state.selection,
                         scrollOffset = state.scrollOffset,
                         mouseTracking = state.mouseTracking,
                         onBack = viewModel::leaveTerminal,
-                        onFocus = viewModel::openSession,
-                        onCloseTab = viewModel::closeOpenSession,
                         onInput = { bytes -> viewModel.sendInput(activeId, bytes) },
                         onProposeSize = viewModel::proposeSize,
                         onScroll = viewModel::scrollBy,
@@ -150,6 +155,9 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                         onOpenSession = viewModel::openSession,
                         onRename = viewModel::requestRename,
                         onKill = viewModel::killSession,
+                        onLoadHistory = viewModel::loadHistory,
+                        onPreviewHistory = viewModel::previewHistory,
+                        onResumeHistory = viewModel::resumeHistory,
                     )
                 }
             }

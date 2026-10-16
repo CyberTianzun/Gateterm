@@ -6,19 +6,15 @@ import android.view.inputmethod.InputMethodManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -60,14 +56,13 @@ import ai.eclosion.octoterm.android.term.TerminalView
 import ai.eclosion.octoterm.android.term.TerminalKeyboard
 import ai.eclosion.octoterm.android.term.KeyModifiers
 import ai.eclosion.octoterm.android.term.VtEmulator
+import ai.eclosion.octoterm.android.term.AgentKeyLayout
 import ai.eclosion.octoterm.android.ui.connections.ChatUiState
-import ai.eclosion.octoterm.android.wire.SessionInfo
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TerminalScreen(
     title: String,
-    tabs: List<SessionInfo>,
     activeId: Long,
     reconnecting: Boolean,
     serverOs: String,
@@ -75,12 +70,13 @@ fun TerminalScreen(
     frame: TermFrame,
     generation: Long,
     appearance: TermAppearance,
+    extraKeyRows: Int,
+    agentId: String?,
+    agentKeyLayouts: Map<String, AgentKeyLayout>,
     selection: TermSelection?,
     scrollOffset: Int,
     mouseTracking: Boolean,
     onBack: () -> Unit,
-    onFocus: (Long) -> Unit,
-    onCloseTab: (Long) -> Unit,
     onInput: (ByteArray) -> Unit,
     onProposeSize: (Int, Int) -> Unit,
     onScroll: (Int) -> Unit,
@@ -118,6 +114,7 @@ fun TerminalScreen(
         ctrl = false; alt = false; shift = false
         termView?.softModifiers = KeyModifiers()
     }
+    fun softModifiers() = KeyModifiers(shift = shift, ctrl = ctrl, alt = alt)
     fun releaseKeyboard() { termView?.releaseKeys(); clearModifiers() }
     fun toggleChat() {
         if (!chatOpen) {
@@ -139,13 +136,14 @@ fun TerminalScreen(
         lifecycle.addObserver(observer)
         onDispose {
             lifecycle.removeObserver(observer)
-            // This callback captures the old session, so releases never go to the new tab.
+            // This callback captures the old session, so releases never go to the new session.
             onInput(keyboard.releaseAll())
         }
     }
     LaunchedEffect(keyboard, reconnecting) {
         if (reconnecting) { keyboard.reset(); clearModifiers() }
     }
+    LaunchedEffect(agentId) { clearModifiers() }
     // 聊天视图里按返回 = 回终端,不是直接退出会话
     BackHandler { if (chatOpen) onToggleChat() else { releaseKeyboard(); onBack() } }
     Scaffold(
@@ -178,6 +176,10 @@ fun TerminalScreen(
         },
         bottomBar = {
             if (!chatOpen) ExtraKeysBar(
+                rows = extraKeyRows,
+                sessionId = activeId,
+                agentId = agentId,
+                agentLayouts = agentKeyLayouts,
                 ctrl = ctrl,
                 alt = alt,
                 shift = shift,
@@ -186,19 +188,19 @@ fun TerminalScreen(
                 scrollOffset = scrollOffset,
                 onCtrl = {
                     ctrl = it
-                    termView?.softModifiers = KeyModifiers(shift = shift, ctrl = ctrl, alt = alt)
+                    termView?.softModifiers = softModifiers()
                 },
                 onAlt = {
                     alt = it
-                    termView?.softModifiers = KeyModifiers(shift = shift, ctrl = ctrl, alt = alt)
+                    termView?.softModifiers = softModifiers()
                 },
                 onShift = {
                     shift = it
-                    termView?.softModifiers = KeyModifiers(shift = shift, ctrl = ctrl, alt = alt)
+                    termView?.softModifiers = softModifiers()
                 },
                 onKey = { stroke ->
                     if (!reconnecting) {
-                        val modifiers = stroke.modifiers + KeyModifiers(shift = shift, ctrl = ctrl, alt = alt)
+                        val modifiers = stroke.modifiers + softModifiers()
                         onInput(keyboard.tap(
                             stroke.copy(modifiers = modifiers), emulator.applicationCursor, emulator.modifyOtherKeys,
                         ))
@@ -220,31 +222,6 @@ fun TerminalScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
-            if (tabs.size > 1) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 8.dp),
-                ) {
-                    tabs.forEach { session ->
-                        FilterChip(
-                            selected = session.id == activeId,
-                            onClick = { releaseKeyboard(); onFocus(session.id) },
-                            label = { Text(session.name.ifBlank { "#${session.id}" }) },
-                            trailingIcon = {
-                                TextButton(onClick = {
-                                    if (session.id == activeId) releaseKeyboard()
-                                    onCloseTab(session.id)
-                                }) {
-                                    Text(stringResource(R.string.term_tab_close))
-                                }
-                            },
-                            modifier = Modifier.padding(end = 4.dp),
-                        )
-                    }
-                }
-            }
             if (reconnecting) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
             }
@@ -285,7 +262,7 @@ fun TerminalScreen(
                         view.inputEnabled = !reconnecting
                         view.emulator = emulator
                         view.contentDescription = terminalHint
-                        view.softModifiers = KeyModifiers(shift = shift, ctrl = ctrl, alt = alt)
+                        view.softModifiers = softModifiers()
                         view.onModifiersConsumed = ::clearModifiers
                         view.onInput = onInput
                     },

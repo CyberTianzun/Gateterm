@@ -14,7 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -47,7 +47,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import ai.eclosion.octoterm.android.R
 import ai.eclosion.octoterm.android.connection.ServerConnection
-import ai.eclosion.octoterm.android.i18n.LocalePref
 import androidx.compose.foundation.background
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -63,19 +62,16 @@ fun ConnectionListScreen(
     onRequestDelete: (ServerConnection) -> Unit,
     onConfirmDelete: () -> Unit,
     onDismissDelete: () -> Unit,
-    localePref: LocalePref,
-    onLocalePref: (LocalePref) -> Unit,
-    onAppearance: () -> Unit,
+    onSettings: () -> Unit,
 ) {
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.servers_title)) },
                 actions = {
-                    TextButton(onClick = onAppearance) {
-                        Text(stringResource(R.string.appearance_action))
+                    IconButton(onClick = onSettings) {
+                        Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.settings_title))
                     }
-                    LanguageMenu(localePref, onLocalePref)
                 },
             )
         },
@@ -247,39 +243,3 @@ private fun ServerRow(
         modifier = Modifier.clickable(enabled = enabled && !connecting, onClick = onConnect),
     )
 }
-
-@Composable
-private fun LanguageMenu(
-    localePref: LocalePref,
-    onLocalePref: (LocalePref) -> Unit,
-) {
-    var open by remember { mutableStateOf(false) }
-    Box {
-        TextButton(onClick = { open = true }) {
-            Text(stringResource(R.string.locale_action))
-        }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            LocalePref.entries.forEach { pref ->
-                DropdownMenuItem(
-                    text = { Text(stringResource(pref.labelRes)) },
-                    onClick = {
-                        open = false
-                        onLocalePref(pref)
-                    },
-                    trailingIcon = if (pref == localePref) {
-                        { Icon(Icons.Filled.Check, contentDescription = null) }
-                    } else {
-                        null
-                    },
-                )
-            }
-        }
-    }
-}
-
-private val LocalePref.labelRes: Int
-    get() = when (this) {
-        LocalePref.Auto -> R.string.locale_auto
-        LocalePref.ZhCN -> R.string.locale_zh
-        LocalePref.En -> R.string.locale_en
-    }
