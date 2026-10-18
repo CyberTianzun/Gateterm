@@ -28,8 +28,8 @@ server**。
 ## 快速开始
 
 ```sh
-cd clients/web && npm install && npm run build && cd ../..
-# 或者在仓库任意位置执行:./build-frontend.sh (Windows:build-frontend.bat)
+# 需要 Node/npm:server 的 build.rs 会自动构建 clients/web
+# (设置 OCTOTERM_SKIP_WEB_BUILD=1 可跳过)
 cargo run -p octoterm-server
 # 启动日志会打印完整访问 URL(Jupyter 式,token 每次启动随机生成),直接点开即可:
 #     http://127.0.0.1:7683/#token=<本次随机 token>

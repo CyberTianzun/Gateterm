@@ -1,6 +1,6 @@
 # octoterm 手动验收清单
 
-前置:`cd clients/web && npm run build`,`cargo run -p octoterm-server`,记下打印的 token,
+前置:`cargo run -p octoterm-server`(build.rs 会自动构建前端),记下打印的 token,
 浏览器打开 `http://127.0.0.1:7683/#token=<token>`。
 
 ## 桌面浏览器

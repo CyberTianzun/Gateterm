@@ -33,8 +33,8 @@ A memory-frugal Swiss Army knife — and it stays that way:
 ## Quick start
 
 ```sh
-cd clients/web && npm install && npm run build && cd ../..
-# or, from anywhere in the repo: ./build-frontend.sh  (Windows: build-frontend.bat)
+# Requires Node/npm: the server's build.rs builds clients/web automatically
+# (set OCTOTERM_SKIP_WEB_BUILD=1 to skip it)
 cargo run -p octoterm-server
 # The startup log prints a ready-to-open URL (Jupyter-style; a fresh random
 # token is generated on every start):
