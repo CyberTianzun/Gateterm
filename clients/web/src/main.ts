@@ -8,6 +8,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { OctoClient } from "./client";
+import { readToken } from "./auth";
 import { type OctoConfig, loadConfig, saveConfig, toTerminalOptions } from "./config";
 import { resolveTheme } from "./theme-catalog";
 import { applyUiColors } from "./appearance";
@@ -97,9 +98,7 @@ mountHistory($("open-history"), token, (session) => {
 });
 
 function token(): string {
-  const fromHash = new URLSearchParams(location.hash.slice(1)).get("token");
-  if (fromHash) localStorage.setItem("octoterm-token", fromHash);
-  return localStorage.getItem("octoterm-token") ?? prompt(t("app.tokenPrompt")) ?? "";
+  return readToken(t("app.tokenPrompt"));
 }
 
 function wsUrl(): string {

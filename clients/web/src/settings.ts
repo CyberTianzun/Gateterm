@@ -8,6 +8,7 @@
  * 拼字符串就是一个 XSS 口子。
  */
 import type { ITheme } from "@xterm/xterm";
+import { createModal } from "./modal";
 import {
   type OctoConfig,
   systemDefaultConfig,
@@ -127,19 +128,12 @@ function firstFamily(stack: string): string {
 }
 
 export function mountSettings(host: SettingsHost): { open: () => void } {
-  const overlay = el("div", "set-overlay");
-  overlay.hidden = true;
-  const modal = el("div", "set-modal");
-  const head = el("div", "set-head");
-  const title = el("span", "set-title");
-  const closeBtn = el("button", "set-close", "✕");
-  head.append(title, closeBtn);
+  const { dialog, setLabels } = createModal("settings-dialog", t("app.settings"), t("settings.close"));
 
   const tabsBar = el("div", "set-tabs");
   const body = el("div", "set-body");
-  modal.append(head, tabsBar, body);
-  overlay.appendChild(modal);
-  document.body.appendChild(overlay);
+  dialog.append(tabsBar, body);
+  document.body.appendChild(dialog);
 
   let tab: Tab = "theme";
   // 标签文案在 renderTabs 里现取:切语言后重绘就跟着变了
@@ -602,8 +596,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
   }
 
   function render() {
-    title.textContent = t("app.settings");
-    closeBtn.title = t("settings.close");
+    setLabels(t("app.settings"), t("settings.close"));
     renderTabs();
     const pane =
       tab === "theme" ? renderTheme()
@@ -615,29 +608,15 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     body.replaceChildren(pane);
   }
 
-  const close = () => {
-    overlay.hidden = true;
-  };
-  closeBtn.addEventListener("click", close);
-  overlay.addEventListener("click", (ev) => {
-    if (ev.target === overlay) close();
-  });
-  document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && !overlay.hidden) {
-      ev.stopPropagation();
-      close();
-    }
-  });
-
   // 语言是在这个面板里改的,所以改完必须原地重绘一次,不然用户看着的还是旧文案。
   subscribe(() => {
-    if (!overlay.hidden) render();
+    if (dialog.open) render();
   });
 
   return {
     open() {
-      overlay.hidden = false;
       render();
+      dialog.showModal();
     },
   };
 }

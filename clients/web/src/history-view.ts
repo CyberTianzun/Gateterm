@@ -1,4 +1,5 @@
 import { renderMessages } from "./chat-view";
+import { createModal } from "./modal";
 import { t, localeTag } from "./i18n";
 import { fetchHistory, fetchHistoryMessages, historyError, historyTitle, HistoryError, openHistory, type HistoryEntry } from "./history";
 
@@ -10,16 +11,10 @@ export function mountHistory(trigger: HTMLElement, token: () => string, onOpen: 
       if (text !== undefined) node.textContent = text;
       return node;
     };
-    const dialog = el("dialog", "history-dialog");
-    const head = el("div", "set-head");
-    const title = el("h2", "set-title", t("history.title"));
-    dialog.setAttribute("aria-label", title.textContent!);
+    const { dialog, header } = createModal("history-dialog", t("history.title"), t("history.close"));
     const back = el("button", "history-back", t("history.back"));
     back.hidden = true;
-    const close = el("button", "set-close", "×");
-    close.setAttribute("aria-label", t("history.close"));
-    close.onclick = () => dialog.close();
-    head.append(back, title, close);
+    header.prepend(back);
 
     const browser = el("section", "history-browser");
     const toolbar = el("form", "history-toolbar");
@@ -48,7 +43,7 @@ export function mountHistory(trigger: HTMLElement, token: () => string, onOpen: 
     browser.append(toolbar, status, scroll);
     const preview = el("section", "history-preview");
     preview.hidden = true;
-    dialog.append(head, browser, preview);
+    dialog.append(browser, preview);
     document.body.appendChild(dialog);
     dialog.showModal();
 
