@@ -51,11 +51,11 @@ function blockNode(block: Block): HTMLElement {
 }
 
 /** Preserve disclosure state and the reading position across transcript updates. */
-export function renderMessages(box: HTMLElement, messages: Message[], scope: string): void {
+export function renderMessages(box: HTMLElement, messages: Message[], scope: string, scrollContainer: HTMLElement = box): void {
   const sameScope = box.dataset.chatScope === scope;
-  const scrollTop = sameScope ? box.scrollTop : 0;
+  const scrollTop = sameScope ? scrollContainer.scrollTop : 0;
   // Measure before replacing children: an empty container always looks like its bottom.
-  const atBottom = !sameScope || box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  const atBottom = !sameScope || scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight < 40;
   const expanded = new Set<string>();
   let focused: string | undefined;
   if (sameScope) {
@@ -85,5 +85,5 @@ export function renderMessages(box: HTMLElement, messages: Message[], scope: str
   box.replaceChildren(content);
   box.dataset.chatScope = scope;
   if (focusTarget) (focusTarget as HTMLElement).focus({ preventScroll: true });
-  box.scrollTop = atBottom ? box.scrollHeight : scrollTop;
+  scrollContainer.scrollTop = atBottom ? scrollContainer.scrollHeight : scrollTop;
 }

@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -37,6 +38,10 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -89,25 +94,66 @@ fun ChatView(
 
 @Composable
 private fun Messages(messages: List<ChatMessage>, modifier: Modifier) {
-    val listState = rememberLazyListState()
+    // The trailing item anchors the viewport below even a very tall final message.
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = messages.size)
     // 贴着底部时才自动跟随;用户往上翻看历史时不该被拽回来。只在**用户滚动**时更新,
     // 否则新消息一来「不在底部了」会先于跟随生效,把自己关掉。
     var follow by remember { mutableStateOf(true) }
+    var scrollingToBottom by remember { mutableStateOf(false) }
     LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress to listState.canScrollForward }
-            .collect { (scrolling, canScrollForward) -> if (scrolling) follow = !canScrollForward }
+        snapshotFlow { Triple(listState.isScrollInProgress, listState.canScrollForward, scrollingToBottom) }
+            .collect { (scrolling, canScrollForward, automatic) ->
+                if (scrolling && !automatic) follow = !canScrollForward
+            }
     }
-    LaunchedEffect(messages.size, messages.lastOrNull()?.id) {
-        if (follow && messages.isNotEmpty()) listState.scrollToItem(messages.lastIndex, Int.MAX_VALUE)
+    LaunchedEffect(messages) {
+        if (follow) {
+            scrollingToBottom = true
+            try { listState.scrollToItem(messages.size) }
+            finally { scrollingToBottom = false }
+        }
     }
+    val scrollbarColor = MaterialTheme.colorScheme.onSurfaceVariant
     LazyColumn(
         state = listState,
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier.fillMaxSize().chatScrollbar(listState, messages.size, scrollbarColor),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         items(messages, key = { it.id }) { MessageRow(it) }
+        item { Spacer(Modifier.height(1.dp)) }
     }
+}
+
+/** Keep a scroll indicator visible whenever the conversation exceeds the viewport. */
+private fun Modifier.chatScrollbar(state: LazyListState, messageCount: Int, color: Color): Modifier = drawWithContent {
+    drawContent()
+    if ((!state.canScrollBackward && !state.canScrollForward) || messageCount == 0) return@drawWithContent
+    val layout = state.layoutInfo
+    val visible = layout.visibleItemsInfo.filter { it.index < messageCount }
+    val first = visible.firstOrNull() ?: return@drawWithContent
+    val viewportStart = layout.viewportStartOffset
+    val viewportEnd = layout.viewportEndOffset
+    // Use visible fractions so a single message taller than the viewport still has a thumb.
+    val visibleFraction = visible.sumOf { item ->
+        val shown = (minOf(item.offset + item.size, viewportEnd) - maxOf(item.offset, viewportStart)).coerceAtLeast(0)
+        shown.toDouble() / item.size.coerceAtLeast(1)
+    }.toFloat()
+    val firstFraction = (viewportStart - first.offset).coerceIn(0, first.size).toFloat() / first.size.coerceAtLeast(1)
+    val progress = when {
+        !state.canScrollBackward -> 0f
+        !state.canScrollForward -> 1f
+        else -> ((first.index + firstFraction) / (messageCount - visibleFraction).coerceAtLeast(0.001f)).coerceIn(0f, 1f)
+    }
+    val inset = 4.dp.toPx()
+    val trackHeight = (size.height - inset * 2).coerceAtLeast(0f)
+    if (trackHeight == 0f) return@drawWithContent
+    val thumbHeight = (trackHeight * visibleFraction / messageCount).coerceIn(minOf(24.dp.toPx(), trackHeight), trackHeight)
+    val width = 4.dp.toPx()
+    val x = size.width - width - 2.dp.toPx()
+    val radius = CornerRadius(width / 2)
+    drawRoundRect(color.copy(alpha = 0.12f), Offset(x, inset), Size(width, trackHeight), radius)
+    drawRoundRect(color.copy(alpha = 0.7f), Offset(x, inset + (trackHeight - thumbHeight) * progress), Size(width, thumbHeight), radius)
 }
 
 @Composable

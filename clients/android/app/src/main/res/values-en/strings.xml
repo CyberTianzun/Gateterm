@@ -113,7 +113,13 @@
 
     <string name="chat_open">Chat</string>
     <string name="history_title">Agent session history</string>
-    <string name="history_close">Close</string>
+    <string name="history_details">Session details</string>
+    <string name="history_filter">Filter</string>
+    <string name="history_filter_count">Filter (%1$d)</string>
+    <string name="history_filter_apply">Apply</string>
+    <string name="history_filter_reset">Reset filters</string>
+    <string name="history_filter_agent">Agent</string>
+    <string name="history_filter_workspace">Workspace</string>
     <string name="history_search">Search title, description, model, directory or ID</string>
     <string name="history_all_workspaces">All workspaces</string>
     <string name="history_untitled">Untitled %1$s session</string>
@@ -124,8 +130,6 @@
     <string name="history_more">Load more</string>
     <string name="history_indexing">The server is indexing sessions in the background…</string>
     <string name="history_limit">Session index limit: %1$d most recent sessions</string>
-    <string name="history_back">Back to history</string>
-    <string name="history_recent_messages">Recent conversation</string>
     <string name="history_unknown_directory">Working directory was not recorded</string>
     <string name="history_preview">View conversation</string>
     <string name="history_open_terminal">Open terminal</string>

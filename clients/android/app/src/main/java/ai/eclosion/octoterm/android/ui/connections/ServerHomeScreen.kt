@@ -78,6 +78,14 @@ fun ServerHomeScreen(
     onResumeHistory: suspend (HistoryEntry) -> Unit,
 ) {
     var historyOpen by remember { mutableStateOf(false) }
+    if (historyOpen) {
+        HistoryScreen(
+            reconnecting = reconnecting,
+            onBack = { historyOpen = false },
+            onLoad = onLoadHistory, onPreview = onPreviewHistory, onResume = onResumeHistory,
+        )
+        return
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -164,11 +172,6 @@ fun ServerHomeScreen(
             onPick = onPickLauncher,
         )
     }
-    if (historyOpen) HistoryDialog(
-        reconnecting = reconnecting,
-        onDismiss = { historyOpen = false },
-        onLoad = onLoadHistory, onPreview = onPreviewHistory, onResume = onResumeHistory,
-    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

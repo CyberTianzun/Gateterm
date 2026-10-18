@@ -117,7 +117,7 @@ export function mountHistory(trigger: HTMLElement, token: () => string, onOpen: 
         if (!dialog.open || requestId !== previewRevision) return;
         body.replaceChildren();
         if (window.source === "transcript" && window.messages.length) {
-          renderMessages(body, window.messages, `${entry.agent_id}:${entry.agent_session_id}`);
+          renderMessages(body, window.messages, `${entry.agent_id}:${entry.agent_session_id}`, preview);
         } else body.textContent = t("history.noMessages");
       } catch (error) {
         if (dialog.open && requestId === previewRevision) body.textContent = failureText(error);
