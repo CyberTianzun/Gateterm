@@ -2724,11 +2724,11 @@ dependencies = [
 
 [[package]]
 name = "octoterm-client-core"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "octoterm-desktop"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2760,7 +2760,7 @@ dependencies = [
 
 [[package]]
 name = "octoterm-protocol"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2769,7 +2769,7 @@ dependencies = [
 
 [[package]]
 name = "octoterm-server"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
