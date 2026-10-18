@@ -12,7 +12,7 @@ execSync("npx esbuild src/agents.ts --bundle --format=esm --outfile=test/.agents
 const {
   applyEvent, replaceAll, forSession, waitingList, keyOf, answerPending, fetchAgentSessions,
   summarizePlan, fetchAgentPlan, describeToolInput, secondsLeft, stateText, fetchPending,
-  parseChoice, buildChoiceAnswer, chatAvailable,
+  parseChoice, buildChoiceAnswer, chatAvailable, purgeAgentHooks,
 } = await import("./.agents.build.mjs");
 
 const ev = (over = {}) => ({
@@ -23,6 +23,25 @@ const ev = (over = {}) => ({
   detail: null,
   pending: null,
   ...over,
+});
+
+test("purge reports no-op separately from removal and handles failures", async () => {
+  const original = globalThis.fetch;
+  try {
+    for (const changed of [true, false]) {
+      globalThis.fetch = async (url, init) => {
+        assert.equal(url, "/api/agents/codex/purge");
+        assert.equal(init.method, "POST");
+        assert.equal(init.headers.Authorization, "Bearer t");
+        return { ok: true, json: async () => ({ changed }) };
+      };
+      assert.equal(await purgeAgentHooks("t", "codex"), changed ? "ok" : "unchanged");
+    }
+    globalThis.fetch = async () => ({ ok: false, status: 409 });
+    assert.equal(await purgeAgentHooks("t", "codex"), "conflict");
+    globalThis.fetch = async () => { throw new Error("offline"); };
+    assert.equal(await purgeAgentHooks("t", "codex"), "failed");
+  } finally { globalThis.fetch = original; }
 });
 
 test("同一个 agent 会话的后续事件是覆盖而不是追加", () => {

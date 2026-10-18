@@ -42,4 +42,12 @@ class AgentHistoryTest {
         assertEquals(1000, page.maxSessions)
         assertEquals(0, page.total)
     }
+
+    @Test
+    fun parsesSessionDescriptionsModelsAndWorkspaceFilters() {
+        val page = AgentHistory.parsePage("""{"sessions":[{"agent_id":"codex","agent_name":"Codex","agent_session_id":"known","title":"Fix history","description":"The history dialog is fixed","model":"gpt-test","cwd":"/work/project"}],"workspaces":["/work/project"],"total":1}""")
+        assertEquals("The history dialog is fixed", page.sessions.single().description)
+        assertEquals("gpt-test", page.sessions.single().model)
+        assertEquals(listOf("/work/project"), page.workspaces)
+    }
 }

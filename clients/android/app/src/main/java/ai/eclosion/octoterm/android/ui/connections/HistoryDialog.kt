@@ -1,5 +1,6 @@
 package ai.eclosion.octoterm.android.ui.connections
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -29,6 +31,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -48,13 +52,15 @@ import kotlinx.coroutines.launch
 fun HistoryDialog(
     reconnecting: Boolean,
     onDismiss: () -> Unit,
-    onLoad: suspend (String, String, Int, Boolean) -> HistoryPage,
+    onLoad: suspend (String, String, Int, Boolean, String) -> HistoryPage,
     onPreview: suspend (HistoryEntry) -> ChatWindow,
     onResume: suspend (HistoryEntry) -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
     var agent by remember { mutableStateOf("") }
     var filterOpen by remember { mutableStateOf(false) }
+    var workspace by remember { mutableStateOf("") }
+    var workspaceOpen by remember { mutableStateOf(false) }
     var refresh by remember { mutableIntStateOf(0) }
     var appliedRefresh by remember { mutableIntStateOf(0) }
     var revision by remember { mutableIntStateOf(0) }
@@ -65,17 +71,19 @@ fun HistoryDialog(
     var transcript by remember { mutableStateOf<ChatWindow?>(null) }
     var working by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    LaunchedEffect(query, agent, refresh) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(query, agent, refresh, workspace) {
         val request = ++revision
         loading = true
         error = null
         page = null
+        listState.scrollToItem(0)
         delay(250)
         try {
             var force = refresh != appliedRefresh
             appliedRefresh = refresh
             do {
-                val next = onLoad(query, agent, 0, force)
+                val next = onLoad(query, agent, 0, force, workspace)
                 force = false
                 if (request == revision) page = next
                 if (!next.indexing) break
@@ -87,6 +95,7 @@ fun HistoryDialog(
         finally { if (request == revision) loading = false }
     }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        BackHandler(enabled = preview != null && !working) { preview = null; transcript = null; error = null }
         Surface(modifier = Modifier.fillMaxSize().padding(12.dp), shape = MaterialTheme.shapes.large) {
             Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth()) {
@@ -112,11 +121,23 @@ fun HistoryDialog(
                         }
                         TextButton(onClick = { refresh++ }, enabled = !loading) { Text(stringResource(R.string.history_refresh)) }
                     }
+                    Column {
+                        TextButton(onClick = { workspaceOpen = true }) {
+                            Text(workspace.ifBlank { stringResource(R.string.history_all_workspaces) }, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        DropdownMenu(expanded = workspaceOpen, onDismissRequest = { workspaceOpen = false }) {
+                            DropdownMenuItem(text = { Text(stringResource(R.string.history_all_workspaces)) }, onClick = { workspace = ""; workspaceOpen = false })
+                            page?.workspaces?.forEach { path ->
+                                DropdownMenuItem(text = { Text(path) }, onClick = { workspace = path; workspaceOpen = false })
+                            }
+                        }
+                    }
                 } else {
                     TextButton(onClick = { preview = null; transcript = null; error = null }, enabled = !working) {
                         Text(stringResource(R.string.history_back))
                     }
-                    Text(preview!!.title, style = MaterialTheme.typography.titleSmall)
+                    Text(historyTitle(preview!!), style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    HistoryMetadata(preview!!)
                     Text(stringResource(R.string.history_recent_messages), style = MaterialTheme.typography.labelMedium)
                 }
                 if (loading || working) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -135,12 +156,12 @@ fun HistoryDialog(
                         if (current.truncated) Text(stringResource(R.string.history_truncated), style = MaterialTheme.typography.bodySmall)
                         if (current.skipped > 0) Text(stringResource(R.string.history_skipped, current.skipped), style = MaterialTheme.typography.bodySmall)
                     }
-                    LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+                    LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState) {
                         items(page?.sessions.orEmpty(), key = { it.key }) { entry ->
                             Column(Modifier.padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text(entry.title, style = MaterialTheme.typography.titleSmall)
-                                Text("${entry.agentName} · ${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(entry.updatedAt * 1000))}", style = MaterialTheme.typography.bodySmall)
-                                Text(entry.cwd ?: stringResource(R.string.history_unknown_directory), style = MaterialTheme.typography.bodySmall)
+                                Text(historyTitle(entry), style = MaterialTheme.typography.titleSmall)
+                                Text(entry.description ?: stringResource(R.string.history_no_preview), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                HistoryMetadata(entry)
                                 Row {
                                     TextButton(enabled = !working, onClick = {
                                         if (!working) scope.launch {
@@ -174,7 +195,7 @@ fun HistoryDialog(
                                     scope.launch {
                                         loading = true; error = null
                                         try {
-                                            val next = onLoad(query, agent, offset, false)
+                                            val next = onLoad(query, agent, offset, false, workspace)
                                             if (request == revision) page = next.copy(sessions = (page?.sessions.orEmpty() + next.sessions).distinctBy { it.key })
                                         } catch (cancel: CancellationException) { throw cancel }
                                         catch (failure: Exception) { if (request == revision) error = (failure as? HistoryFailure)?.reason ?: "unreadable" }
@@ -193,6 +214,18 @@ fun HistoryDialog(
             }
         }
     }
+}
+
+@Composable
+private fun historyTitle(entry: HistoryEntry): String = entry.title.takeIf { it.isNotBlank() && it != entry.sessionId }
+    ?: stringResource(R.string.history_untitled, entry.agentName)
+
+@Composable
+private fun HistoryMetadata(entry: HistoryEntry) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Text("${entry.agentName} · ${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(entry.updatedAt * 1000))} · ${entry.model ?: stringResource(R.string.history_unknown_model)}", style = MaterialTheme.typography.bodySmall, color = muted)
+    Text(entry.cwd ?: stringResource(R.string.history_unknown_directory), style = MaterialTheme.typography.bodySmall, color = muted)
+    Text(entry.sessionId, style = MaterialTheme.typography.labelSmall, color = muted, fontFamily = FontFamily.Monospace)
 }
 
 private fun historyErrorResource(reason: String): Int = when (reason) {

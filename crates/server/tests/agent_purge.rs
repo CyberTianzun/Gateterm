@@ -94,6 +94,24 @@ fn purge_after_install_leaves_no_trace() {
     assert_eq!(e.read(&e.settings()), json!({ "model": "opus" }));
 }
 
+#[test]
+fn codex_purge_keeps_foreign_permission_hooks_and_reports_no_change_when_repeated() {
+    let e = env();
+    let foreign = json!({ "type": "command", "command": "another-program approval-hook" });
+    e.seed(&e.codex_hooks(), &json!({
+        "hooks": { "PermissionRequest": [{ "hooks": [foreign.clone()] }] }
+    }));
+    e.install("codex", 7683);
+    let adapter = find("codex").unwrap();
+    let plan = plan_purge(adapter.as_ref(), &e.ctx(7683)).unwrap();
+    assert!(apply(&plan, &e.opts()).unwrap().iter().any(|o| o.changed));
+    let after = e.read(&e.codex_hooks());
+    assert_eq!(after["hooks"]["PermissionRequest"][0]["hooks"], json!([foreign]));
+    assert!(!adapter.integration(&e.ctx(7683)).1.is_empty());
+    assert!(apply(&plan, &e.opts()).unwrap().iter().all(|o| !o.changed));
+    assert_eq!(e.read(&e.codex_hooks()), after);
+}
+
 /// 没装过的 agent 上点「清空」/「卸载」,不能凭空造出它的配置文件。
 #[test]
 fn purge_and_uninstall_never_create_missing_files() {

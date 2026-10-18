@@ -635,20 +635,27 @@ All history endpoints require `Authorization: Bearer <token>` and obey
 `agents.transcript_enabled`. They use HTTP without changing `proto_version`.
 Disabling transcript reading returns 403 before any history files are scanned.
 
-- `GET /api/agents/history?q=&agent_id=&offset=0&limit=50&refresh=false`
+- `GET /api/agents/history?q=&agent_id=&workspace=&offset=0&limit=50&refresh=false`
   returns `{sessions, agents, total, next_offset, truncated, skipped, indexing,
-  max_sessions}`. `limit`
+  max_sessions, workspaces}`. `limit`
   is clamped to 1–100. `next_offset: null` marks the end. Search is over indexed
-  title, cwd, agent name and session ID. Server startup schedules a background
+  title, description, model, cwd, agent name and session ID. `workspace` matches
+  an exact indexed cwd before pagination; it never supplies a launch directory.
+  `workspaces` lists distinct directories for the selected agent, including
+  directories outside the requested page. Server startup schedules a background
   index of at most 1000 distinct sessions. Requests read only their page from
   this index; they do not perform disk scans. `refresh=true` schedules a background
   rebuild; concurrent rebuilds are coalesced and the previous snapshot remains
   readable. `indexing` distinguishes a pending index from empty history, and
   `max_sessions` gives the limit to display at the end of the list. Each entry contains
-  `{agent_id, agent_name, agent_session_id, title, cwd, updated_at,
+  `{agent_id, agent_name, agent_session_id, title, description, model, cwd, updated_at,
   terminal_session, can_resume, unavailable_reason}`. Timestamps are Unix
   seconds; `terminal_session` is an optional live Octoterm session ID. Clients
   MUST distinguish a truncated scan or skipped records from a complete result.
+  `description` is a bounded recent conversation excerpt, excluding tool output;
+  `model` is optional recorded metadata. Named titles take priority over the first
+  human prompt; harness instructions are excluded. An empty title means no readable
+  title was found: clients display an untitled-session label and show the ID separately.
 - `GET /api/agents/history/messages?agent_id=...&agent_session_id=...`
   returns the same normalized transcript window shape as A9, limited to the
   recent window. This is a preview snapshot; it does not follow live updates.

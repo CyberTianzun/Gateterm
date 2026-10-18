@@ -18,6 +18,8 @@ data class HistoryEntry(
     val terminalSession: Long?,
     val canResume: Boolean,
     val unavailableReason: String?,
+    val description: String? = null,
+    val model: String? = null,
 ) {
     val key: String get() = "$agentId:$sessionId"
 }
@@ -32,6 +34,7 @@ data class HistoryPage(
     val skipped: Int,
     val indexing: Boolean = false,
     val maxSessions: Int? = null,
+    val workspaces: List<String> = emptyList(),
 )
 
 class HistoryFailure(val reason: String) : Exception(reason)
@@ -48,6 +51,7 @@ object AgentHistory {
                     row.getString("title"), row.optNullableString("cwd"), row.optLong("updated_at"),
                     if (row.isNull("terminal_session")) null else row.getLong("terminal_session"),
                     row.opt("can_resume") == true, row.optNullableString("unavailable_reason"),
+                    row.optNullableString("description"), row.optNullableString("model"),
                 ))
             }
         }.distinctBy { it.key }
@@ -63,6 +67,11 @@ object AgentHistory {
             root.optInt("total"), if (root.isNull("next_offset")) null else root.getInt("next_offset"),
             root.optBoolean("truncated"), root.optInt("skipped"),
             root.optBoolean("indexing"), if (root.isNull("max_sessions")) null else root.getInt("max_sessions"),
+            buildList {
+                root.optJSONArray("workspaces")?.let { paths ->
+                    for (i in 0 until paths.length()) paths.optString(i).takeIf { it.isNotBlank() }?.let { add(it) }
+                }
+            },
         )
     }
 
@@ -83,10 +92,11 @@ object AgentHistory {
         catch (_: Exception) { throw HistoryFailure("unreadable") }
     }
 
-    fun fetch(http: OkHttpClient, origin: String, token: String, query: String, agent: String, offset: Int, refresh: Boolean): HistoryPage {
+    fun fetch(http: OkHttpClient, origin: String, token: String, query: String, agent: String, offset: Int, refresh: Boolean, workspace: String = ""): HistoryPage {
         val url = (origin.trimEnd('/') + "/api/agents/history").toHttpUrl().newBuilder()
             .addQueryParameter("q", query).addQueryParameter("agent_id", agent)
-            .addQueryParameter("offset", offset.toString()).addQueryParameter("refresh", refresh.toString()).build()
+            .addQueryParameter("offset", offset.toString()).addQueryParameter("refresh", refresh.toString())
+            .addQueryParameter("workspace", workspace).build()
         return try { parsePage(request(http, token, Request.Builder().url(url))) }
         catch (error: HistoryFailure) { throw error }
         catch (_: Exception) { throw HistoryFailure("unreadable") }

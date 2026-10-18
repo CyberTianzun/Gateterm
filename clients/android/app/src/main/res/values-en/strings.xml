@@ -114,7 +114,11 @@
     <string name="chat_open">Chat</string>
     <string name="history_title">Agent session history</string>
     <string name="history_close">Close</string>
-    <string name="history_search">Search title, directory or session ID</string>
+    <string name="history_search">Search title, description, model, directory or ID</string>
+    <string name="history_all_workspaces">All workspaces</string>
+    <string name="history_untitled">Untitled %1$s session</string>
+    <string name="history_unknown_model">Model not recorded</string>
+    <string name="history_no_preview">No conversation preview available</string>
     <string name="history_all_agents">All agents</string>
     <string name="history_refresh">Refresh</string>
     <string name="history_more">Load more</string>

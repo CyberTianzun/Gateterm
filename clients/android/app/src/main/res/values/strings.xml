@@ -116,7 +116,11 @@
     <string name="chat_open">聊天</string>
     <string name="history_title">Agent 会话历史</string>
     <string name="history_close">关闭</string>
-    <string name="history_search">搜索标题、目录或会话 ID</string>
+    <string name="history_search">搜索标题、描述、模型、目录或 ID</string>
+    <string name="history_all_workspaces">全部工作目录</string>
+    <string name="history_untitled">%1$s 会话（未命名）</string>
+    <string name="history_unknown_model">未记录模型</string>
+    <string name="history_no_preview">没有可显示的对话摘要</string>
     <string name="history_all_agents">全部 Agent</string>
     <string name="history_refresh">刷新</string>
     <string name="history_more">加载更多</string>

@@ -287,13 +287,13 @@ export async function setAgentIntegration(
  * 卸载只认当前版本托管的那些事件;旧端口、旧版本、异常中断留下的残留只有这个
  * 清得掉。服务端不对它做 `install_enabled` 门控(只删我们自己的东西),改前照样备份。
  */
-export async function purgeAgentHooks(token: string, id: string): Promise<InstallOutcome> {
+export async function purgeAgentHooks(token: string, id: string): Promise<InstallOutcome | "unchanged"> {
   try {
     const r = await fetch(`/api/agents/${encodeURIComponent(id)}/purge`, {
       method: "POST",
       headers: authHeaders(token),
     });
-    if (r.ok) return "ok";
+    if (r.ok) return (await r.json()).changed === false ? "unchanged" : "ok";
     if (r.status === 409) return "conflict";
     return "failed";
   } catch {

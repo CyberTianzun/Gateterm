@@ -478,6 +478,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     const note = el("div", "set-hint", t("agent.writeNote"));
     const list = el("div", "agent-list");
     wrap.append(note, list);
+    const outcomes = new Map<string, string>();
 
     const paint = (agents: AgentStatus[]) => {
       list.innerHTML = "";
@@ -513,7 +514,8 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
 
         const installed = a.integration !== "not-installed";
         const btn = el("button", "agent-act", installed ? t("agent.uninstall") : t("agent.install"));
-        const status = el("span", "agent-status");
+        const status = el("span", "agent-status", outcomes.get(a.id) ?? "");
+        status.setAttribute("role", "status");
 
         // 预演。和 install 走的是**同一份计划**,只是不落盘 —— 「先看后装」不是
         // 另一条代码路径,而是同一条路径的干跑,所以看到的就是将要发生的。
@@ -546,16 +548,18 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
           preview.hidden = false;
           previewBtn.textContent = t("agent.previewHide");
         });
-        const run = async (b: HTMLButtonElement, action: () => Promise<InstallOutcome>) => {
+        const run = async (b: HTMLButtonElement, action: () => Promise<InstallOutcome | "unchanged">, purging = false) => {
           b.disabled = true;
           const outcome = await action();
           b.disabled = false;
-          if (outcome === "ok") {
-            void refreshAgents();
+          if (outcome === "ok" || outcome === "unchanged") {
+            if (purging) outcomes.set(a.id, t(outcome === "unchanged" ? "agent.purgeUnchanged" : "agent.purged"));
+            else outcomes.delete(a.id);
+            await refreshAgents();
             return;
           }
           status.textContent =
-            outcome === "disabled" ? t("agent.disabledHint") : t("agent.installFailed");
+            purging ? t("agent.purgeFailed") : outcome === "disabled" ? t("agent.disabledHint") : t("agent.installFailed");
         };
         btn.addEventListener("click", () =>
           run(btn, () => setAgentIntegration(host.token(), a.id, !installed)),
@@ -573,12 +577,21 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
         // 清空对「没装」也开放:残留恰恰常出现在 UI 认为没装的时候(只剩不再托管的事件)
         const purge = el("button", "agent-preview-btn agent-purge", t("agent.purge"));
         purge.title = t("agent.purgeHint");
+        // Keep confirmation inside the settings panel: browser confirm() may be
+        // suppressed by browser policy, and previously gave no visible feedback.
+        const confirmation = el("div", "agent-purge-confirm");
+        confirmation.hidden = true;
+        const confirmPurge = el("button", "agent-purge", t("agent.purgeApply"));
+        const cancelPurge = el("button", "", t("agent.purgeCancel"));
+        confirmation.append(el("p", "", t("agent.purgeConfirm", { name: a.name })), confirmPurge, cancelPurge);
+        confirmPurge.onclick = () => { confirmation.hidden = true; void run(purge, () => purgeAgentHooks(host.token(), a.id), true); };
+        cancelPurge.onclick = () => { confirmation.hidden = true; purge.focus(); };
         purge.addEventListener("click", () => {
-          if (!confirm(t("agent.purgeConfirm", { name: a.name }))) return;
-          void run(purge, () => purgeAgentHooks(host.token(), a.id));
+          confirmation.hidden = !confirmation.hidden;
+          if (!confirmation.hidden) cancelPurge.focus();
         });
         acts.append(previewBtn, purge, status);
-        card.append(acts, preview);
+        card.append(acts, confirmation, preview);
         list.appendChild(card);
       }
     };

@@ -6,6 +6,8 @@ export interface HistoryEntry {
   agent_name: string;
   agent_session_id: string;
   title: string;
+  description?: string | null;
+  model?: string | null;
   cwd: string | null;
   updated_at: number;
   terminal_session: number | null;
@@ -22,6 +24,7 @@ export interface HistoryPage {
   skipped: number;
   indexing?: boolean;
   max_sessions?: number;
+  workspaces?: string[];
 }
 
 const ERRORS: Record<string, MsgKey> = {
@@ -59,9 +62,13 @@ async function request(token: string, path: string, init: RequestInit = {}): Pro
   }
 }
 
-export function fetchHistory(token: string, q = "", agent = "", offset = 0, refresh = false): Promise<HistoryPage> {
-  const params = new URLSearchParams({ q, agent_id: agent, offset: String(offset), refresh: String(refresh) });
+export function fetchHistory(token: string, q = "", agent = "", offset = 0, refresh = false, workspace = ""): Promise<HistoryPage> {
+  const params = new URLSearchParams({ q, agent_id: agent, offset: String(offset), refresh: String(refresh), workspace });
   return request(token, `?${params}`);
+}
+
+export function historyTitle(entry: HistoryEntry): string {
+  return entry.title && entry.title !== entry.agent_session_id ? entry.title : t("history.untitled", { agent: entry.agent_name });
 }
 
 function key(entry: HistoryEntry): { agent_id: string; agent_session_id: string } {

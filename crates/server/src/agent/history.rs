@@ -5,21 +5,23 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, UNIX_EPOCH};
 
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::detect::{self, DetectEnv};
 use super::transcript::{Block, Role};
-use crate::app::{bearer_ok, AppState};
+use crate::app::{AppState, bearer_ok};
 
 pub const MAX_SESSIONS: usize = 1000;
 const MAX_VISITS: usize = 20_000;
-const HEAD_BYTES: u64 = 32 * 1024;
-const TAIL_BYTES: u64 = 8 * 1024;
+// Agent bootstrap instructions can exceed 32 KiB before the first real user prompt.
+// Sampling remains bounded per file and runs only in the background indexer.
+const HEAD_BYTES: u64 = 512 * 1024;
+const TAIL_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Entry {
@@ -27,6 +29,8 @@ pub struct Entry {
     pub agent_name: String,
     pub agent_session_id: String,
     pub title: String,
+    pub description: Option<String>,
+    pub model: Option<String>,
     pub cwd: Option<String>,
     pub updated_at: u64,
     pub terminal_session: Option<u64>,
@@ -136,6 +140,34 @@ fn short(value: &str) -> String {
         .collect()
 }
 
+fn prompt(value: &str) -> Option<String> {
+    let value = value.trim();
+    // Harness context is sometimes stored with role=user. It is not a session title.
+    if value.starts_with("# AGENTS.md instructions")
+        || value.starts_with("<environment_context>")
+        || value.starts_with("<permissions instructions>")
+        || value.starts_with("<developer_instructions>")
+        || value.starts_with("<system-reminder>")
+        || value.starts_with("<local-command-caveat>")
+        || value.starts_with("<command-name>")
+        || value.starts_with("This session is being continued from a previous conversation")
+    {
+        return None;
+    }
+    let value = value
+        .split_once("## My request for Codex:")
+        .map_or(value, |(_, p)| p);
+    let value = short(value);
+    (!value.is_empty()).then_some(value)
+}
+
+fn model_name(value: &Value) -> Option<String> {
+    text(value, "model")
+        .or_else(|| text(value, "modelId"))
+        .or_else(|| value.get("model").and_then(|m| text(m, "id")))
+        .map(|s| short(&s))
+}
+
 fn sample(path: &Path) -> std::io::Result<String> {
     sample_with_limits(path, HEAD_BYTES, TAIL_BYTES)
 }
@@ -154,7 +186,9 @@ fn sample_with_limits(path: &Path, head_bytes: u64, tail_bytes: u64) -> std::io:
         file.seek(SeekFrom::Start(start))?;
         let mut tail = Vec::new();
         file.take(tail_bytes).read_to_end(&mut tail)?;
-        if let Some(begin) = tail.iter().position(|&b| b == b'\n') {
+        if start == 0 {
+            head.extend_from_slice(&tail);
+        } else if let Some(begin) = tail.iter().position(|&b| b == b'\n') {
             head.extend_from_slice(&tail[begin + 1..]);
         }
     }
@@ -167,12 +201,15 @@ fn parse(candidate: Candidate, env: &DetectEnv) -> Option<Entry> {
     let mut id = None;
     let mut cwd = None;
     let mut title = None;
+    let mut first_prompt = None;
+    let mut description = None;
+    let mut model = None;
     let mut sidechain = false;
     let mut valid_json = false;
-    for row in source
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-    {
+    for line in source.lines() {
+        let Ok(row) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         valid_json = true;
         sidechain |= row.get("isSidechain").and_then(Value::as_bool) == Some(true);
         cwd = cwd.or_else(|| text(&row, "cwd"));
@@ -184,17 +221,26 @@ fn parse(candidate: Candidate, env: &DetectEnv) -> Option<Entry> {
                 if row.get("type").and_then(Value::as_str) == Some("custom-title") {
                     title = text(&row, "customTitle").or(title);
                 }
+                model = model_name(&row["message"]).or(model);
             }
             "codex" => {
-                if row.get("type").and_then(Value::as_str) == Some("session_meta") {
+                if id.is_none() && row.get("type").and_then(Value::as_str) == Some("session_meta") {
                     let meta = &row["payload"];
                     id = text(meta, "id").or_else(|| text(meta, "session_id")).or(id);
                     cwd = text(meta, "cwd").or(cwd);
+                    title = text(meta, "title")
+                        .or_else(|| text(meta, "thread_name"))
+                        .or(title);
+                }
+                if row.get("type").and_then(Value::as_str) == Some("turn_context") {
+                    model = model_name(&row["payload"]).or(model);
                 }
             }
             "pi" => match row.get("type").and_then(Value::as_str) {
                 Some("session") => id = text(&row, "id").or(id),
                 Some("session_info") => title = text(&row, "name").or(title),
+                Some("model_change") => model = model_name(&row).or(model),
+                Some("message") => model = model_name(&row["message"]).or(model),
                 _ => {}
             },
             "grok" => {
@@ -205,6 +251,41 @@ fn parse(candidate: Candidate, env: &DetectEnv) -> Option<Entry> {
                 });
             }
             _ => {}
+        }
+        // Parse each sampled record once into the shared message shape. Retain only
+        // bounded summaries, never transcript bodies in the catalog.
+        for message in adapter.parse_transcript(line, 0) {
+            let joined = message
+                .blocks
+                .into_iter()
+                .filter_map(|b| match b {
+                    Block::Text { text } => Some(text),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            if let Some(value) = prompt(&joined) {
+                if message.role == Role::User && first_prompt.is_none() {
+                    first_prompt = Some(value.clone());
+                }
+                if message.role != Role::System {
+                    description = Some(value);
+                }
+            }
+        }
+        // Older Codex event-only records have no response_item counterpart.
+        if candidate.agent == "codex" && row["type"] == "event_msg" {
+            let payload = &row["payload"];
+            if matches!(
+                payload["type"].as_str(),
+                Some("user_message" | "agent_message")
+            ) && let Some(value) = text(payload, "message").and_then(|s| prompt(&s))
+            {
+                if payload["type"] == "user_message" && first_prompt.is_none() {
+                    first_prompt = Some(value.clone());
+                }
+                description = Some(value);
+            }
         }
     }
     if sidechain || !valid_json {
@@ -220,6 +301,7 @@ fn parse(candidate: Candidate, env: &DetectEnv) -> Option<Entry> {
                 {
                     cwd = text(&v, "cwd").or(cwd);
                     title = text(&v, "title").or(title);
+                    model = model_name(&v).or(model);
                 }
             }
             id = id.or_else(|| dir.file_name().map(|s| s.to_string_lossy().into_owned()));
@@ -254,25 +336,17 @@ fn parse(candidate: Candidate, env: &DetectEnv) -> Option<Entry> {
         return None;
     }
     let title = title
-        .or_else(|| {
-            adapter
-                .parse_transcript(&source, 0)
-                .into_iter()
-                .filter(|m| m.role == Role::User)
-                .flat_map(|m| m.blocks)
-                .find_map(|b| match b {
-                    Block::Text { text } if !text.trim().is_empty() => Some(text),
-                    _ => None,
-                })
-        })
+        .or(first_prompt)
         .map(|s| short(&s))
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| id.clone());
+        .unwrap_or_default();
     let mut entry = Entry {
         agent_id: adapter.id().into(),
         agent_name: adapter.name().into(),
         agent_session_id: id,
         title,
+        description,
+        model,
         cwd,
         updated_at: candidate.modified,
         terminal_session: None,
@@ -358,6 +432,36 @@ pub fn scan(env: &DetectEnv) -> Catalog {
         for entry in catalog.entries.iter_mut().filter(|e| e.agent_id == "codex") {
             if let Some(title) = titles.get(&entry.agent_session_id) {
                 entry.title = short(title);
+            }
+        }
+    }
+    // CLI prompt history can recover an opening request when a very large
+    // bootstrap record lies beyond the transcript sampling budget.
+    if let Ok(index) =
+        sample_with_limits(&env.home.join(".codex/history.jsonl"), 0, 2 * 1024 * 1024)
+    {
+        let mut prompts = HashMap::new();
+        for row in index
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        {
+            if let (Some(id), Some(value)) = (
+                text(&row, "session_id"),
+                text(&row, "text").and_then(|s| prompt(&s)),
+            ) {
+                prompts.entry(id).or_insert(value);
+            }
+        }
+        for entry in catalog
+            .entries
+            .iter_mut()
+            .filter(|e| e.agent_id == "codex" && e.title.is_empty())
+        {
+            if let Some(value) = prompts.get(&entry.agent_session_id) {
+                entry.title = value.clone();
+                if entry.description.is_none() {
+                    entry.description = Some(value.clone());
+                }
             }
         }
     }
@@ -509,6 +613,8 @@ pub struct ListQuery {
     #[serde(default)]
     pub agent_id: String,
     #[serde(default)]
+    pub workspace: String,
+    #[serde(default)]
     pub refresh: bool,
 }
 
@@ -524,25 +630,36 @@ pub async fn list(
     let query = q.q.trim().to_lowercase();
     let matches = |e: &&Entry| {
         (q.agent_id.is_empty() || e.agent_id == q.agent_id)
+            && (q.workspace.is_empty() || e.cwd.as_deref() == Some(q.workspace.as_str()))
             && (query.is_empty()
                 || format!(
-                    "{} {} {} {}",
+                    "{} {} {} {} {} {}",
                     e.agent_name,
                     e.title,
                     e.cwd.as_deref().unwrap_or_default(),
-                    e.agent_session_id
+                    e.agent_session_id,
+                    e.description.as_deref().unwrap_or_default(),
+                    e.model.as_deref().unwrap_or_default()
                 )
                 .to_lowercase()
                 .contains(&query))
     };
     let limit = q.limit.unwrap_or(50).clamp(1, 100);
     // Clone only the requested page, not all indexed sessions or conversation bodies.
-    let (mut page, total, agents, truncated, skipped, indexing) = {
+    let (mut page, total, agents, workspaces, truncated, skipped, indexing) = {
         let cache = state.agent_sessions.history.lock().unwrap();
         if cache.failed && cache.refreshed.is_none() {
             return error(StatusCode::INTERNAL_SERVER_ERROR, "unreadable");
         }
         let total = cache.entries.iter().filter(matches).count();
+        let mut workspaces: Vec<_> = cache
+            .entries
+            .iter()
+            .filter(|e| q.agent_id.is_empty() || e.agent_id == q.agent_id)
+            .filter_map(|e| e.cwd.clone())
+            .collect();
+        workspaces.sort();
+        workspaces.dedup();
         let page: Vec<_> = cache
             .entries
             .iter()
@@ -555,6 +672,7 @@ pub async fn list(
             page,
             total,
             cache.agents.clone(),
+            workspaces,
             cache.truncated,
             cache.skipped,
             cache.indexing,
@@ -563,7 +681,7 @@ pub async fn list(
     for entry in &mut page {
         entry.terminal_session = live_session(&state, entry);
     }
-    Json(serde_json::json!({ "sessions": page, "total": total, "agents": agents,
+    Json(serde_json::json!({ "sessions": page, "total": total, "agents": agents, "workspaces": workspaces,
         "next_offset": (q.offset.saturating_add(limit) < total).then_some(q.offset.saturating_add(limit)),
         "truncated": truncated, "skipped": skipped, "indexing": indexing, "max_sessions": MAX_SESSIONS })).into_response()
 }
@@ -703,9 +821,159 @@ mod tests {
     }
 
     #[test]
+    fn metadata_uses_human_prompts_after_large_bootstrap_and_latest_conversation_text() {
+        let home = tempfile::tempdir().unwrap();
+        let rows = [
+            serde_json::json!({"type":"session_meta","payload":{"id":"codex-meta","cwd":"/work/one"}}),
+            serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":format!("# AGENTS.md instructions\n{}", "x".repeat(40_000))}]}}),
+            serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>host</environment_context>"}]}}),
+            serde_json::json!({"type":"event_msg","payload":{"type":"user_message","message":"Fix session history titles"}}),
+            serde_json::json!({"type":"turn_context","payload":{"model":"gpt-test"}}),
+            serde_json::json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Titles now use the first human request."}]}}),
+        ];
+        let source = rows.iter().map(|v| format!("{v}\n")).collect::<String>();
+        fixture(
+            home.path(),
+            ".codex/sessions/2026/10/18/rollout-meta.jsonl",
+            &source,
+        );
+        let env = DetectEnv {
+            home: home.path().into(),
+            path: None,
+        };
+        let entry = scan(&env).entries.remove(0);
+        assert_eq!(entry.title, "Fix session history titles");
+        assert_eq!(entry.model.as_deref(), Some("gpt-test"));
+        assert_eq!(
+            entry.description.as_deref(),
+            Some("Titles now use the first human request.")
+        );
+        fixture(
+            home.path(),
+            ".codex/session_index.jsonl",
+            "{\"id\":\"codex-meta\",\"thread_name\":\"My custom title\"}\n",
+        );
+        assert_eq!(scan(&env).entries[0].title, "My custom title");
+    }
+
+    #[test]
+    fn prompt_history_recovers_titles_beyond_the_sampling_budget() {
+        let home = tempfile::tempdir().unwrap();
+        let padding = "x".repeat(HEAD_BYTES as usize + TAIL_BYTES as usize);
+        fixture(
+            home.path(),
+            ".codex/sessions/2026/10/18/rollout-large.jsonl",
+            &format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"large\"}}}}\n{{\"type\":\"instructions\",\"text\":\"{padding}\"}}\n"
+            ),
+        );
+        fixture(
+            home.path(),
+            ".codex/history.jsonl",
+            "{\"session_id\":\"large\",\"text\":\"Recovered human request\"}\n",
+        );
+        let env = DetectEnv {
+            home: home.path().into(),
+            path: None,
+        };
+        let entry = scan(&env).entries.remove(0);
+        assert_eq!(entry.title, "Recovered human request");
+        assert_eq!(
+            entry.description.as_deref(),
+            Some("Recovered human request")
+        );
+    }
+
+    #[test]
+    fn claude_and_pi_keep_titles_models_and_text_separate_from_tool_output() {
+        let home = tempfile::tempdir().unwrap();
+        fixture(
+            home.path(),
+            ".claude/projects/p/claude.jsonl",
+            concat!(
+                "{\"sessionId\":\"claude\",\"type\":\"user\",\"message\":{\"content\":\"First Claude prompt\"}}\n",
+                "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-test\",\"content\":[{\"type\":\"text\",\"text\":\"Latest Claude answer\"}]}}\n",
+                "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":\"Not a description\"}]}}\n"
+            ),
+        );
+        fixture(
+            home.path(),
+            ".pi/agent/sessions/p/pi.jsonl",
+            concat!(
+                "{\"type\":\"session\",\"id\":\"pi-meta\"}\n",
+                "{\"type\":\"model_change\",\"modelId\":\"pi-test\"}\n",
+                "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"First Pi prompt\"}}\n"
+            ),
+        );
+        let catalog = scan(&DetectEnv {
+            home: home.path().into(),
+            path: None,
+        });
+        let claude = catalog
+            .entries
+            .iter()
+            .find(|e| e.agent_id == "claude-code")
+            .unwrap();
+        assert_eq!(claude.title, "First Claude prompt");
+        assert_eq!(claude.model.as_deref(), Some("claude-test"));
+        assert_eq!(claude.description.as_deref(), Some("Latest Claude answer"));
+        let pi = catalog.entries.iter().find(|e| e.agent_id == "pi").unwrap();
+        assert_eq!(pi.title, "First Pi prompt");
+        assert_eq!(pi.model.as_deref(), Some("pi-test"));
+    }
+
+    #[tokio::test]
+    async fn workspace_filter_is_exact_and_applied_before_pagination() {
+        let home = tempfile::tempdir().unwrap();
+        for (id, cwd) in [
+            ("one", "/work/one"),
+            ("two", "/work/two"),
+            ("child", "/work/one/child"),
+        ] {
+            fixture(
+                home.path(),
+                &format!(".codex/sessions/2026/10/18/{id}.jsonl"),
+                &format!(
+                    "{}\n",
+                    serde_json::json!({"type":"session_meta","payload":{"id":id,"cwd":cwd}})
+                ),
+            );
+        }
+        let state = state();
+        *state.agent_sessions.history.lock().unwrap() = scan(&DetectEnv {
+            home: home.path().into(),
+            path: None,
+        });
+        let response = list(
+            State(state),
+            headers(),
+            Query(ListQuery {
+                workspace: "/work/one".into(),
+                limit: Some(1),
+                ..Default::default()
+            }),
+        )
+        .await;
+        let body: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["total"], 1);
+        assert_eq!(body["sessions"][0]["agent_session_id"], "one");
+        assert_eq!(body["workspaces"].as_array().unwrap().len(), 3);
+        assert!(body["next_offset"].is_null());
+    }
+
+    #[test]
     fn discovers_stores_deduplicates_and_skips_subagents_and_corruption() {
         let home = tempfile::tempdir().unwrap();
-        fixture(home.path(), ".claude/projects/project/claude-1.jsonl", "{\"sessionId\":\"claude-1\",\"cwd\":\"/repo\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"First prompt\"}}\n{\"type\":\"custom-title\",\"customTitle\":\"Named Claude\"}\n");
+        fixture(
+            home.path(),
+            ".claude/projects/project/claude-1.jsonl",
+            "{\"sessionId\":\"claude-1\",\"cwd\":\"/repo\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"First prompt\"}}\n{\"type\":\"custom-title\",\"customTitle\":\"Named Claude\"}\n",
+        );
         fixture(
             home.path(),
             ".claude/projects/project/agent-child.jsonl",
@@ -733,7 +1001,11 @@ mod tests {
             ".codex/session_index.jsonl",
             "{\"id\":\"codex-1\",\"thread_name\":\"Renamed Codex\"}\n",
         );
-        fixture(home.path(), ".pi/agent/sessions/project/stamp_pi-1.jsonl", "{\"type\":\"session\",\"id\":\"pi-1\",\"cwd\":\"/repo\"}\n{\"type\":\"session_info\",\"name\":\"Named Pi\"}\n");
+        fixture(
+            home.path(),
+            ".pi/agent/sessions/project/stamp_pi-1.jsonl",
+            "{\"type\":\"session\",\"id\":\"pi-1\",\"cwd\":\"/repo\"}\n{\"type\":\"session_info\",\"name\":\"Named Pi\"}\n",
+        );
         fixture(
             home.path(),
             ".grok/sessions/project/grok-1/updates.jsonl",
@@ -869,13 +1141,15 @@ mod tests {
                 .status(),
             StatusCode::FORBIDDEN
         );
-        assert!(state
-            .agent_sessions
-            .history
-            .lock()
-            .unwrap()
-            .refreshed
-            .is_none());
+        assert!(
+            state
+                .agent_sessions
+                .history
+                .lock()
+                .unwrap()
+                .refreshed
+                .is_none()
+        );
         let key = Key {
             agent_id: "codex".into(),
             agent_session_id: "missing".into(),
@@ -910,13 +1184,15 @@ mod tests {
         assert_eq!(body["session"]["id"], session.id);
         assert_eq!(body["reused"], true);
         assert_eq!(state.manager.list().len(), 1);
-        assert!(state
-            .agent_sessions
-            .history
-            .lock()
-            .unwrap()
-            .refreshed
-            .is_none());
+        assert!(
+            state
+                .agent_sessions
+                .history
+                .lock()
+                .unwrap()
+                .refreshed
+                .is_none()
+        );
         state.manager.kill(session.id);
     }
 
@@ -934,7 +1210,7 @@ mod tests {
             &bin,
             "claude.cmd",
             &format!(
-                "@echo off\r\necho %~1 %~2 > \"{}\"\r\nset /p waiting=\r\n",
+                "@echo off\r\necho %~1 %~2 > \"{0}\"\r\ncd >> \"{0}\"\r\nset /p waiting=\r\n",
                 record.display()
             ),
         );
@@ -945,13 +1221,20 @@ mod tests {
                 &bin,
                 "claude",
                 &format!(
-                    "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nread waiting\n",
+                    "#!/bin/sh\nprintf '%s %s\\n' \"$1\" \"$2\" > '{0}'\npwd >> '{0}'\nread waiting\n",
                     record.to_string_lossy().replace('\'', "'\\''")
                 ),
             );
             fs::set_permissions(bin.join("claude"), fs::Permissions::from_mode(0o700)).unwrap();
         }
-        fixture(home.path(), ".claude/projects/project/session-1.jsonl", &format!("{{\"sessionId\":\"session-1\",\"cwd\":{},\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"Resume test\"}}}}\n", serde_json::to_string(home.path()).unwrap()));
+        fixture(
+            home.path(),
+            ".claude/projects/project/session-1.jsonl",
+            &format!(
+                "{{\"sessionId\":\"session-1\",\"cwd\":{},\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"Resume test\"}}}}\n",
+                serde_json::to_string(home.path()).unwrap()
+            ),
+        );
         let env = || DetectEnv {
             home: home.path().into(),
             path: Some(std::env::join_paths([&bin]).unwrap()),
@@ -991,13 +1274,24 @@ mod tests {
         assert_eq!(b["reused"], true);
         assert!(arguments.contains("--resume"), "{arguments:?}");
         assert!(arguments.contains("session-1"), "{arguments:?}");
+        let actual_cwd = arguments.lines().nth(1).unwrap_or_default().trim();
+        assert_eq!(
+            fs::canonicalize(actual_cwd).unwrap(),
+            fs::canonicalize(home.path()).unwrap()
+        );
     }
 
     #[tokio::test]
     async fn search_pagination_and_live_links_are_resolved_on_the_server() {
         let home = tempfile::tempdir().unwrap();
         for index in 0..3 {
-            fixture(home.path(), &format!(".codex/sessions/2026/10/16/rollout-{index}.jsonl"), &format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"codex-{index}\",\"cwd\":\"/repo\"}}}}\n"));
+            fixture(
+                home.path(),
+                &format!(".codex/sessions/2026/10/16/rollout-{index}.jsonl"),
+                &format!(
+                    "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"codex-{index}\",\"cwd\":\"/repo\"}}}}\n"
+                ),
+            );
         }
         let state = state();
         *state.agent_sessions.history.lock().unwrap() = scan(&DetectEnv {
@@ -1037,6 +1331,8 @@ mod tests {
             agent_name: "Codex".into(),
             agent_session_id: "old".into(),
             title: "Old conversation".into(),
+            description: None,
+            model: None,
             cwd: None,
             updated_at: 0,
             terminal_session: None,
@@ -1071,7 +1367,9 @@ mod tests {
     fn index_limit_counts_distinct_sessions_instead_of_candidate_files() {
         let home = tempfile::tempdir().unwrap();
         for index in 0..1002 {
-            let body = format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"codex-{index}\",\"cwd\":\"/repo\"}}}}\n");
+            let body = format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"codex-{index}\",\"cwd\":\"/repo\"}}}}\n"
+            );
             fixture(
                 home.path(),
                 &format!(".codex/sessions/2026/10/16/rollout-{index}.jsonl"),

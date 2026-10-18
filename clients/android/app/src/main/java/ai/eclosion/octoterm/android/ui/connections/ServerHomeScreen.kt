@@ -73,7 +73,7 @@ fun ServerHomeScreen(
     onOpenSession: (Long) -> Unit,
     onRename: (SessionInfo) -> Unit,
     onKill: (Long) -> Unit,
-    onLoadHistory: suspend (String, String, Int, Boolean) -> HistoryPage,
+    onLoadHistory: suspend (String, String, Int, Boolean, String) -> HistoryPage,
     onPreviewHistory: suspend (HistoryEntry) -> ChatWindow,
     onResumeHistory: suspend (HistoryEntry) -> Unit,
 ) {

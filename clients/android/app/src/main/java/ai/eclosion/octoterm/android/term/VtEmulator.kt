@@ -577,6 +577,9 @@ class VtEmulator(
         if (paramCount == 0) {
             fg = Color.DEFAULT_FG
             bg = Color.DEFAULT_BG
+            // Reset color identity too, so the selected theme resolves defaults after a redraw.
+            fgIndex = Color.INDEX_DEFAULT
+            bgIndex = Color.INDEX_DEFAULT
             attrs = 0
             return
         }

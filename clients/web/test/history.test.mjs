@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 execSync("npx esbuild src/history.ts --bundle --format=esm --outfile=test/.history.build.mjs", {
   cwd: fileURLToPath(new URL("..", import.meta.url)),
 });
-const { fetchHistory, fetchHistoryMessages, openHistory, HistoryError, historyError } = await import("./.history.build.mjs");
+const { fetchHistory, fetchHistoryMessages, openHistory, HistoryError, historyError, historyTitle } = await import("./.history.build.mjs");
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 const entry = { agent_id: "codex", agent_session_id: "known", cwd: "/untrusted", command: ["untrusted"] };
@@ -33,6 +33,22 @@ test("resume submits only the server-owned identity, never a command or director
     return { ok: true, json: async () => ({ session: { id: 7 }, reused: true }) };
   };
   assert.equal((await openHistory("secret", entry)).session.id, 7);
+});
+
+test("workspace filtering is server-side and preserves the literal directory", async () => {
+  globalThis.fetch = async (url) => {
+    const parsed = new URL(url, "http://localhost");
+    assert.equal(parsed.searchParams.get("workspace"), "D:\\project space\\a&b");
+    return { ok: true, json: async () => ({ sessions: [], total: 0 }) };
+  };
+  await fetchHistory("t", "", "", 0, false, "D:\\project space\\a&b");
+});
+
+test("missing titles and ID-only titles use a readable fallback", () => {
+  const session = { agent_name: "Codex", agent_session_id: "opaque-id" };
+  assert.equal(historyTitle({ ...session, title: "Fix history" }), "Fix history");
+  assert.ok(!historyTitle({ ...session, title: "opaque-id" }).includes("opaque-id"));
+  assert.ok(historyTitle({ ...session, title: "" }).includes("Codex"));
 });
 
 test("preview also resolves by identity and does not send a transcript path", async () => {

@@ -189,7 +189,7 @@ class ConnectionViewModel(
     private val publishSoon = Runnable { publishTerm() }
     private val _state = MutableStateFlow(
         ConnectionUiState(
-            connections = sorted(store.load()),
+            connections = store.load(),
             appearance = appearanceStore.load(systemDark),
             appearanceFollowsSystem = appearanceStore.followsSystem(),
             extraKeyRows = appearanceStore.extraKeyRows(),
@@ -295,7 +295,7 @@ class ConnectionViewModel(
         persist(updated)
         _state.update {
             it.copy(
-                connections = sorted(updated),
+                connections = updated,
                 screen = AppScreen.List,
                 editor = EditorState(clipboardUrl = clipboardUrl()),
             )
@@ -348,7 +348,7 @@ class ConnectionViewModel(
                 persist(updated)
                 _state.update {
                     it.copy(
-                        connections = sorted(updated),
+                        connections = updated,
                         connectingId = null,
                         reconnecting = false,
                         screen = AppScreen.Server(id),
@@ -467,10 +467,10 @@ class ConnectionViewModel(
         )
     }
 
-    suspend fun loadHistory(query: String, agent: String, offset: Int, refresh: Boolean): HistoryPage {
+    suspend fun loadHistory(query: String, agent: String, offset: Int, refresh: Boolean, workspace: String): HistoryPage {
         val origin = httpOrigin ?: throw HistoryFailure("unreadable")
         val token = httpToken ?: throw HistoryFailure("unreadable")
-        return withContext(Dispatchers.IO) { AgentHistory.fetch(http, origin, token, query, agent, offset, refresh) }
+        return withContext(Dispatchers.IO) { AgentHistory.fetch(http, origin, token, query, agent, offset, refresh, workspace) }
     }
 
     suspend fun previewHistory(entry: HistoryEntry): ChatWindow {
@@ -1122,13 +1122,6 @@ class ConnectionViewModel(
         main.removeCallbacks(publishSoon)
         dropClient()
         super.onCleared()
-    }
-
-    private fun sorted(items: List<ServerConnection>): List<ServerConnection> {
-        return items.sortedWith(
-            compareByDescending<ServerConnection> { it.lastUsedAt ?: 0L }
-                .thenByDescending { it.createdAt },
-        )
     }
 
     companion object {
