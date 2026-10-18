@@ -66,6 +66,14 @@ let transcriptEnabled = false;
 const pendingDetails = new Map<string, PendingDetail>();
 /** 倒计时的刷新句柄。重绘时先清掉,免得叠出多个。 */
 let countdownTimer: ReturnType<typeof setInterval> | null = null;
+/**
+ * 在横幅上点了「忽略」的挂起请求 id。
+ *
+ * 只是本地不再提醒,**不回答服务端** —— 人多半已经在终端里直接答了,这时再替他
+ * 回一个允许/拒绝反而会和终端里的操作打架。按 pending id 记而不是按会话记:同一个
+ * 会话下一次再问,是新的 id,照样会弹出来。
+ */
+const dismissedPending = new Set<string>();
 const BASE_TITLE = document.title;
 
 /* ---------- 聊天视图 ---------- */
@@ -696,8 +704,29 @@ function renderSessionList() {
  * 十有八九把它压在后台 —— 页面里做得再显眼也看不见,标题栏能。
  */
 function updateTitleBadge() {
-  const n = waitingList(agents).length;
+  const n = visibleWaiting().length;
   document.title = n > 0 ? `(${n}) ${BASE_TITLE}` : BASE_TITLE;
+}
+
+/** 横幅要提醒的那些:等着的,减去本地忽略掉的。顺手清掉已经不再挂起的忽略记录。 */
+function visibleWaiting() {
+  const waiting = waitingList(agents);
+  const live = new Set(waiting.map((a) => a.pending!));
+  for (const id of dismissedPending) if (!live.has(id)) dismissedPending.delete(id);
+  return waiting.filter((a) => !dismissedPending.has(a.pending!));
+}
+
+/** 「忽略」按钮:只在本地收起这一条,见 `dismissedPending`。 */
+function skipButton(a: AgentSession): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.className = "abanner-skip";
+  b.textContent = t("agent.skip");
+  b.title = t("agent.skipHint");
+  b.addEventListener("click", () => {
+    dismissedPending.add(a.pending!);
+    renderAgentBanner();
+  });
+  return b;
 }
 
 /**
@@ -719,7 +748,7 @@ function renderAgentBanner() {
   }
   updateTitleBadge();
 
-  const waiting = waitingList(agents);
+  const waiting = visibleWaiting();
   if (waiting.length === 0) {
     box.hidden = true;
     box.innerHTML = "";
@@ -819,7 +848,7 @@ function renderAgentBanner() {
       if (a.session != null) openTerminal(a.session);
     });
 
-    acts.append(reason, deny, allow, go, status);
+    acts.append(reason, deny, allow, go, skipButton(a), status);
     row.appendChild(acts);
     box.appendChild(row);
   }
@@ -933,7 +962,7 @@ function renderChoice(
   go.addEventListener("click", () => {
     if (a.session != null) openTerminal(a.session);
   });
-  acts.append(submit, go, status);
+  acts.append(submit, go, skipButton(a), status);
   wrap.appendChild(acts);
   return wrap;
 }

@@ -435,6 +435,8 @@ body[data-sidebar-position="hidden"] #menu { display: none; }
   font-weight: 700;
 }
 .abanner-status { font-size: 12px; opacity: 0.9; }
+/* 「忽略」只是收起提醒,做得比其他按钮更轻 */
+.abanner-acts .abanner-skip { background: transparent; opacity: 0.75; }
 
 .agent-list { display: flex; flex-direction: column; gap: 10px; }
 .agent-card {
