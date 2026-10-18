@@ -30,6 +30,14 @@ fn or_report<T>(title: &str, what: &str, r: Result<T>) -> Result<T> {
 }
 
 fn main() -> Result<()> {
+    // 设置页安装的 command hook 指向 current_exe(),也就是 desktop 自身。
+    // 必须在日志、单实例锁和 GUI 初始化之前转发,否则每个 hook 都会启动桌面程序。
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() == Some("hook") {
+        let code = args.next().map_or(0, |url| octoterm_server::agent::hook_cli::run(&url));
+        std::process::exit(code);
+    }
+
     let log_path = or_report(FAILED_TO_START, "日志初始化失败。", logs::init())?;
 
     let config_path =

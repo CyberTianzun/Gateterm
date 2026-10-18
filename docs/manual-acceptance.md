@@ -208,6 +208,16 @@ curl -s -X POST -H "Authorization: Bearer labtok" \
 - [ ] group **不带 `matcher`**(Codex 接受的就是这个形状)
 - [ ] `GET /api/agents` 里 codex 那条的 `activation` 是 `"codex-hooks-review"`
 
+Windows Codex 使用 PowerShell,命令应为 `& '…\octoterm-server.exe' hook http://…`。
+从桌面设置安装时指向 `octoterm-desktop.exe`,它也必须在日志、单实例锁和 GUI
+初始化之前处理 `hook` 子命令。路径中的单引号必须转写为两个单引号。
+回归测试: `cargo test -p octoterm-desktop --test hook_cli`。
+
+旧版本生成过缺少 `&` 的 Windows 命令,会报 `hook exited with code 1`。
+更新程序并完全退出、重开 Octoterm 后,在「设置 → AI 集成」重新安装即可替换;
+需要清残留时先用「清空」或 `octoterm-server purge-hooks` (不是 `prune-hooks`)。
+最后在 Codex 中执行 `/hooks` 重新审核修改后的命令,重启 Codex 会话。
+
 ### 3. 在**托管会话里**跑 Codex
 
 这一步是关键:必须从 octoterm 的会话里启动,`OCTOTERM_SESSION_ID` /

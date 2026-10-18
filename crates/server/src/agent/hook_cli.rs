@@ -28,8 +28,9 @@ const MAX_STDIN: usize = 512 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(590);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// 写进 agent 配置里的命令串:`"<octoterm 二进制>" hook <url>`。只支持 command 类 hook
-/// 的 agent(Codex、Grok)共用。
+/// 写进 agent 配置里的命令串。Windows Codex 使用 PowerShell,带引号的程序路径
+/// 必须通过 `&` 调用;单引号同时避免路径里的 `$` / 反引号被展开。
+/// Grok 及其他平台保留原来的 shell 语法。
 ///
 /// 二进制路径用 `current_exe()`,跟着安装位置走 —— 换了地方放二进制就得重装,
 /// 自检会把它报成 `Outdated`(见 `edit::is_current`)。
@@ -38,7 +39,11 @@ pub fn command_for(agent: &str, port: u16, event: &str) -> String {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "octoterm-server".into());
     let url = format!("http://127.0.0.1:{port}/hook/{agent}/{}", super::edit::slug_of_event(event));
-    format!("\"{exe}\" hook {url}")
+    if cfg!(windows) && agent == "codex" {
+        format!("& '{}' hook {url}", exe.replace('\'', "''"))
+    } else {
+        format!("\"{exe}\" hook {url}")
+    }
 }
 
 /// 返回进程退出码。永远是 0 —— 见模块文档第 2 条。
