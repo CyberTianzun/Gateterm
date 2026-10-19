@@ -52,6 +52,7 @@ import android.os.SystemClock
 import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -211,7 +212,8 @@ class ConnectionViewModel(
 
     // 用 Channel 而不是 replay=0 的 SharedFlow:冷启动点通知时 handleIntent 先于 setContent,
     // 那时还没有收集者,一次性提示会直接丢失;Channel 会缓存到界面开始收集为止。
-    private val _messages = Channel<UserMessage>(Channel.BUFFERED)
+    // 容量限定为 4 并丢最旧的:突发事件不该堆积成几十条迟到很久才弹出的 snackbar。
+    private val _messages = Channel<UserMessage>(capacity = 4, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     val messages: Flow<UserMessage> = _messages.receiveAsFlow()
 
     fun openAddSheet() {

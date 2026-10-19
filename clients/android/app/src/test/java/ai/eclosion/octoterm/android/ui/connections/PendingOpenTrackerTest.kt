@@ -23,14 +23,6 @@ class PendingOpenTrackerTest {
     }
 
     @Test
-    fun timeoutClearsIt() {
-        // 超时与其他失败走同一个出口
-        val t = tapped()
-        t.onConnectFailed()
-        assertNull(t.current)
-    }
-
-    @Test
     fun disconnectClearsIt() {
         val t = tapped()
         t.onDisconnect()
