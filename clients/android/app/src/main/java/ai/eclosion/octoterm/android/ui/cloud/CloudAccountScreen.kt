@@ -203,7 +203,7 @@ private fun DeleteSection(
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
     HorizontalDivider(Modifier.padding(top = 16.dp))
-    TextButton(onClick = { expanded = !expanded }) {
+    TextButton(onClick = { expanded = !expanded }, enabled = enabled) {
         Text(stringResource(R.string.cloud_delete_title), color = MaterialTheme.colorScheme.error)
     }
     if (!expanded) return

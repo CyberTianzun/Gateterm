@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -38,8 +39,13 @@ object PushRegistrar {
         scope.launch {
             account(app).use { account ->
                 if (account.status() == null) return@launch
+                // 协程若被取消,必须重新抛出 CancellationException(而不是当成普通失败吞掉),
+                // 遵循协作式取消的约定,避免 use{} 以为 block 正常结束。
                 runCatching { account.registerPushTarget("fcm", token) }
-                    .onFailure { Log.w("Octoterm", "登记推送 token 失败", it) }
+                    .onFailure { e ->
+                        if (e is CancellationException) throw e
+                        Log.w("Octoterm", "登记推送 token 失败", e)
+                    }
             }
         }
     }
@@ -50,8 +56,12 @@ object PushRegistrar {
         scope.launch {
             account(app).use { account ->
                 if (account.status() == null) return@launch
+                // 同上:取消必须重新抛出,不能当成普通失败吞掉。
                 runCatching { registerCurrentToken(app, account) }
-                    .onFailure { Log.w("Octoterm", "登记推送 token 失败", it) }
+                    .onFailure { e ->
+                        if (e is CancellationException) throw e
+                        Log.w("Octoterm", "登记推送 token 失败", e)
+                    }
             }
         }
     }

@@ -10,7 +10,9 @@ import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.AP
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -56,6 +58,11 @@ class CloudAccountViewModel(private val app: Application) : AndroidViewModel(app
         _state.update { it.copy(busy = true, message = null) }
         viewModelScope.launch {
             val result = runCatching { withContext(Dispatchers.IO) { execute(job) } }
+            // ViewModel 若在等待期间被清理(onCleared 已调用 account.close()),这里会收到
+            // CancellationException;必须原样重新抛出以终止协程,否则会继续往下执行并在
+            // account 已销毁后调用 account.status(),触发 UniFFI 的 "object has already
+            // been destroyed" 崩溃。
+            result.exceptionOrNull()?.let { if (it is CancellationException) throw it }
             val message = result.fold(
                 onSuccess = { it },
                 onFailure = { e -> CloudMessage(false, (e as? CloudFfiException)?.toFailure()?.messageRes() ?: R.string.cloud_err_generic) },
@@ -103,7 +110,13 @@ class CloudAccountViewModel(private val app: Application) : AndroidViewModel(app
     /** 登录已成功,推送登记失败不影响结果;加超时,免得没有 Play 服务时一直转圈。 */
     private suspend fun registerPush() {
         runCatching { withTimeout(PUSH_REGISTER_TIMEOUT_MS) { PushRegistrar.registerCurrentToken(app, account) } }
-            .onFailure { Log.w("Octoterm", "登记推送 token 失败", it) }
+            .onFailure { e ->
+                // withTimeout 超时抛出的是 TimeoutCancellationException,这是预期内的"放弃等待",
+                // 可以吞掉只记日志;但如果是外部真正的取消(如 ViewModel 已被清理),必须继续向上
+                // 抛出,否则协程会假装正常完成,继续执行后续代码时可能访问已销毁的 account。
+                if (e is CancellationException && e !is TimeoutCancellationException) throw e
+                Log.w("Octoterm", "登记推送 token 失败", e)
+            }
     }
 
     override fun onCleared() {
