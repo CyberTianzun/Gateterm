@@ -161,6 +161,31 @@ Claude Code、Codex、pi、Grok 和 Antigravity CLI 记录,包括在 Octoterm �
 时界面会提示。当前读取
 各 Agent 的默认用户目录,不扫描 WSL、其他用户目录或自定义存储位置。
 
+## Octoterm Cloud(可选)
+
+登录 Cloud 之后,agent 进入「等你」状态时会通过 Cloud 推送到手机(手机端推送将在后续版本提供)。不登录不影响任何功能。
+
+- Cloud 不转发终端数据,拿不到本机的访问 token;推送只包含会话编号、agent 名称与工具名。
+- 登录态保存在配置目录的 `cloud.json`(权限 0600)。
+
+```bash
+octoterm-server cloud register        # 注册并登录(邮件验证码)
+octoterm-server cloud login
+octoterm-server cloud status
+octoterm-server cloud logout
+octoterm-server cloud reset-password
+octoterm-server cloud delete-account  # 永久删除账号及全部数据
+```
+
+Cloud 地址可写进 `config.toml`:
+
+```toml
+[cloud]
+url = "https://cloud.example.com"
+```
+
+desktop 用户在「设置…」窗口底部的「Cloud 账号」区操作。
+
 ## 架构
 
 通信协议规范:[`docs/protocol.md`](docs/protocol.md) —— 线上格式的规范性定义,

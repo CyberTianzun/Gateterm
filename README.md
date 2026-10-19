@@ -198,6 +198,31 @@ reads use the previous snapshot. Discovery and reads remain bounded; the UI
 reports incomplete scans and unreadable records. This version reads default
 agent stores for the server user, excluding WSL, other users and custom roots.
 
+## Octoterm Cloud (optional)
+
+Signing in to Octoterm Cloud lets agent "waiting for you" events reach your phone as push notifications (mobile push lands in a later release). Everything works without signing in.
+
+- Cloud never relays terminal data and never sees this machine's access token; a push carries only the session number, agent name and tool name.
+- The sign-in state lives in `cloud.json` in the config directory (mode 0600).
+
+```bash
+octoterm-server cloud register        # sign up and sign in (email code)
+octoterm-server cloud login
+octoterm-server cloud status
+octoterm-server cloud logout
+octoterm-server cloud reset-password
+octoterm-server cloud delete-account  # permanently delete the account and all its data
+```
+
+Set a default Cloud address in `config.toml`:
+
+```toml
+[cloud]
+url = "https://cloud.example.com"
+```
+
+Desktop users use the "Cloud account" section at the bottom of the Settings window.
+
 ## Architecture
 
 Wire protocol: [`docs/protocol.md`](docs/protocol.md) — the normative spec, and
