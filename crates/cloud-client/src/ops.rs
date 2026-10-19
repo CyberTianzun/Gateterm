@@ -93,7 +93,16 @@ pub async fn reset_password(path: &Path, url: &str, email: &str, code: &str, new
 
 /// 本地登录态一定会被删掉。返回 `Some(e)` 表示没能通知 Cloud(凭据在 Cloud 上还有效)。
 pub async fn logout(path: &Path) -> Result<Option<CloudError>, OpsError> {
-    let c = current(path)?;
+    let c = match credentials::load(path) {
+        Ok(Some(c)) => c,
+        Ok(None) => return Err(OpsError::NotLoggedIn),
+        // 文件损坏就不知道这把 token 是谁的了,没法去通知 Cloud——但本机登出不该因此卡住。
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+            credentials::delete(path).map_err(io)?;
+            return Ok(None);
+        }
+        Err(e) => return Err(io(e)),
+    };
     let r = CloudClient::new(&c.url).logout(&c.token).await;
     credentials::delete(path).map_err(io)?;
     Ok(match r {

@@ -53,6 +53,14 @@ async fn logout_removes_file_even_when_cloud_is_down() {
 }
 
 #[tokio::test]
+async fn logout_corrupt_credentials_file_logs_out_locally() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(path(&dir), b"{not json").unwrap();
+    assert_eq!(ops::logout(&path(&dir)).await.unwrap(), None);
+    assert_eq!(credentials::load(&path(&dir)).unwrap(), None);
+}
+
+#[tokio::test]
 async fn logout_clean_when_cloud_accepts_or_already_revoked() {
     let cloud = FakeCloud::start().await;
     let dir = tempfile::tempdir().unwrap();
