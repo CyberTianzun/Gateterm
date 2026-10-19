@@ -23,6 +23,8 @@ pub enum CloudFfiError {
     Api { code: String },
     #[error("unreachable: {message}")]
     Unreachable { message: String },
+    /// `message` is diagnostic only (e.g. a local I/O failure reading/writing `cloud.json`)
+    /// and must not be shown to end users as-is; it is not localized and may leak local paths.
     #[error("local error: {message}")]
     Local { message: String },
 }
@@ -108,7 +110,7 @@ impl CloudAccount {
         Ok(())
     }
 
-    /// Local login state is always cleared. Returns true if the Cloud-side credential was also revoked.
+    /// Returns true unless Cloud could not be notified (local sign-in state is always cleared).
     pub async fn logout(&self) -> Result<bool, CloudFfiError> {
         Ok(ops::logout(&self.path).await?.is_none())
     }

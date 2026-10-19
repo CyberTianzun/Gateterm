@@ -47,10 +47,32 @@ pub fn decide(prev: &Track, state: AgentState, pending: &Option<String>) -> Opti
     (prev.state == Some(AgentState::Waiting) && prev.notified).then_some("resolved")
 }
 
+/// Cloud 只接受 `now < exp <= now + 3600` 的过期时刻,整段校验失败会让整条 notify 被拒。
+/// 留 60 秒安全余量:时间太紧(或已经过期)就宁可不带这个字段,也别因为卡着临界值被整条拒掉。
+pub fn clamp_expiry(exp: i64, now: i64) -> Option<i64> {
+    if exp - now < 60 { None } else { Some(exp.min(now + 3600 - 60)) }
+}
+
+/// 一次待发送的推送,按产生顺序排队,由唯一的发送任务顺序处理——
+/// 避免「resolved」在网络竞速里超过更早的「waiting」/「permission」。
+struct Job {
+    path: PathBuf,
+    client: Arc<CloudClient>,
+    creds: Credentials,
+    note: Notify,
+}
+
 pub fn spawn(manager: Arc<SessionManager>, store: Arc<AgentSessionStore>, creds: SharedCreds) {
     // 没有可用配置目录(等同「永远未登录」)时不启动:与旧行为「无路径不启动」一致。
     let Some(path) = creds.path().map(Path::to_path_buf) else { return };
     let mut rx = manager.events();
+    let (tx, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<Job>();
+    // 唯一的发送任务:逐条 await,保证到达 Cloud 的顺序跟产生顺序一致。
+    tokio::spawn(async move {
+        while let Some(job) = job_rx.recv().await {
+            send(job.path, job.client, job.creds, job.note).await;
+        }
+    });
     tokio::spawn(async move {
         // 同一个 Cloud url 复用一个 reqwest::Client(连接池),而不是每次推送都新建一个。
         let mut clients: HashMap<String, Arc<CloudClient>> = HashMap::new();
@@ -90,11 +112,11 @@ pub fn spawn(manager: Arc<SessionManager>, store: Arc<AgentSessionStore>, creds:
                 agent_id,
                 kind: kind.into(),
                 tool_name: pending_req.as_ref().and_then(|p| p.tool_name.clone()),
-                // Cloud 只接受一小时内的过期时刻;pending 超时可配置得更长,截断即可
-                expires_at: pending_req.map(|p| (p.expires_at as i64).min(now + 3600)),
+                expires_at: pending_req.and_then(|p| clamp_expiry(p.expires_at as i64, now)),
             };
             let client = clients.entry(login.url.clone()).or_insert_with(|| Arc::new(CloudClient::new(&login.url))).clone();
-            tokio::spawn(send(path.clone(), client, login, note));
+            // 只是把 job 推进内存队列,不等网络 I/O——事件循环不能被 Cloud 拖慢。
+            let _ = tx.send(Job { path: path.clone(), client, creds: login, note });
         }
     });
 }
@@ -110,6 +132,10 @@ async fn send(path: PathBuf, client: Arc<CloudClient>, creds: Credentials, note:
                 let _ = credentials::delete(&path);
                 tracing::warn!("Cloud 凭据已失效(在别处退出、删号或重置了密码),本机已退出 Cloud 登录");
             }
+        }
+        // Cloud 明确拒绝(4xx/5xx):只记状态码和错误码,绝不带 token 或请求体。
+        Err(CloudError::Api { status, code }) => {
+            tracing::warn!(status, code = %code, "Cloud 拒绝了推送");
         }
         Err(e) => tracing::debug!(error = %e, "Cloud 推送失败"),
     }
@@ -136,6 +162,19 @@ mod tests {
 
     fn track(state: Option<AgentState>, pending: Option<&str>, notified: bool) -> Track {
         Track { state, pending: pending.map(String::from), notified }
+    }
+
+    #[test]
+    fn clamp_expiry_cases() {
+        let now = 1_700_000_000i64;
+        // 很远的将来:截到 now + 3600 - 60
+        assert_eq!(clamp_expiry(now + 100_000, now), Some(now + 3540));
+        // 留了安全余量以内但还够 60 秒:原样返回
+        assert_eq!(clamp_expiry(now + 590, now), Some(now + 590));
+        // 太接近 60 秒门槛、恰好等于 now、已经过去:统统宁可不带这个字段
+        assert_eq!(clamp_expiry(now + 30, now), None);
+        assert_eq!(clamp_expiry(now, now), None);
+        assert_eq!(clamp_expiry(now - 10, now), None);
     }
 
     #[test]
