@@ -133,12 +133,9 @@ async fn dispatch(cmd: CloudCmd, path: &Path, default_url: Option<String>) -> Re
                 Err(e) => return Err(e.user_message()),
             };
             println!("Cloud:{}\n账号:{}\nserver_id:{}", c.url, c.email, c.server_id.as_deref().unwrap_or("-"));
-            match CloudClient::new(&c.url).account(&c.token).await {
+            match ops::account_status(path).await {
                 Ok(info) => println!("状态:有效({} 台 server,{} 台设备)", info.servers.len(), info.devices.len()),
-                Err(CloudError::Unauthorized) => {
-                    let _ = credentials::delete(path);
-                    println!("状态:凭据已失效,已在本机退出登录");
-                }
+                Err(OpsError::Cloud(CloudError::Unauthorized)) => println!("状态:凭据已失效,已在本机退出登录"),
                 Err(e) => println!("状态:{}", e.user_message()),
             }
         }

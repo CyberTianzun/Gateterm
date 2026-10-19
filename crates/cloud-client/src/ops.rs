@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::api::{AuthOk, ClientInfo, CloudClient, CloudError};
+use crate::api::{AccountInfo, AuthOk, ClientInfo, CloudClient, CloudError};
 use crate::credentials::{self, Credentials};
 
 #[derive(Debug)]
@@ -99,15 +99,36 @@ pub async fn logout(path: &Path) -> Result<Option<CloudError>, OpsError> {
     })
 }
 
+/// Bearer 调用唯一的撤销出口:401 + `unauthorized` 才代表凭据被撤销,
+/// 且只删「还是这把 token」的本地文件——调用期间用户可能已经重新登录了。
+fn revoke_on_401<T>(path: &Path, token: &str, r: Result<T, CloudError>) -> Result<T, OpsError> {
+    if matches!(r, Err(CloudError::Unauthorized))
+        && let Ok(Some(c)) = credentials::load(path)
+        && c.token == token
+    {
+        let _ = credentials::delete(path);
+    }
+    r.map_err(OpsError::from)
+}
+
 pub async fn request_delete_code(path: &Path) -> Result<String, OpsError> {
     let c = current(path)?;
-    CloudClient::new(&c.url).request_delete_code(&c.token).await?;
+    let r = CloudClient::new(&c.url).request_delete_code(&c.token).await;
+    revoke_on_401(path, &c.token, r)?;
     Ok(c.email)
 }
 
 pub async fn delete_account(path: &Path, password: &str, code: &str) -> Result<(), OpsError> {
     let c = current(path)?;
-    CloudClient::new(&c.url).delete_account(&c.token, password, code.trim()).await?;
+    let r = CloudClient::new(&c.url).delete_account(&c.token, password, code.trim()).await;
+    revoke_on_401(path, &c.token, r)?;
     credentials::delete(path).map_err(io)?;
     Ok(())
+}
+
+/// 查账号状态顺带校验 token 是否还有效;401 时按统一出口清本地登录态。
+pub async fn account_status(path: &Path) -> Result<AccountInfo, OpsError> {
+    let c = current(path)?;
+    let r = CloudClient::new(&c.url).account(&c.token).await;
+    revoke_on_401(path, &c.token, r)
 }

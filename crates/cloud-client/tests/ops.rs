@@ -75,6 +75,58 @@ async fn reset_password_drops_matching_local_login() {
 }
 
 #[tokio::test]
+async fn request_delete_code_401_unauthorized_removes_credentials() {
+    let cloud = FakeCloud::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    logged_in(&cloud, &dir).await;
+    cloud.respond("POST /v1/account/delete-code", 401, json!({"error": "unauthorized"}));
+    let err = ops::request_delete_code(&path(&dir)).await.unwrap_err();
+    assert_eq!(err.user_message(), "Cloud 登录已失效,请重新登录");
+    assert_eq!(credentials::load(&path(&dir)).unwrap(), None);
+}
+
+#[tokio::test]
+async fn request_delete_code_400_keeps_credentials() {
+    let cloud = FakeCloud::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    logged_in(&cloud, &dir).await;
+    cloud.respond("POST /v1/account/delete-code", 400, json!({"error": "wrong_password"}));
+    assert!(ops::request_delete_code(&path(&dir)).await.is_err());
+    assert!(credentials::load(&path(&dir)).unwrap().is_some());
+}
+
+#[tokio::test]
+async fn account_status_401_unauthorized_removes_credentials() {
+    let cloud = FakeCloud::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    logged_in(&cloud, &dir).await;
+    cloud.respond("GET /v1/account", 401, json!({"error": "unauthorized"}));
+    let err = ops::account_status(&path(&dir)).await.unwrap_err();
+    assert_eq!(err.user_message(), "Cloud 登录已失效,请重新登录");
+    assert_eq!(credentials::load(&path(&dir)).unwrap(), None);
+}
+
+#[tokio::test]
+async fn account_status_400_keeps_credentials() {
+    let cloud = FakeCloud::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    logged_in(&cloud, &dir).await;
+    cloud.respond("GET /v1/account", 400, json!({"error": "wrong_password"}));
+    assert!(ops::account_status(&path(&dir)).await.is_err());
+    assert!(credentials::load(&path(&dir)).unwrap().is_some());
+}
+
+#[tokio::test]
+async fn account_status_success_returns_account_info() {
+    let cloud = FakeCloud::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    logged_in(&cloud, &dir).await;
+    cloud.respond("GET /v1/account", 200, json!({"email": "a@example.com", "servers": [], "devices": []}));
+    let info = ops::account_status(&path(&dir)).await.unwrap();
+    assert_eq!(info.email.as_deref(), Some("a@example.com"));
+}
+
+#[tokio::test]
 async fn delete_account_flow() {
     let cloud = FakeCloud::start().await;
     let dir = tempfile::tempdir().unwrap();
