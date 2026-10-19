@@ -29,6 +29,24 @@ pub fn classify(prev: Option<&(AgentState, Option<String>)>, state: AgentState, 
     (!was_waiting || new_pending).then_some(if pending.is_some() { "permission" } else { "waiting" })
 }
 
+/// 每个 agent 会话上次的状态,以及是否真的为它发出过「在等你」——
+/// 决定离开 waiting 时要不要撤回:从没通知过的等待,撤回只会是噪音。
+#[derive(Debug, Clone, Default)]
+pub struct Track {
+    pub state: Option<AgentState>,
+    pub pending: Option<String>,
+    pub notified: bool,
+}
+
+/// 在 `classify`(进入/新 pending)之上补「离开 waiting → resolved」。
+pub fn decide(prev: &Track, state: AgentState, pending: &Option<String>) -> Option<&'static str> {
+    if state == AgentState::Waiting {
+        let p = prev.state.map(|s| (s, prev.pending.clone()));
+        return classify(p.as_ref(), state, pending);
+    }
+    (prev.state == Some(AgentState::Waiting) && prev.notified).then_some("resolved")
+}
+
 pub fn spawn(manager: Arc<SessionManager>, store: Arc<AgentSessionStore>, creds: SharedCreds) {
     // 没有可用配置目录(等同「永远未登录」)时不启动:与旧行为「无路径不启动」一致。
     let Some(path) = creds.path().map(Path::to_path_buf) else { return };
@@ -36,7 +54,7 @@ pub fn spawn(manager: Arc<SessionManager>, store: Arc<AgentSessionStore>, creds:
     tokio::spawn(async move {
         // 同一个 Cloud url 复用一个 reqwest::Client(连接池),而不是每次推送都新建一个。
         let mut clients: HashMap<String, Arc<CloudClient>> = HashMap::new();
-        let mut last: HashMap<(String, String), (AgentState, Option<String>)> = HashMap::new();
+        let mut last: HashMap<(String, String), Track> = HashMap::new();
         loop {
             let msg = match rx.recv().await {
                 Ok(m) => m,
@@ -47,21 +65,36 @@ pub fn spawn(manager: Arc<SessionManager>, store: Arc<AgentSessionStore>, creds:
                 continue;
             };
             let key = (agent_id.clone(), agent_session_id);
-            let kind = classify(last.get(&key), state, &pending);
+            let prev = last.get(&key).cloned().unwrap_or_default();
+            let kind = decide(&prev, state, &pending);
+            // 只有真要发时才读 cloud.json;login 为 None = 未登录
+            let login = kind.and(session).and_then(|_| creds.get());
+            let sending = kind.is_some() && login.is_some();
+            let notified = match kind {
+                Some("waiting" | "permission") => sending || prev.notified,
+                _ if state != AgentState::Waiting => false,
+                _ => prev.notified,
+            };
             if state == AgentState::Done {
                 last.remove(&key);
             } else {
-                last.insert(key, (state, pending.clone()));
+                last.insert(key, Track { state: Some(state), pending: pending.clone(), notified });
             }
-            let (Some(kind), Some(session)) = (kind, session) else { continue };
-            let Some(creds) = creds.get() else { continue };
-            let tool_name = pending
-                .as_ref()
-                .and_then(|id| store.list_pending().into_iter().find(|p| &p.id == id))
-                .and_then(|p| p.tool_name);
-            let note = Notify { session, agent_id, kind: kind.into(), tool_name, expires_at: None };
-            let client = clients.entry(creds.url.clone()).or_insert_with(|| Arc::new(CloudClient::new(&creds.url))).clone();
-            tokio::spawn(send(path.clone(), client, creds, note));
+            let (Some(kind), Some(session), Some(login)) = (kind, session, login) else { continue };
+            let pending_req = (kind == "permission")
+                .then(|| pending.as_ref().and_then(|id| store.list_pending().into_iter().find(|p| &p.id == id)))
+                .flatten();
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+            let note = Notify {
+                session,
+                agent_id,
+                kind: kind.into(),
+                tool_name: pending_req.as_ref().and_then(|p| p.tool_name.clone()),
+                // Cloud 只接受一小时内的过期时刻;pending 超时可配置得更长,截断即可
+                expires_at: pending_req.map(|p| (p.expires_at as i64).min(now + 3600)),
+            };
+            let client = clients.entry(login.url.clone()).or_insert_with(|| Arc::new(CloudClient::new(&login.url))).clone();
+            tokio::spawn(send(path.clone(), client, login, note));
         }
     });
 }
@@ -99,5 +132,20 @@ mod tests {
         // 回答完、pending 被摘掉但仍在 waiting:不是新的打扰
         assert_eq!(classify(Some(&(Waiting, Some("p1".into()))), Waiting, &None), None);
         assert_eq!(classify(Some(&(Waiting, None)), Done, &None), None);
+    }
+
+    fn track(state: Option<AgentState>, pending: Option<&str>, notified: bool) -> Track {
+        Track { state, pending: pending.map(String::from), notified }
+    }
+
+    #[test]
+    fn decide_transitions() {
+        assert_eq!(decide(&track(None, None, false), Waiting, &None), Some("waiting"));
+        assert_eq!(decide(&track(Some(Waiting), None, true), Waiting, &Some("p".into())), Some("permission"));
+        assert_eq!(decide(&track(Some(Waiting), None, true), Working, &None), Some("resolved"));
+        assert_eq!(decide(&track(Some(Waiting), None, true), Done, &None), Some("resolved"));
+        // 从没真的发出过通知(比如当时没登录)就不撤回
+        assert_eq!(decide(&track(Some(Waiting), None, false), Working, &None), None);
+        assert_eq!(decide(&track(Some(Working), None, false), Idle, &None), None);
     }
 }
