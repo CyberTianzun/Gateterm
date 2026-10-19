@@ -19,6 +19,11 @@ enum Cmd {
     ///
     /// 给异常残留兜底用:server 起不来、端口早就换过好几轮、设置页打不开的时候也能清。
     PurgeHooks,
+    /// Octoterm Cloud 账号(可选,用于手机推送通知)
+    Cloud {
+        #[command(subcommand)]
+        cmd: octoterm_server::cloud::cli::CloudCmd,
+    },
 }
 
 #[derive(Parser)]
@@ -43,8 +48,7 @@ struct Args {
     window_size: Option<WindowSize>,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     // hook 子命令要在**一切之前**处理:它由 agent 在每个事件上同步调用,必须快、
     // 必须安静。初始化日志、读配置、起 runtime 对它都是纯负担,而任何一行多余的
     // stdout 输出都会被 agent 当成决策读走。
@@ -54,6 +58,16 @@ async fn main() -> anyhow::Result<()> {
     if let Some(Cmd::PurgeHooks) = Args::parse().cmd {
         std::process::exit(purge_hooks());
     }
+    // `cloud` 子命令自己管理 tokio runtime(见 `cloud::cli::run`),不能跑在
+    // `#[tokio::main]` 已经起好的 runtime 里面 —— 嵌套 block_on 会 panic。所以
+    // main 本身不再是 async,真正 serve 的部分挪到下面手动起的 runtime 里。
+    if let Some(Cmd::Cloud { cmd }) = Args::parse().cmd {
+        std::process::exit(octoterm_server::cloud::cli::run(cmd, Args::parse().config));
+    }
+    tokio::runtime::Runtime::new()?.block_on(run_server())
+}
+
+async fn run_server() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
