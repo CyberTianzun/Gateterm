@@ -3,6 +3,7 @@
 
 pub mod api;
 pub mod credentials;
+pub mod ops;
 
 pub use api::{
     AccountInfo, AuthOk, ClientInfo, ClientKind, CloudClient, CloudError, CodePurpose, DeviceEntry, Notify,
