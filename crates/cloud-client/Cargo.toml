@@ -1,0 +1,17 @@
+[package]
+name = "octoterm-cloud-client"
+version = "0.2.1"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+directories = "5"
+gethostname = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+axum = "0.8"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
