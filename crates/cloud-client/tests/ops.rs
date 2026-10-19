@@ -127,6 +127,40 @@ async fn account_status_success_returns_account_info() {
 }
 
 #[tokio::test]
+async fn reset_password_keeps_login_for_a_different_cloud_url() {
+    let cloud = FakeCloud::start().await;
+    let other_cloud = FakeCloud::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    logged_in(&cloud, &dir).await;
+    other_cloud.respond("POST /v1/auth/password-reset", 204, json!(null));
+    // 同一个邮箱,但重置发生在另一个 Cloud 地址上:不该影响本机在 `cloud.url` 的登录态。
+    ops::reset_password(&path(&dir), &other_cloud.url, "a@example.com", "123456", "new-pass-1").await.unwrap();
+    assert!(credentials::load(&path(&dir)).unwrap().is_some());
+}
+
+#[tokio::test]
+async fn reset_password_matches_url_ignoring_trailing_slash() {
+    let cloud = FakeCloud::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    logged_in(&cloud, &dir).await;
+    cloud.respond("POST /v1/auth/password-reset", 204, json!(null));
+    ops::reset_password(&path(&dir), &format!("{}/", cloud.url), "a@example.com", "123456", "new-pass-1")
+        .await
+        .unwrap();
+    assert_eq!(credentials::load(&path(&dir)).unwrap(), None);
+}
+
+#[tokio::test]
+async fn reset_password_propagates_corrupt_credentials_io_error() {
+    let cloud = FakeCloud::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(path(&dir), b"{not json").unwrap();
+    cloud.respond("POST /v1/auth/password-reset", 204, json!(null));
+    let err = ops::reset_password(&path(&dir), &cloud.url, "a@example.com", "123456", "new-pass-1").await.unwrap_err();
+    assert!(matches!(err, OpsError::Local(_)), "{err:?}");
+}
+
+#[tokio::test]
 async fn delete_account_flow() {
     let cloud = FakeCloud::start().await;
     let dir = tempfile::tempdir().unwrap();

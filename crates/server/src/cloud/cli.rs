@@ -76,6 +76,12 @@ fn ask_url(default_url: Option<String>) -> Result<String, String> {
     if u.starts_with("http://") || u.starts_with("https://") { Ok(u) } else { Err("Cloud 地址必须以 http:// 或 https:// 开头".into()) }
 }
 
+/// 重置密码时该问哪个 Cloud 地址:已登录的那个优先于配置里的默认地址
+/// (两者多数时候相同,但配置改过、或者本机登录的是别的 Cloud 时不能弄混)。
+fn resolve_reset_url(logged_in_url: Option<String>, default_url: Option<String>) -> Option<String> {
+    logged_in_url.or(default_url)
+}
+
 fn ask_new_password() -> Result<String, String> {
     let a = ask_secret("密码(8–128 位):")?;
     let b = ask_secret("再输一次:")?;
@@ -140,7 +146,7 @@ async fn dispatch(cmd: CloudCmd, path: &Path, default_url: Option<String>) -> Re
             }
         }
         CloudCmd::ResetPassword => {
-            let url = ask_url(default_url.or_else(|| ops::current(path).ok().map(|c| c.url)))?;
+            let url = ask_url(resolve_reset_url(ops::current(path).ok().map(|c| c.url), default_url))?;
             let email = ops::normalize_email(&ask("邮箱:")?);
             CloudClient::new(&url)
                 .request_code(&email, CodePurpose::Reset)
@@ -167,4 +173,27 @@ async fn dispatch(cmd: CloudCmd, path: &Path, default_url: Option<String>) -> Re
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_reset_url;
+
+    #[test]
+    fn logged_in_url_wins_over_config_default() {
+        assert_eq!(
+            resolve_reset_url(Some("https://logged-in.example.com".into()), Some("https://config-default.example.com".into())),
+            Some("https://logged-in.example.com".into())
+        );
+    }
+
+    #[test]
+    fn falls_back_to_config_default_when_not_logged_in() {
+        assert_eq!(resolve_reset_url(None, Some("https://config-default.example.com".into())), Some("https://config-default.example.com".into()));
+    }
+
+    #[test]
+    fn none_when_neither_is_set() {
+        assert_eq!(resolve_reset_url(None, None), None);
+    }
 }

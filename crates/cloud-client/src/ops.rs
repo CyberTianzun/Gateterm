@@ -76,12 +76,15 @@ pub async fn login(path: &Path, url: &str, email: &str, password: &str, label: &
     persist(path, url, email, ok)
 }
 
-/// Cloud 会撤销该账号的全部凭据;本机若登录的正是这个邮箱,本地登录态一并清掉。
+/// Cloud 会撤销该账号的全部凭据;本机若登录的正是这个邮箱**且是这个 Cloud**,本地登录态一并清掉。
+/// 邮箱碰巧相同、但登录在另一个 Cloud 地址上的本机登录态不受影响。
 pub async fn reset_password(path: &Path, url: &str, email: &str, code: &str, new_password: &str) -> Result<(), OpsError> {
     let email = normalize_email(email);
     CloudClient::new(url).reset_password(&email, code.trim(), new_password).await?;
-    if let Ok(Some(c)) = credentials::load(path)
+    let reset_url = url.trim().trim_end_matches('/');
+    if let Some(c) = credentials::load(path).map_err(io)?
         && c.email == email
+        && c.url == reset_url
     {
         credentials::delete(path).map_err(io)?;
     }
