@@ -66,6 +66,8 @@ pub fn spawn(manager: Arc<SessionManager>, store: Arc<AgentSessionStore>, creds:
     // 没有可用配置目录(等同「永远未登录」)时不启动:与旧行为「无路径不启动」一致。
     let Some(path) = creds.path().map(Path::to_path_buf) else { return };
     let mut rx = manager.events();
+    // unbounded 是有意的:事件速率低(只在 waiting/permission/resolved 迁移时才排队),
+    // 且每条请求都有客户端 15s 超时托底,不会无限堆积。
     let (tx, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<Job>();
     // 唯一的发送任务:逐条 await,保证到达 Cloud 的顺序跟产生顺序一致。
     tokio::spawn(async move {
