@@ -6,7 +6,7 @@
 
 ## 0. 一句话
 
-agent 在等人时,手机收到一条系统通知;在别处处理掉后通知自动撤回;点开直接连上对应 server 并跳到该会话。Android 走 FCM,iOS(APNs)留口子。账号逻辑用 UniFFI 复用 Rust `cloud-client`,三端行为一致。Cloud 以 Docker 镜像部署到 futures/ops,复用机上已有的 Caddy。
+agent 在等人时,手机收到一条系统通知;在别处处理掉后通知自动撤回;点开直接连上对应 server 并跳到该会话。Android 走 FCM,iOS(APNs)留口子。账号逻辑用 UniFFI 复用 Rust `cloud-client`,三端行为一致。Cloud 以 Docker 镜像部署到 futures/ops,复用机上已有的 nginx。
 
 ## 1. 已确认的裁决
 
@@ -17,10 +17,11 @@ agent 在等人时,手机收到一条系统通知;在别处处理掉后通知自
 | M3 | 账号逻辑不在 Kotlin 重写:新 crate `cloud-ffi` 用 UniFFI 导出 `cloud-client::ops`,iOS 将来复用 |
 | M4 | FCM 只发高优先级**纯数据消息**,文案在 App 本地生成;Google 看不到可读内容 |
 | M5 | 在别处处理后撤回通知(`kind=resolved`);待授权通知另带过期时间,到期自动消失 |
+| M10 | 点通知只进入对应会话的终端;审批面板另起 |
 | M6 | Android 只构建 arm64-v8a(只在真机测试) |
 | M7 | iOS/APNs 留口子:`apns` 平台继续走 stub,Apple 账号就绪后另起 spec |
-| M8 | Cloud 部署到 futures/ops,复用机上 Caddy;TLS 用复制到 `/etc/ssl/signal.top/` 的 `*.signal.top` 证书;域名 `octoterm.signal.top` |
-| M9 | 可迁移:Cloud 相关的一切在 git(compose + 文档),服务器上只有数据卷、Portainer stack 里的密钥变量、证书文件、共享 Caddy 的一个站点块 |
+| M8 | Cloud 部署到 futures/ops,复用机上已有的 nginx(`ace-nginx`,host 网络);TLS 用复制到 `/opt/nginx/tls/signal.top/` 的 `*.signal.top` 证书;域名 `octoterm.signal.top` |
+| M9 | 可迁移:Cloud 相关的一切在 git(compose、nginx 站点文件、文档),服务器上只有数据卷、stack 环境变量、证书文件、一个 nginx 站点文件 |
 
 ## 2. 数据流
 
@@ -33,7 +34,7 @@ agent 在等人时,手机收到一条系统通知;在别处处理掉后通知自
                OctotermCloud ─► FcmSender ─► FCM HTTP v1 ─► Android FirebaseMessagingService
                                 ApnsSender(stub)              ├ waiting/permission → 本地通知(tag = server_id:session)
                                                               └ resolved → 按 tag 撤回
- 用户点通知 ─► MainActivity(server_id, session) ─► 找 cloud_server_id 匹配的连接 ─► 连接 ─► 打开会话/审批面板
+ 用户点通知 ─► MainActivity(server_id, session) ─► 找 cloud_server_id 匹配的连接 ─► 连接 ─► 打开该会话的终端
 ```
 
 ## 3. octoterm-server
@@ -124,39 +125,59 @@ agent 在等人时,手机收到一条系统通知;在别处处理掉后通知自
 ### 6.5 点击通知
 
 - PendingIntent → `MainActivity`(extras: `server_id`, `session`, `kind`)。
-- 找到 `cloudServerId` 匹配的连接 → 连接 → 进入该会话;`kind=permission` 时打开审批面板。
+- 找到 `cloudServerId` 匹配的连接 → 连接 → 进入该会话的终端(用户在终端里回答;审批面板不在本期)。
 - 找不到连接:进入首页并提示「请先连接一次这台 server」;连接失败:显示错误,通知保留。
 
 ## 7. 部署(futures/ops)
 
+### 7.0 ops 现状(2026-10-19 经 Portainer API 只读核实)
+
+- Portainer 环境 `futures/ops`(endpoint 15)是**本地 Docker 环境**(type 1),不是 Edge 环境 → 用普通 compose stack,不用 Edge Stack。
+- 反代是容器 `ace-nginx`(podman-compose,工作目录 `/opt/nginx`,**host 网络**):
+  `/opt/nginx/conf.d` → `/etc/nginx/conf.d`(ro),`/opt/nginx/tls` → `/etc/nginx/tls`(ro)。
+- 惯例:各服务只把端口发布到 `127.0.0.1:<port>`,由 nginx 反代。`18080` 已被 headscale 占用。
+
 ### 7.1 镜像
 
-- OctotermCloud 仓库(私有,`git@github.com:CyberTianzun/OctotermCloud.git`)加 GitHub Actions:构建 Dockerfile,推私有镜像仓库 `registry.hnminigames.fun/octoterm-cloud:<git tag>` 与 `:latest`。本机无 docker,由 CI 首次验证镜像构建。
+- OctotermCloud 仓库(私有,`git@github.com:CyberTianzun/OctotermCloud.git`)加 GitHub Actions:构建 Dockerfile,推私有镜像仓库 `registry.hnminigames.fun/octoterm-cloud`(dev 分支 → `dev-<sha>`;`v*` tag → 同名 tag 与 `latest`)。本机无 docker,由 CI 首次验证镜像构建。
 - CI 登录凭据只放在 GitHub Actions secrets `REGISTRY_USERNAME` / `REGISTRY_PASSWORD`,不进仓库、不进 workflow 明文。
-- ops 上的 Portainer 已有该 registry 的拉取凭据(部署前只读核实)。
+- ops 上其它容器已从该 registry 拉镜像(Portainer 已有拉取凭据,部署时确认)。
 
 ### 7.2 Stack
 
-- `deploy/compose.yml`(入 git),Portainer Edge Stack 从 git 引用:
-  - 服务 `octoterm-cloud`:镜像 `registry.hnminigames.fun/octoterm-cloud:<tag>`(tag 做成 stack 变量,升级只改它);环境变量 `RESEND_API_KEY`、`MAIL_FROM`、`FCM_SERVICE_ACCOUNT_JSON`、`TRUST_PROXY=1` 在 stack 里设置;命名卷 `cloud-data:/data`;**不发布端口**;加入 Caddy 所在的外部 docker 网络(网络名在部署时确认,做成变量)。
-- Caddy 站点块(按部署时确认的配置方式二选一):
-  - caddy-docker-proxy:写成 `octoterm-cloud` 服务的 labels(随 git 走);
-  - Caddyfile:在共享 Caddyfile 加
-    ```
-    octoterm.signal.top {
-        tls /etc/ssl/signal.top/fullchain.pem /etc/ssl/signal.top/privkey.pem
-        reverse_proxy octoterm-cloud:8080
+- `deploy/compose.yml`(入 git)。部署时由 Portainer API 在 endpoint 15 创建普通 stack `octoterm-cloud`,内容取自该文件:
+  - 服务 `octoterm-cloud`:镜像 `registry.hnminigames.fun/octoterm-cloud:${OCTOTERM_CLOUD_TAG}`;端口 `127.0.0.1:${OCTOTERM_CLOUD_PORT:-18090}:8080`;命名卷 `cloud-data:/data`;环境变量 `RESEND_API_KEY`、`MAIL_FROM`、`FCM_SERVICE_ACCOUNT_JSON`、`TRUST_PROXY=1` 在 stack 环境变量里设置。
+- nginx 站点 `/opt/nginx/conf.d/octoterm.signal.top.conf`(原文入 git:`deploy/nginx/octoterm.signal.top.conf`):
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name octoterm.signal.top;
+    ssl_certificate     /etc/nginx/tls/signal.top/fullchain.pem;
+    ssl_certificate_key /etc/nginx/tls/signal.top/privkey.pem;
+    location / {
+        proxy_pass http://127.0.0.1:18090;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
-    ```
-- 共享 Caddy 需一次性挂载 `/etc/ssl/signal.top:/etc/ssl/signal.top:ro`。证书从统一来源复制到该目录,续期后重载 Caddy。Caddy 默认追加 `X-Forwarded-For`,满足 `TRUST_PROXY` 前提。
+}
+```
 
-### 7.3 迁移文档
+  `X-Forwarded-For` 一行是 `TRUST_PROXY=1` 的前提(nginx 默认不追加)。若 nginx 已有 80→443 的统一跳转则不另加 80 端口块,否则补一个只做跳转的 80 块(部署时看 `conf.d` 现有文件决定)。
+- 证书:`*.signal.top` 从统一来源复制到 `/opt/nginx/tls/signal.top/`(`fullchain.pem`、`privkey.pem`),复用 nginx 已有挂载,无需改 nginx 的 compose。
 
-`docs/migration.md`:服务器上属于 Cloud 的全部状态清单(数据卷、stack 变量名、证书目录、Caddy 站点块原文),以及「`backup` → 新机部署同一 stack → 恢复卷 → 改 DNS」的步骤。
+### 7.3 写主机文件的方式
 
-### 7.4 访问方式
+Portainer 不能直接写主机目录,且 `ace-nginx` 的挂载是只读的。做法:经 Portainer Docker API 起一个一次性辅助容器(复用 `ace-nginx` 的本地镜像,免拉取),以**读写**方式挂载 `/opt/nginx/conf.d` 与 `/opt/nginx/tls`,用 `PUT /containers/{id}/archive` 上传 conf 与证书,随后删除辅助容器;再在 `ace-nginx` 内 exec `nginx -t`,通过后 `nginx -s reload`。执行前把将写入的文件与命令给 hiro 过目。
 
-部署由 Portainer API 完成。Portainer 地址与 API key 不进入对话与仓库:由 hiro 放行读取 `~/online/eclosion/portainer.txt`,或导出为环境变量后仅按变量名引用。Caddy 现有配置的查看为只读。
+### 7.4 迁移文档
+
+`docs/migration.md`:服务器上属于 Cloud 的全部状态清单(数据卷、stack 变量名、证书目录、nginx 站点文件),以及「`backup` → 新机部署同一 stack → 恢复卷 → 放 conf 与证书 → 改 DNS」的步骤。
+
+### 7.5 访问方式
+
+部署经 Portainer API(`https://portainer.hnminigames.fun`)完成;API key 只在命令中从 `~/online/eclosion/portainer.txt` 读入变量,不打印、不进仓库。
 
 ## 8. 错误处理
 
@@ -169,13 +190,13 @@ agent 在等人时,手机收到一条系统通知;在别处处理掉后通知自
 
 - **Cloud**:假 FCM + 假 OAuth token 端点测 `FcmSender`(JWT 字段、token 缓存与并发刷新、请求体、`UNREGISTERED` → 删除登记);`/notify` 的 `resolved`/`expires_at` 校验;隐私测试覆盖 FCM 路径;`backup` 产出可打开的数据库。
 - **server**:`classify` 迁移表(含 `resolved` 与「从未推送不撤回」);`expires_at` 透传;`HelloOk` 在登录/未登录两种情况下的 `cloud_server_id`。
-- **cloud-ffi**:Rust 侧导出函数测试;JVM 上加载生成的 Kotlin 绑定跑一次「登录 → 登记 push target」冒烟(对着假 Cloud)。
-- **Android**:纯函数单测(文案、tag、连接匹配);真机手工清单:登录 → 电脑触发 agent 等待 → 手机收到通知 → 电脑处理 → 手机通知消失 → 再次触发 → 点通知进入会话/审批面板 → 拒绝通知权限时的提示。
+- **cloud-ffi**:Rust 侧对导出对象做测试(对着假 Cloud:设备身份登录、登记 push target、401 吊销、错误码映射);生成的 Kotlin 绑定由 App 编译检查,行为由真机清单覆盖(JNA 的 aar 无法在纯 JVM 单测里加载)。
+- **Android**:纯函数单测(文案、tag、连接匹配);真机手工清单:登录 → 电脑触发 agent 等待 → 手机收到通知 → 电脑处理 → 手机通知消失 → 再次触发 → 点通知进入该会话的终端 → 拒绝通知权限时的提示。
 - **部署**:CI 镜像构建通过;部署后 `https://octoterm.signal.top/healthz` 返回 `ok`;用真实 FCM 发一条到测试机。
 
 ## 10. 不在本期
 
 - iOS:APNs 真实发送、iOS 界面(Apple 账号就绪后另起 spec)。
-- 锁屏直接批准/拒绝。
+- 锁屏直接批准/拒绝;App 内审批面板(当前 Android 只能在终端里回答)。
 - Google Play 要求的网页删号页(记 TODO)。
 - x86_64 模拟器构建。
