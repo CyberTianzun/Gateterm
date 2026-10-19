@@ -1,5 +1,6 @@
 pub mod app;
 pub mod autostart;
+pub mod cloud_ops;
 pub mod configfile;
 pub mod dialog;
 pub mod fonts;

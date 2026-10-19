@@ -7,6 +7,7 @@
 //! 让整帧重跑一趟。所以这里只允许改 [`View`] 里的表单文本和返回 [`Outcome`],
 //! 一次性的动作(保存、写文件、重启 HTTP 层)必须由调用方在闭包外做一次。
 
+use crate::settings::cloud::{CloudAction, CloudForm, CloudStatus};
 use crate::settings::state::Form;
 
 pub use crate::settings::state::Message;
@@ -20,6 +21,7 @@ pub enum Outcome {
     Cancel,
     OpenConfigFile,
     RegenerateToken,
+    Cloud(CloudAction),
 }
 
 /// 设置窗口的全部可见状态。窗口开着的时候由 app.rs 持有,关窗时一起丢掉。
@@ -33,6 +35,12 @@ pub struct View {
     /// 被修好为止。和 `message` 不是一回事:后者只描述最近一次保存的结果。
     pub banner: Option<String>,
     pub message: Option<Message>,
+    pub cloud: CloudForm,
+    pub cloud_status: CloudStatus,
+    /// 有 Cloud 请求在路上:按钮置灰,防止连点。
+    pub cloud_busy: bool,
+    /// 最近一次 Cloud 操作的结果。和 `message`(保存结果)分开,两者互不覆盖。
+    pub cloud_message: Option<Message>,
 }
 
 const OK_COLOR: egui::Color32 = egui::Color32::from_rgb(60, 140, 60);
@@ -144,6 +152,12 @@ pub fn draw(ui: &mut egui::Ui, view: &mut View) -> Outcome {
                     }
                 });
 
+            ui.add_space(8.0);
+            ui.separator();
+            if let Some(a) = draw_cloud(ui, view) {
+                outcome = Outcome::Cloud(a);
+            }
+
             // 「重新生成」也算改动:token 已经不是保存时那个了。
             if edited || outcome == Outcome::RegenerateToken {
                 view.message = None;
@@ -170,4 +184,93 @@ pub fn draw(ui: &mut egui::Ui, view: &mut View) -> Outcome {
     });
 
     outcome
+}
+
+/// 「Cloud 账号」区。和 `draw` 一样同一帧可能跑两趟:只改表单文本、只返回意图。
+fn draw_cloud(ui: &mut egui::Ui, view: &mut View) -> Option<CloudAction> {
+    let mut action = None;
+    let status = view.cloud_status.clone();
+    ui.horizontal(|ui| {
+        ui.label("Cloud 账号");
+        ui.small("(可选,用于把 agent 的等待提醒推送到手机)");
+        if view.cloud_busy {
+            ui.spinner();
+        }
+    });
+    ui.add_enabled_ui(!view.cloud_busy, |ui| match &status {
+        CloudStatus::LoggedIn { email, url } => {
+            ui.horizontal(|ui| {
+                ui.label(format!("已登录:{email}"));
+                ui.small(url.as_str());
+            });
+            if ui.button("退出登录").clicked() {
+                action = Some(CloudAction::Logout);
+            }
+            ui.collapsing("删除账号", |ui| {
+                ui.small("永久删除 Cloud 账号及其全部数据,需要密码和发到邮箱的确认码。");
+                egui::Grid::new("cloud-delete").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                    ui.label("密码");
+                    ui.add(egui::TextEdit::singleline(&mut view.cloud.password).password(true).desired_width(180.0));
+                    ui.end_row();
+                    ui.label("确认码");
+                    ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(&mut view.cloud.code).desired_width(80.0));
+                        if ui.button("发送确认码").clicked() {
+                            action = Some(CloudAction::SendDeleteCode);
+                        }
+                    });
+                    ui.end_row();
+                });
+                ui.checkbox(&mut view.cloud.confirm_delete, "我明白删除后无法恢复");
+                if ui.button("永久删除账号").clicked() {
+                    action = Some(CloudAction::DeleteAccount);
+                }
+            });
+        }
+        CloudStatus::LoggedOut => {
+            egui::Grid::new("cloud-login").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                ui.label("Cloud 地址");
+                ui.add(egui::TextEdit::singleline(&mut view.cloud.url).desired_width(220.0));
+                ui.end_row();
+                ui.label("邮箱");
+                ui.add(egui::TextEdit::singleline(&mut view.cloud.email).desired_width(220.0));
+                ui.end_row();
+                ui.label("密码");
+                ui.add(egui::TextEdit::singleline(&mut view.cloud.password).password(true).desired_width(220.0));
+                ui.end_row();
+                ui.label("验证码");
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut view.cloud.code).desired_width(80.0));
+                    ui.small("注册或重置密码时需要");
+                });
+                ui.end_row();
+            });
+            ui.horizontal(|ui| {
+                if ui.button("登录").clicked() {
+                    action = Some(CloudAction::Login);
+                }
+                if ui.button("发送注册验证码").clicked() {
+                    action = Some(CloudAction::SendRegisterCode);
+                }
+                if ui.button("注册").clicked() {
+                    action = Some(CloudAction::Register);
+                }
+            });
+            ui.horizontal(|ui| {
+                if ui.button("发送重置验证码").clicked() {
+                    action = Some(CloudAction::SendResetCode);
+                }
+                if ui.button("用上面的密码重置").clicked() {
+                    action = Some(CloudAction::ResetPassword);
+                }
+            });
+        }
+    });
+    if let Some(m) = &view.cloud_message {
+        match m {
+            Message::Ok(t) => ui.colored_label(OK_COLOR, t.as_str()),
+            Message::Err(t) => ui.colored_label(ERR_COLOR, t.as_str()),
+        };
+    }
+    action
 }

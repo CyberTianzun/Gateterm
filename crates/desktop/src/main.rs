@@ -96,6 +96,15 @@ fn main() -> Result<()> {
         octoterm_server::agent::store::default_hook_token_path().as_deref(),
     );
     let mut sup = Supervisor::new(1 << 20, config.window_size, &config.launchers, config.agents);
+    // Cloud 推送通知器跟 SessionManager 同寿命,不随 HTTP 层重建;没登录时它什么也不发。
+    {
+        let _rt = rt.enter();
+        octoterm_server::cloud::notifier::spawn(
+            sup.manager().clone(),
+            sup.agent_sessions().clone(),
+            octoterm_cloud_client::credentials::default_path(),
+        );
+    }
     // 监听失败同样不是退出的理由:端口被占用时用户要能打开设置窗口换一个端口。
     // 配置文件没写 listen 时用 desktop 自己的默认:全网卡。理由与前提见
     // `octoterm_server::config::desktop_default_listen` 的文档注释。

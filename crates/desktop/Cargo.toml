@@ -22,6 +22,7 @@ egui-wgpu = { version = "0.36", features = ["winit"] }
 # 否则 egui 文本框的复制粘贴只在本进程内生效,拷不出去也贴不进来。
 egui-winit = { version = "0.36", default-features = false, features = ["clipboard"] }
 fs4 = { version = "1", features = ["sync"] }
+octoterm-cloud-client = { path = "../cloud-client" }
 octoterm-server = { path = "../server" }
 open = "5"
 # 版本与 crates/server/Cargo.toml 保持一致,不要升级(那边已经在用它解析 iTerm2 的偏好设置)。

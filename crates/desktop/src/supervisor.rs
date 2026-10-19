@@ -58,6 +58,10 @@ impl Supervisor {
         &self.manager
     }
 
+    pub fn agent_sessions(&self) -> &Arc<octoterm_server::agent::store::AgentSessionStore> {
+        &self.agent_sessions
+    }
+
     pub fn listen(&self) -> Option<SocketAddr> {
         self.running.as_ref().map(|r| r.listen)
     }

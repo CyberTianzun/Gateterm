@@ -32,6 +32,8 @@ pub enum MenuAction {
 pub enum UserEvent {
     MenuClicked(MenuAction),
     SessionsChanged,
+    /// 设置窗口发起的 Cloud 操作完成了(在 tokio 线程上跑,结果经 proxy 送回主线程)。
+    CloudDone(crate::settings::cloud::CloudAction, Result<String, String>),
 }
 
 /// 把监听地址的 IP 部分整理成用户能直接用的样子:`0.0.0.0` / `::` 这类「监听所有
@@ -162,7 +164,48 @@ impl App {
                 .collect(),
             banner,
             message: None,
+            cloud: crate::settings::cloud::CloudForm {
+                url: Self::cloud_creds()
+                    .map(|c| c.url)
+                    .or_else(|| self.startup.config.cloud.url.clone())
+                    .unwrap_or_default(),
+                ..Default::default()
+            },
+            cloud_status: crate::settings::cloud::status_from(Self::cloud_creds()),
+            cloud_busy: false,
+            cloud_message: None,
         }
+    }
+
+    fn cloud_creds() -> Option<octoterm_cloud_client::Credentials> {
+        let path = octoterm_cloud_client::credentials::default_path()?;
+        octoterm_cloud_client::credentials::load(&path).ok().flatten()
+    }
+
+    fn start_cloud(&mut self, action: crate::settings::cloud::CloudAction) {
+        use crate::settings::ui::Message;
+        let Some(view) = self.view.as_mut() else { return };
+        if view.cloud_busy {
+            return;
+        }
+        let job = match crate::settings::cloud::prepare(&view.cloud, &view.cloud_status, action) {
+            Ok(job) => job,
+            Err(m) => {
+                view.cloud_message = Some(Message::Err(m));
+                return;
+            }
+        };
+        let Some(path) = octoterm_cloud_client::credentials::default_path() else {
+            view.cloud_message = Some(Message::Err("无法确定配置目录".into()));
+            return;
+        };
+        view.cloud_busy = true;
+        view.cloud_message = None;
+        let proxy = self.proxy.clone();
+        self.rt.spawn(async move {
+            let result = crate::cloud_ops::run(job, path, octoterm_cloud_client::default_label()).await;
+            let _ = proxy.send_event(UserEvent::CloudDone(action, result));
+        });
     }
 
     /// 执行「保存并应用」。真正的分支逻辑在 [`crate::settings::save::apply`],
@@ -473,6 +516,25 @@ impl ApplicationHandler<UserEvent> for App {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::SessionsChanged => self.refresh_status(),
+            UserEvent::CloudDone(action, result) => {
+                use crate::settings::ui::Message;
+                if let Some(view) = self.view.as_mut() {
+                    view.cloud_busy = false;
+                    view.cloud_status = crate::settings::cloud::status_from(Self::cloud_creds());
+                    if result.is_ok() && !action.keeps_secrets() {
+                        view.cloud.password.clear();
+                        view.cloud.code.clear();
+                        view.cloud.confirm_delete = false;
+                    }
+                    view.cloud_message = Some(match result {
+                        Ok(m) => Message::Ok(m),
+                        Err(m) => Message::Err(m),
+                    });
+                }
+                if let Some(w) = &self.settings_window {
+                    w.request_redraw();
+                }
+            }
             UserEvent::MenuClicked(MenuAction::OpenWeb) => match self.url() {
                 Some(url) => {
                     if let Err(e) = open::that_detached(url) {
@@ -571,6 +633,7 @@ impl ApplicationHandler<UserEvent> for App {
                             view.form.token = uuid::Uuid::new_v4().simple().to_string();
                         }
                     }
+                    Outcome::Cloud(action) => self.start_cloud(action),
                 }
                 // 界面里 `send_viewport_cmd(ViewportCommand::Close)` 的结果从这里
                 // 出来:窗口自己关不掉自己,得由持有它的这一层置 None。设置界面
