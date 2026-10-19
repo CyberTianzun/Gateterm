@@ -13,6 +13,8 @@ if (file("google-services.json").exists()) {
 val repoRoot: File = rootProject.projectDir.parentFile.parentFile
 val ffiJniDir = layout.buildDirectory.dir("generated/ffi/jniLibs")
 val ffiKotlinDir = layout.buildDirectory.dir("generated/ffi/kotlin")
+// 构建前提:PATH 上要有 cargo 与 cargo-ndk,并设置 ANDROID_NDK_HOME 指向 NDK。
+// 只编 arm64-v8a,APK 因此只支持 arm64 设备(x86_64 模拟器装不上)。
 val buildCloudFfi by tasks.registering(Exec::class) {
     description = "构建 cloud-ffi(arm64-v8a)并生成 Kotlin 绑定"
     workingDir = repoRoot
@@ -24,6 +26,9 @@ val buildCloudFfi by tasks.registering(Exec::class) {
     inputs.dir(File(repoRoot, "crates/cloud-ffi/src"))
     inputs.dir(File(repoRoot, "crates/cloud-client/src"))
     inputs.file(File(repoRoot, "scripts/build-android-ffi.sh"))
+    // 依赖版本/特性变化也要重编
+    inputs.file(File(repoRoot, "Cargo.toml"))
+    inputs.file(File(repoRoot, "Cargo.lock"))
     outputs.dir(ffiJniDir)
     outputs.dir(ffiKotlinDir)
 }
