@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.MoreVert
@@ -63,12 +64,16 @@ fun ConnectionListScreen(
     onConfirmDelete: () -> Unit,
     onDismissDelete: () -> Unit,
     onSettings: () -> Unit,
+    onCloudAccount: () -> Unit,
 ) {
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.servers_title)) },
                 actions = {
+                    IconButton(onClick = onCloudAccount) {
+                        Icon(Icons.Filled.AccountCircle, contentDescription = stringResource(R.string.cloud_title))
+                    }
                     IconButton(onClick = onSettings) {
                         Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.settings_title))
                     }

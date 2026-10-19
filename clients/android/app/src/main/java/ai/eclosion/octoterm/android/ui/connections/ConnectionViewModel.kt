@@ -68,6 +68,7 @@ sealed class AppScreen {
     data class Editor(val connectionId: String?) : AppScreen()
     data class Server(val connectionId: String) : AppScreen()
     data object Appearance : AppScreen()
+    data object CloudAccount : AppScreen()
 }
 
 data class EditorState(
@@ -242,6 +243,14 @@ class ConnectionViewModel(
     }
 
     fun closeAppearance() {
+        _state.update { it.copy(screen = AppScreen.List) }
+    }
+
+    fun openCloudAccount() {
+        _state.update { it.copy(screen = AppScreen.CloudAccount) }
+    }
+
+    fun closeCloudAccount() {
         _state.update { it.copy(screen = AppScreen.List) }
     }
 

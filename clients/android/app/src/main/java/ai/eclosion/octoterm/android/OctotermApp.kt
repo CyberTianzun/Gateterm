@@ -1,6 +1,12 @@
 package ai.eclosion.octoterm.android
 
+import android.Manifest
+import android.content.Intent
+import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
@@ -10,16 +16,23 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.app.NotificationManagerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import ai.eclosion.octoterm.android.cloud.CloudAccountViewModel
 import ai.eclosion.octoterm.android.i18n.LocaleStore
+import ai.eclosion.octoterm.android.push.PushRegistrar
 import ai.eclosion.octoterm.android.term.AgentKeyboardLayouts
 import ai.eclosion.octoterm.android.ui.appearance.AppearanceScreen
+import ai.eclosion.octoterm.android.ui.cloud.CloudAccountScreen
 import ai.eclosion.octoterm.android.ui.connections.AppScreen
 import ai.eclosion.octoterm.android.ui.connections.ConnectionEditorScreen
 import ai.eclosion.octoterm.android.ui.connections.ConnectionListScreen
@@ -29,7 +42,7 @@ import ai.eclosion.octoterm.android.ui.connections.UserMessage
 import ai.eclosion.octoterm.android.ui.term.TerminalScreen
 
 @Composable
-fun OctotermApp(viewModel: ConnectionViewModel) {
+fun OctotermApp(viewModel: ConnectionViewModel, cloudViewModel: CloudAccountViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
@@ -57,6 +70,7 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                     onConfirmDelete = viewModel::confirmDelete,
                     onDismissDelete = viewModel::dismissDelete,
                     onSettings = viewModel::openAppearance,
+                    onCloudAccount = viewModel::openCloudAccount,
                 )
             }
             AppScreen.Appearance -> {
@@ -82,6 +96,38 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                     onExtraKeyRows = viewModel::setExtraKeyRows,
                     agentKeyLayouts = state.agentKeyLayouts,
                     onAgentKeyLayout = viewModel::setAgentKeyLayout,
+                )
+            }
+            AppScreen.CloudAccount -> {
+                BackHandler(onBack = viewModel::closeCloudAccount)
+                val cloud by cloudViewModel.state.collectAsStateWithLifecycle()
+                // 从系统设置/权限弹窗回来时重新读通知开关。
+                var notificationCheck by remember { mutableIntStateOf(0) }
+                LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { notificationCheck++ }
+                val notificationsEnabled = remember(cloud.status, cloud.message, notificationCheck) {
+                    NotificationManagerCompat.from(context).areNotificationsEnabled()
+                }
+                val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+                    notificationCheck++
+                }
+                LaunchedEffect(cloud.askNotificationPermission) {
+                    if (cloud.askNotificationPermission) {
+                        cloudViewModel.consumePermissionRequest()
+                        if (Build.VERSION.SDK_INT >= 33) permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }
+                CloudAccountScreen(
+                    state = cloud,
+                    pushAvailable = remember { PushRegistrar.pushAvailable(context) },
+                    notificationsEnabled = notificationsEnabled,
+                    onForm = cloudViewModel::updateForm,
+                    onAction = cloudViewModel::run,
+                    onOpenNotificationSettings = {
+                        context.startActivity(
+                            Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName),
+                        )
+                    },
+                    onBack = viewModel::closeCloudAccount,
                 )
             }
             is AppScreen.Editor -> {

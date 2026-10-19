@@ -12,11 +12,13 @@ import androidx.compose.runtime.getValue
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ai.eclosion.octoterm.android.appearance.isLightTheme
+import ai.eclosion.octoterm.android.cloud.CloudAccountViewModel
 import ai.eclosion.octoterm.android.ui.connections.ConnectionViewModel
 import ai.eclosion.octoterm.android.ui.theme.OctotermTheme
 
 class MainActivity : ComponentActivity() {
     private val connectionViewModel: ConnectionViewModel by viewModels { ConnectionViewModel.Factory }
+    private val cloudViewModel: CloudAccountViewModel by viewModels { CloudAccountViewModel.Factory }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -34,7 +36,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             OctotermTheme(appearance = state.appearance) {
-                OctotermApp(connectionViewModel)
+                OctotermApp(connectionViewModel, cloudViewModel)
             }
         }
     }
