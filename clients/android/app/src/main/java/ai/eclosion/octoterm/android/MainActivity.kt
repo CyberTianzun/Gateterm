@@ -13,14 +13,13 @@ import androidx.compose.runtime.getValue
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ai.eclosion.octoterm.android.appearance.isLightTheme
-import ai.eclosion.octoterm.android.cloud.CloudAccountViewModel
 import ai.eclosion.octoterm.android.push.AgentNotifications
+import ai.eclosion.octoterm.android.push.NotificationOpen
 import ai.eclosion.octoterm.android.ui.connections.ConnectionViewModel
 import ai.eclosion.octoterm.android.ui.theme.OctotermTheme
 
 class MainActivity : ComponentActivity() {
     private val connectionViewModel: ConnectionViewModel by viewModels { ConnectionViewModel.Factory }
-    private val cloudViewModel: CloudAccountViewModel by viewModels { CloudAccountViewModel.Factory }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,7 +38,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             OctotermTheme(appearance = state.appearance) {
-                OctotermApp(connectionViewModel, cloudViewModel)
+                OctotermApp(connectionViewModel)
             }
         }
     }
@@ -50,10 +49,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
-        val serverId = intent?.getStringExtra(AgentNotifications.EXTRA_SERVER_ID) ?: return
-        val session = intent.getLongExtra(AgentNotifications.EXTRA_SESSION, -1L).takeIf { it >= 0 } ?: return
+        intent ?: return
+        val target = NotificationOpen.from(
+            flags = intent.flags,
+            serverId = intent.getStringExtra(AgentNotifications.EXTRA_SERVER_ID),
+            session = intent.getLongExtra(AgentNotifications.EXTRA_SESSION, -1L),
+            agentId = intent.getStringExtra(AgentNotifications.EXTRA_AGENT_ID),
+        ) ?: return
         // 只处理一次:配置变更重建时不要重复跳转
         intent.removeExtra(AgentNotifications.EXTRA_SERVER_ID)
-        connectionViewModel.openFromNotification(serverId, session)
+        connectionViewModel.openFromNotification(target.serverId, target.session, target.agentId)
     }
 }

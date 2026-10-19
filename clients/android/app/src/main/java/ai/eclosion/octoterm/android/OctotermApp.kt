@@ -23,12 +23,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import ai.eclosion.octoterm.android.cloud.CloudAccountViewModel
 import ai.eclosion.octoterm.android.i18n.LocaleStore
+import ai.eclosion.octoterm.android.push.AgentNotifications
 import ai.eclosion.octoterm.android.push.PushRegistrar
 import ai.eclosion.octoterm.android.term.AgentKeyboardLayouts
 import ai.eclosion.octoterm.android.ui.appearance.AppearanceScreen
@@ -42,7 +43,7 @@ import ai.eclosion.octoterm.android.ui.connections.UserMessage
 import ai.eclosion.octoterm.android.ui.term.TerminalScreen
 
 @Composable
-fun OctotermApp(viewModel: ConnectionViewModel, cloudViewModel: CloudAccountViewModel) {
+fun OctotermApp(viewModel: ConnectionViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
@@ -100,12 +101,18 @@ fun OctotermApp(viewModel: ConnectionViewModel, cloudViewModel: CloudAccountView
             }
             AppScreen.CloudAccount -> {
                 BackHandler(onBack = viewModel::closeCloudAccount)
+                // 只在进入 Cloud 页时才创建:不用 Cloud 的用户不必在启动时加载原生库、读账号文件。
+                val cloudViewModel: CloudAccountViewModel = viewModel(factory = CloudAccountViewModel.Factory)
                 val cloud by cloudViewModel.state.collectAsStateWithLifecycle()
-                // 从系统设置/权限弹窗回来时重新读通知开关。
+                val pushAvailable = remember { PushRegistrar.pushAvailable(context) }
+                // 从系统设置/权限弹窗回来时重新读通知开关;账号状态也可能在别处变了(如 token 失效)。
                 var notificationCheck by remember { mutableIntStateOf(0) }
-                LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { notificationCheck++ }
+                LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+                    notificationCheck++
+                    cloudViewModel.refreshStatus()
+                }
                 val notificationsEnabled = remember(cloud.status, cloud.message, notificationCheck) {
-                    NotificationManagerCompat.from(context).areNotificationsEnabled()
+                    AgentNotifications.enabled(context)
                 }
                 val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
                     notificationCheck++
@@ -113,12 +120,15 @@ fun OctotermApp(viewModel: ConnectionViewModel, cloudViewModel: CloudAccountView
                 LaunchedEffect(cloud.askNotificationPermission) {
                     if (cloud.askNotificationPermission) {
                         cloudViewModel.consumePermissionRequest()
-                        if (Build.VERSION.SDK_INT >= 33) permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        // 没有推送能力的构建里申请通知权限毫无用处,只会打扰用户。
+                        if (pushAvailable && Build.VERSION.SDK_INT >= 33) {
+                            permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
                     }
                 }
                 CloudAccountScreen(
                     state = cloud,
-                    pushAvailable = remember { PushRegistrar.pushAvailable(context) },
+                    pushAvailable = pushAvailable,
                     notificationsEnabled = notificationsEnabled,
                     onForm = cloudViewModel::updateForm,
                     onAction = cloudViewModel::run,

@@ -15,28 +15,28 @@ class PendingOpenDecisionTest {
 
     @Test
     fun waitsUntilOnTheTargetConnectionsServerScreen() {
-        val pending = "a" to 1L
+        val pending = PendingOpen("a", 1L, null)
         assertNull(decidePendingOpen(pending, AppScreen.List, listOf(session(1))))
         assertNull(decidePendingOpen(pending, AppScreen.Server("other"), listOf(session(1))))
     }
 
     @Test
     fun opensTheSessionWhenItIsInTheList() {
-        val pending = "a" to 1L
+        val pending = PendingOpen("a", 1L, null)
         val decision = decidePendingOpen(pending, AppScreen.Server("a"), listOf(session(1), session(2)))
         assertEquals(PendingOpenDecision.Open(1L), decision)
     }
 
     @Test
     fun reportsSessionGoneWhenItIsMissingFromTheList() {
-        val pending = "a" to 1L
+        val pending = PendingOpen("a", 1L, null)
         val decision = decidePendingOpen(pending, AppScreen.Server("a"), listOf(session(2)))
         assertEquals(PendingOpenDecision.SessionGone, decision)
     }
 
     @Test
     fun reportsSessionGoneWhenTheListIsEmpty() {
-        val pending = "a" to 1L
+        val pending = PendingOpen("a", 1L, null)
         val decision = decidePendingOpen(pending, AppScreen.Server("a"), emptyList())
         assertEquals(PendingOpenDecision.SessionGone, decision)
     }

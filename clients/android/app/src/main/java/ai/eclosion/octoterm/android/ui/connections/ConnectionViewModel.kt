@@ -33,6 +33,8 @@ import ai.eclosion.octoterm.android.connection.ServerConnection
 import ai.eclosion.octoterm.android.launcher.Launcher
 import ai.eclosion.octoterm.android.launcher.Launchers
 import ai.eclosion.octoterm.android.net.OctoClient
+import ai.eclosion.octoterm.android.push.AgentNotifications
+import ai.eclosion.octoterm.android.push.AgentPush
 import ai.eclosion.octoterm.android.term.TermFrame
 import ai.eclosion.octoterm.android.term.AgentKeyLayout
 import ai.eclosion.octoterm.android.term.TermPaintGate
@@ -50,12 +52,12 @@ import android.os.SystemClock
 import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -69,26 +71,6 @@ sealed class AppScreen {
     data class Server(val connectionId: String) : AppScreen()
     data object Appearance : AppScreen()
     data object CloudAccount : AppScreen()
-}
-
-/** `consumePendingOpen` 该做什么:打开会话、报告会话已消失,或者(`null`)还没到时候,继续等。纯函数,便于单测。 */
-internal sealed class PendingOpenDecision {
-    data class Open(val session: Long) : PendingOpenDecision()
-    data object SessionGone : PendingOpenDecision()
-}
-
-/**
- * 给定点通知要去的 (连接 id, 会话 id)、当前屏幕与会话列表,决定下一步。
- * 还没连到目标连接(或者根本没有待处理的跳转)时返回 `null` —— 这表示"等下一次 Sessions 快照再看"。
- */
-internal fun decidePendingOpen(
-    pendingOpen: Pair<String, Long>?,
-    screen: AppScreen,
-    sessions: List<SessionInfo>,
-): PendingOpenDecision? {
-    val (connectionId, session) = pendingOpen ?: return null
-    if (screen !is AppScreen.Server || screen.connectionId != connectionId) return null
-    return if (sessions.any { it.id == session }) PendingOpenDecision.Open(session) else PendingOpenDecision.SessionGone
 }
 
 data class EditorState(
@@ -196,8 +178,10 @@ class ConnectionViewModel(
     private var httpOrigin: String? = null
     private var httpToken: String? = null
     private var awaitingCreated = false
-    /** 点通知要去的 (连接 id, 会话 id);连上并拿到会话列表后消费。 */
-    private var pendingOpen: Pair<String, Long>? = null
+    /** 点通知要去的会话;连上并拿到会话列表后消费,连接失败/断开即作废。 */
+    private val pendingOpen = PendingOpenTracker()
+    /** 每次发起连接 +1:旧连接的握手超时不能误伤用户之后发起的新连接。 */
+    private var connectAttempt = 0L
     private var agentJob: Job? = null
     private var agentAgain = false
     /** 每次 agent 表被事件改动就 +1:拉取期间到达的事件不能被较旧的快照覆盖 */
@@ -225,8 +209,10 @@ class ConnectionViewModel(
     )
     val state: StateFlow<ConnectionUiState> = _state.asStateFlow()
 
-    private val _messages = MutableSharedFlow<UserMessage>(extraBufferCapacity = 4)
-    val messages: SharedFlow<UserMessage> = _messages.asSharedFlow()
+    // 用 Channel 而不是 replay=0 的 SharedFlow:冷启动点通知时 handleIntent 先于 setContent,
+    // 那时还没有收集者,一次性提示会直接丢失;Channel 会缓存到界面开始收集为止。
+    private val _messages = Channel<UserMessage>(Channel.BUFFERED)
+    val messages: Flow<UserMessage> = _messages.receiveAsFlow()
 
     fun openAddSheet() {
         val clip = clipboardUrl()
@@ -335,7 +321,7 @@ class ConnectionViewModel(
                 editor = EditorState(clipboardUrl = clipboardUrl()),
             )
         }
-        _messages.tryEmit(UserMessage.Saved)
+        _messages.trySend(UserMessage.Saved)
     }
 
     fun requestDelete(connection: ServerConnection) {
@@ -351,23 +337,34 @@ class ConnectionViewModel(
         val updated = _state.value.connections.filterNot { it.id == target.id }
         persist(updated)
         _state.update { it.copy(connections = updated, pendingDelete = null) }
-        _messages.tryEmit(UserMessage.Deleted)
+        _messages.trySend(UserMessage.Deleted)
     }
 
     fun connect(id: String) {
-        val connection = _state.value.connections.firstOrNull { it.id == id } ?: return
-        if (_state.value.connectingId != null) return
+        // 每个提前返回都作废点通知的跳转:它只属于为它发起的那次连接。
+        val connection = _state.value.connections.firstOrNull { it.id == id } ?: run {
+            pendingOpen.onConnectFailed()
+            return
+        }
+        if (_state.value.connectingId != null) {
+            pendingOpen.onConnectFailed()
+            return
+        }
         val parsed = try {
             ConnectionUrl.parse(connection.url, connection.token)
         } catch (_: ConnectionUrlException) {
-            _messages.tryEmit(UserMessage.Unexpected)
+            pendingOpen.onConnectFailed()
+            _messages.trySend(UserMessage.Unexpected)
             return
         }
         val token = parsed.token
         if (token.isNullOrEmpty()) {
-            _messages.tryEmit(UserMessage.AuthFailed(null))
+            pendingOpen.onConnectFailed()
+            _messages.trySend(UserMessage.AuthFailed(null))
             return
         }
+        pendingOpen.onConnectStart(id)
+        val attempt = ++connectAttempt
         httpOrigin = parsed.httpOrigin()
         httpToken = token
         _state.update { it.copy(connectingId = id, serverOs = "") }
@@ -376,6 +373,8 @@ class ConnectionViewModel(
         client = next
         next.onOpen = {
             onMain {
+                // 已被取消/替换的连接迟到的回调不能再切屏。
+                if (client !== next) return@onMain
                 val now = System.currentTimeMillis()
                 val updated = _state.value.connections.map { item ->
                     if (item.id == id) item.copy(lastUsedAt = now) else item
@@ -398,10 +397,12 @@ class ConnectionViewModel(
         next.onReconnecting = { onMain { _state.update { it.copy(reconnecting = true) } } }
         next.onFatal = { message ->
             onMain {
+                if (client !== next) return@onMain
+                pendingOpen.onConnectFailed()
                 closeAllSessions()
                 _state.update { it.copy(connectingId = null, reconnecting = false) }
                 dropClient()
-                _messages.tryEmit(UserMessage.AuthFailed(message))
+                _messages.trySend(UserMessage.AuthFailed(message))
                 if (_state.value.screen is AppScreen.Server) {
                     _state.update {
                         it.copy(
@@ -441,15 +442,17 @@ class ConnectionViewModel(
         viewModelScope.launch {
             // Handshake timeout: if still connecting, fail.
             kotlinx.coroutines.delay(12_000)
-            if (_state.value.connectingId == id && _state.value.screen !is AppScreen.Server) {
+            if (connectAttempt == attempt && _state.value.connectingId == id && _state.value.screen !is AppScreen.Server) {
+                pendingOpen.onConnectFailed()
                 dropClient()
                 _state.update { it.copy(connectingId = null) }
-                _messages.tryEmit(UserMessage.Timeout)
+                _messages.trySend(UserMessage.Timeout)
             }
         }
     }
 
     fun disconnect() {
+        pendingOpen.onDisconnect()
         resetChat()
         agentJob?.cancel()
         agentJob = null
@@ -477,32 +480,45 @@ class ConnectionViewModel(
         }
     }
 
-    fun openFromNotification(cloudServerId: String, session: Long) {
+    fun openFromNotification(cloudServerId: String, session: Long, agentId: String?) {
         val conn = CloudLink.find(_state.value.connections, cloudServerId) ?: run {
-            _messages.tryEmit(UserMessage.ConnectServerFirst)
+            pendingOpen.onConnectFailed()
+            _messages.trySend(UserMessage.ConnectServerFirst)
             return
         }
-        pendingOpen = conn.id to session
-        val screen = _state.value.screen
-        if (screen is AppScreen.Server && screen.connectionId == conn.id && _state.value.connectingId == null) {
+        val target = PendingOpen(conn.id, session, agentId?.let { AgentPush.tag(cloudServerId, session, it) })
+        val st = _state.value
+        val screen = st.screen
+        if (screen is AppScreen.Server && screen.connectionId == conn.id && st.connectingId == null) {
+            pendingOpen.onTap(target)
             client?.send(ClientMsg.ListSessions) // 列表回来后在 handleServer 里打开
             return
         }
+        // 用户最新的意图优先:放弃正在进行的连接/已连着的别的服务器,改连目标。
+        if (st.connectingId != null) cancelConnecting()
         if (screen is AppScreen.Server) disconnect()
+        pendingOpen.onTap(target)
         connect(conn.id)
     }
 
+    /** 放弃正在握手的连接;作废它的超时计时。 */
+    private fun cancelConnecting() {
+        connectAttempt++
+        dropClient()
+        _state.update { it.copy(connectingId = null) }
+    }
+
     private fun consumePendingOpen() {
-        when (val decision = decidePendingOpen(pendingOpen, _state.value.screen, _state.value.sessions)) {
+        when (val decision = pendingOpen.onSessions(_state.value.screen, _state.value.sessions)) {
             null -> Unit
             is PendingOpenDecision.Open -> {
-                pendingOpen = null
                 openSession(decision.session)
+                // 真打开了才撤回通知;打不开(会话太多等)就留着,用户还能再点。
+                if (opens.containsKey(decision.session)) {
+                    decision.notificationTag?.let { AgentNotifications.cancel(app, it) }
+                }
             }
-            PendingOpenDecision.SessionGone -> {
-                pendingOpen = null
-                _messages.tryEmit(UserMessage.SessionGone)
-            }
+            PendingOpenDecision.SessionGone -> _messages.trySend(UserMessage.SessionGone)
         }
     }
 
@@ -577,7 +593,7 @@ class ConnectionViewModel(
             return
         }
         if (opens.size >= MAX_OPEN) {
-            _messages.tryEmit(UserMessage.TooManySessions)
+            _messages.trySend(UserMessage.TooManySessions)
             return
         }
         val open = OpenSession(
@@ -683,7 +699,7 @@ class ConnectionViewModel(
         if (text.isEmpty()) return
         val clipboard = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("octoterm", text))
-        _messages.tryEmit(UserMessage.Copied)
+        _messages.trySend(UserMessage.Copied)
     }
 
     fun pasteClipboard() {
@@ -752,17 +768,17 @@ class ConnectionViewModel(
     fun importAppearance(text: String) {
         val next = AppearanceCodec.importJson(text, _state.value.appearance)
         if (next == null) {
-            _messages.tryEmit(UserMessage.ImportFailed)
+            _messages.trySend(UserMessage.ImportFailed)
             return
         }
         updateAppearance(next, followsSystem = false)
-        _messages.tryEmit(UserMessage.Saved)
+        _messages.trySend(UserMessage.Saved)
     }
 
     fun copyAppearance() {
         val clipboard = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("octoterm-appearance", exportAppearance()))
-        _messages.tryEmit(UserMessage.Copied)
+        _messages.trySend(UserMessage.Copied)
     }
 
     fun importAppearanceFromClipboard() {
@@ -774,7 +790,7 @@ class ConnectionViewModel(
             ?.toString()
             .orEmpty()
         if (text.isBlank()) {
-            _messages.tryEmit(UserMessage.ImportFailed)
+            _messages.trySend(UserMessage.ImportFailed)
             return
         }
         importAppearance(text)
@@ -874,7 +890,7 @@ class ConnectionViewModel(
             }
             is ServerMsg.AgentEvent -> onAgentEvent(msg.session)
             is ServerMsg.Error -> {
-                _messages.tryEmit(UserMessage.AuthFailed(msg.message))
+                _messages.trySend(UserMessage.AuthFailed(msg.message))
                 val channel = msg.channel
                 if (channel != null) {
                     val open = opens.values.firstOrNull { it.channel == channel }
