@@ -159,13 +159,14 @@ async fn reset_password_matches_url_ignoring_trailing_slash() {
 }
 
 #[tokio::test]
-async fn reset_password_propagates_corrupt_credentials_io_error() {
+async fn reset_password_succeeds_even_if_local_file_is_corrupt() {
     let cloud = FakeCloud::start().await;
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(path(&dir), b"{not json").unwrap();
     cloud.respond("POST /v1/auth/password-reset", 204, json!(null));
-    let err = ops::reset_password(&path(&dir), &cloud.url, "a@example.com", "123456", "new-pass-1").await.unwrap_err();
-    assert!(matches!(err, OpsError::Local(_)), "{err:?}");
+    // 远端重置已经成功,本地清理只是 best-effort:文件损坏不该让用户以为重置失败而去重试已消费的验证码。
+    ops::reset_password(&path(&dir), &cloud.url, "a@example.com", "123456", "new-pass-1").await.unwrap();
+    assert_eq!(cloud.last("POST /v1/auth/password-reset").body["email"], json!("a@example.com"));
 }
 
 #[tokio::test]

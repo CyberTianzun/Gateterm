@@ -81,8 +81,11 @@ pub async fn login(path: &Path, url: &str, email: &str, password: &str, label: &
 pub async fn reset_password(path: &Path, url: &str, email: &str, code: &str, new_password: &str) -> Result<(), OpsError> {
     let email = normalize_email(email);
     CloudClient::new(url).reset_password(&email, code.trim(), new_password).await?;
+    // 远端重置已经成功,本地清理只是 best-effort:cloud.json 读不出来(比如损坏)不该让这个操作报错——
+    // 否则用户会以为重置失败而拿已经消费掉的验证码去重试。留着的这份旧登录态迟早会被清掉:
+    // 下一次带 Bearer 的调用或者 notifier 撞上 401 unauthorized 就会把它删掉。
     let reset_url = url.trim().trim_end_matches('/');
-    if let Some(c) = credentials::load(path).map_err(io)?
+    if let Ok(Some(c)) = credentials::load(path)
         && c.email == email
         && c.url == reset_url
     {
