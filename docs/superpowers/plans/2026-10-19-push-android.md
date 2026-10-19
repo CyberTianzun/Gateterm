@@ -17,7 +17,7 @@
 - **不加 Firebase Analytics**;只用 `firebase-messaging`。
 - `app/google-services.json` 列入 `.gitignore`;**文件不存在时不应用 google-services 插件**,且运行期 `FirebaseApp.getApps(ctx).isEmpty()` 时推送功能整体降级(不崩溃)。本机来源 `~/online/google-services.json`。
 - FCM 消息是纯数据消息,字段:`server_id`、`session`、`agent_id`、`kind`(waiting/permission/resolved;done 忽略)、可选 `tool_name`、可选 `expires_at`(unix 秒字符串)。
-- 通知 tag = `"<server_id>:<session>"`,同会话覆盖;`resolved` 按 tag 撤回;有 `expires_at` 时 `setTimeoutAfter(剩余毫秒)`。
+- 通知 tag = `"<server_id>:<session>:<agent_id>"`,同一会话里同一 agent 覆盖、不同 agent 互不影响;`resolved` 按 tag 撤回;有 `expires_at` 时 `setTimeoutAfter(剩余毫秒)`。
 - 点通知只进入对应会话的终端(审批面板不在本期)。
 - 凭据文件 `filesDir/cloud.json`;设备 label = `Build.MODEL`。
 - 新文案同时加到 `res/values/strings.xml`(中文,默认)与 `res/values-en/strings.xml`(英文),key 一一对应。
@@ -932,8 +932,8 @@ class AgentPushTest {
     fun parsesWaiting() {
         val p = AgentPush.parse(base)!!
         assertEquals(AgentPush("srv", 7, "claude-code", AgentPush.Kind.Waiting, null, null), p)
-        assertEquals("srv:7", p.tag)
-        assertEquals("srv:7".hashCode(), p.notificationId)
+        assertEquals("srv:7:claude-code", p.tag)
+        assertEquals("srv:7:claude-code".hashCode(), p.notificationId)
     }
 
     @Test
@@ -982,8 +982,9 @@ data class AgentPush(
 ) {
     enum class Kind { Waiting, Permission, Resolved }
 
-    /** 同一会话只占一条通知:新的覆盖旧的,resolved 按它撤回。 */
-    val tag: String get() = "$serverId:$session"
+    /** 同一会话里同一个 agent 只占一条通知:新的覆盖旧的,resolved 按它撤回。
+     *  带上 agent_id:一个终端会话里跑着两个 agent 时,一个的撤回不该误伤另一个。 */
+    val tag: String get() = "$serverId:$session:$agentId"
     val notificationId: Int get() = tag.hashCode()
 
     /** 到期自动消失的剩余毫秒;没有过期时间返回 null,已过期返回 0。 */

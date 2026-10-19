@@ -32,7 +32,7 @@ agent 在等人时,手机收到一条系统通知;在别处处理掉后通知自
                       │
                       ▼
                OctotermCloud ─► FcmSender ─► FCM HTTP v1 ─► Android FirebaseMessagingService
-                                ApnsSender(stub)              ├ waiting/permission → 本地通知(tag = server_id:session)
+                                ApnsSender(stub)              ├ waiting/permission → 本地通知(tag = server_id:session:agent_id)
                                                               └ resolved → 按 tag 撤回
  用户点通知 ─► MainActivity(server_id, session) ─► 找 cloud_server_id 匹配的连接 ─► 连接 ─► 打开该会话的终端
 ```
@@ -118,7 +118,7 @@ agent 在等人时,手机收到一条系统通知;在别处处理掉后通知自
 ### 6.4 通知
 
 - `OctoMessagingService : FirebaseMessagingService`,渠道 `agent_waiting`(高重要度)。
-- `waiting`/`permission`:`tag = "<server_id>:<session>"`,同会话覆盖;文案本地化生成(如「Claude Code 在等你」/「Claude Code 请求授权:Bash」);有 `expires_at` 时 `setTimeoutAfter(剩余毫秒)`。
+- `waiting`/`permission`:`tag = "<server_id>:<session>:<agent_id>"`,同会话同 agent 覆盖(不同 agent 互不撤回);文案本地化生成(如「Claude Code 在等你」/「Claude Code 请求授权:Bash」);有 `expires_at` 时 `setTimeoutAfter(剩余毫秒)`。
 - `resolved`:`cancel(tag, id)`。
 - 文案生成、tag 规则、`server_id → 连接` 查找写成纯函数并单测。
 
