@@ -57,6 +57,7 @@ object ControlJson {
             "hello-ok" -> ServerMsg.HelloOk(
                 obj.optInt("proto", PROTO_VERSION),
                 obj.optString("os").takeUnless { it == "null" }.orEmpty(),
+                obj.optString("cloud_server_id").takeUnless { it.isEmpty() || it == "null" },
             )
             "error" -> ServerMsg.Error(
                 message = obj.optString("message"),

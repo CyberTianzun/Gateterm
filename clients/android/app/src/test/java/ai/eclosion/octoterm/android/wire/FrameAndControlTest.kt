@@ -72,4 +72,12 @@ class FrameAndControlTest {
     fun shortFrameRejected() {
         Frame.decode(byteArrayOf(1, 2, 3))
     }
+
+    @Test
+    fun helloOkCarriesCloudServerId() {
+        val with = ControlJson.parse("""{"type":"hello-ok","proto":1,"os":"macos","cloud_server_id":"srv-1"}""".toByteArray())
+        assertEquals(ServerMsg.HelloOk(1, "macos", "srv-1"), with)
+        val without = ControlJson.parse("""{"type":"hello-ok","proto":1}""".toByteArray())
+        assertEquals(ServerMsg.HelloOk(1, "", null), without)
+    }
 }

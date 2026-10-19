@@ -25,6 +25,7 @@ class ConnectionStore(context: Context) {
                             token = obj.optString("token"),
                             createdAt = obj.optLong("createdAt", 0L),
                             lastUsedAt = obj.optLong("lastUsedAt", 0L).takeIf { it > 0L },
+                            cloudServerId = obj.optString("cloudServerId").takeUnless { it.isEmpty() || it == "null" },
                         ),
                     )
                 }
@@ -44,7 +45,8 @@ class ConnectionStore(context: Context) {
                     .put("url", item.url)
                     .put("token", item.token)
                     .put("createdAt", item.createdAt)
-                    .put("lastUsedAt", item.lastUsedAt ?: 0L),
+                    .put("lastUsedAt", item.lastUsedAt ?: 0L)
+                    .put("cloudServerId", item.cloudServerId ?: JSONObject.NULL),
             )
         }
         prefs.edit().putString(KEY, array.toString()).apply()

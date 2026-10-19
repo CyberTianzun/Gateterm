@@ -25,6 +25,7 @@ import ai.eclosion.octoterm.android.appearance.AppearanceCodec
 import ai.eclosion.octoterm.android.appearance.AppearanceStore
 import ai.eclosion.octoterm.android.appearance.TermAppearance
 import ai.eclosion.octoterm.android.appearance.TermFontKind
+import ai.eclosion.octoterm.android.connection.CloudLink
 import ai.eclosion.octoterm.android.connection.ConnectionStore
 import ai.eclosion.octoterm.android.connection.ConnectionUrl
 import ai.eclosion.octoterm.android.connection.ConnectionUrlException
@@ -383,7 +384,13 @@ class ConnectionViewModel(
         next.onControl = { msg ->
             onMain {
                 if (client !== next) return@onMain
-                if (msg is ServerMsg.HelloOk) _state.update { it.copy(serverOs = msg.os) }
+                if (msg is ServerMsg.HelloOk) {
+                    _state.update { it.copy(serverOs = msg.os) }
+                    CloudLink.record(_state.value.connections, id, msg.cloudServerId)?.let { updated ->
+                        persist(updated)
+                        _state.update { it.copy(connections = updated) }
+                    }
+                }
                 handleServer(msg)
             }
         }
