@@ -35,6 +35,36 @@ class AgentPushTest {
     }
 
     @Test
+    fun tagHelperMatchesThePushTag() {
+        val p = AgentPush.parse(base)!!
+        assertEquals(p.tag, AgentPush.tag("srv", 7, "claude-code"))
+        assertEquals(p.notificationId, AgentPush.notificationId(p.tag))
+    }
+
+    @Test
+    fun resolvedCancels() {
+        assertEquals(AgentPush.Display.Cancel, AgentPush.parse(base + ("kind" to "resolved"))!!.display(nowSeconds = 0))
+    }
+
+    @Test
+    fun waitingWithoutExpiryPostsWithoutTimeout() {
+        assertEquals(AgentPush.Display.Post(null), AgentPush.parse(base)!!.display(nowSeconds = 600))
+    }
+
+    @Test
+    fun permissionStillValidPostsWithRemainingTime() {
+        val p = AgentPush.parse(base + mapOf("kind" to "permission", "expires_at" to "1000"))!!
+        assertEquals(AgentPush.Display.Post(400_000L), p.display(nowSeconds = 600))
+    }
+
+    @Test
+    fun alreadyExpiredPermissionCancelsInsteadOfPosting() {
+        val p = AgentPush.parse(base + mapOf("kind" to "permission", "expires_at" to "1000"))!!
+        assertEquals(AgentPush.Display.Cancel, p.display(nowSeconds = 1000))
+        assertEquals(AgentPush.Display.Cancel, p.display(nowSeconds = 2000))
+    }
+
+    @Test
     fun displayNames() {
         assertEquals("Claude Code", agentDisplayName("claude-code"))
         assertEquals("Codex", agentDisplayName("codex"))

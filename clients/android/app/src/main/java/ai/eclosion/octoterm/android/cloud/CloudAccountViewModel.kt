@@ -1,9 +1,10 @@
 package ai.eclosion.octoterm.android.cloud
 
 import ai.eclosion.octoterm.android.R
+import ai.eclosion.octoterm.android.push.AgentNotifications
 import ai.eclosion.octoterm.android.push.PushRegistrar
+import ai.eclosion.octoterm.android.push.registerWithTimeout
 import android.app.Application
-import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
@@ -12,14 +13,12 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import uniffi.octoterm_cloud_ffi.CloudFfiException
 import uniffi.octoterm_cloud_ffi.CloudStatus
 import uniffi.octoterm_cloud_ffi.Purpose
@@ -47,6 +46,12 @@ class CloudAccountViewModel(private val app: Application) : AndroidViewModel(app
 
     fun consumePermissionRequest() = _state.update { it.copy(askNotificationPermission = false) }
 
+    /** 进入/回到 Cloud 页时重读登录状态(token 可能已在后台失效或被别处登出)。操作进行中不打断。 */
+    fun refreshStatus() {
+        if (_state.value.busy) return
+        _state.update { it.copy(status = account.status()) }
+    }
+
     fun run(action: CloudAction) {
         val st = _state.value
         if (st.busy) return
@@ -68,6 +73,8 @@ class CloudAccountViewModel(private val app: Application) : AndroidViewModel(app
                 onFailure = { e -> CloudMessage(false, (e as? CloudFfiException)?.toFailure()?.messageRes() ?: R.string.cloud_err_generic) },
             )
             val loggedInNow = result.isSuccess && (job is CloudJob.Login || job is CloudJob.Register)
+            // 渠道按需创建:登录成功后才需要,通知设置里也才有它可调。
+            if (loggedInNow) AgentNotifications.ensureChannel(app)
             _state.update {
                 it.copy(
                     busy = false,
@@ -109,14 +116,7 @@ class CloudAccountViewModel(private val app: Application) : AndroidViewModel(app
 
     /** 登录已成功,推送登记失败不影响结果;加超时,免得没有 Play 服务时一直转圈。 */
     private suspend fun registerPush() {
-        runCatching { withTimeout(PUSH_REGISTER_TIMEOUT_MS) { PushRegistrar.registerCurrentToken(app, account) } }
-            .onFailure { e ->
-                // withTimeout 超时抛出的是 TimeoutCancellationException,这是预期内的"放弃等待",
-                // 可以吞掉只记日志;但如果是外部真正的取消(如 ViewModel 已被清理),必须继续向上
-                // 抛出,否则协程会假装正常完成,继续执行后续代码时可能访问已销毁的 account。
-                if (e is CancellationException && e !is TimeoutCancellationException) throw e
-                Log.w("Octoterm", "登记推送 token 失败", e)
-            }
+        registerWithTimeout { PushRegistrar.registerCurrentToken(app, account) }?.let(PushRegistrar::logFailure)
     }
 
     override fun onCleared() {
@@ -124,8 +124,6 @@ class CloudAccountViewModel(private val app: Application) : AndroidViewModel(app
     }
 
     companion object {
-        private const val PUSH_REGISTER_TIMEOUT_MS = 15_000L
-
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer { CloudAccountViewModel(checkNotNull(this[APPLICATION_KEY])) }
         }
