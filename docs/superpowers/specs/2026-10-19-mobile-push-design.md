@@ -82,7 +82,7 @@ agent 在等人时,手机收到一条系统通知;在别处处理掉后通知自
     }}
     ```
     data 值一律字符串;`tool_name`/`expires_at` 缺省时不出现;`ttl` 仅在有 `expires_at` 时设置(= 剩余秒数),否则用 FCM 默认。
-  - 错误:HTTP 404 或错误详情含 `UNREGISTERED` → `InvalidToken`;401/403(凭据问题)、429、5xx → `Other`,只记日志不重试(撤回 + 过期保证不会留下错误状态)。
+  - 错误:错误详情含 `UNREGISTERED` → `InvalidToken`;401/403(凭据问题)、429、5xx、裸 404(无 `UNREGISTERED`,如 `FCM_API_BASE` 配错或代理返回的 404)→ `Other`,只记日志不重试(撤回 + 过期保证不会留下错误状态)。
   - 日志不得含 push_token、tool_name(沿用账号 spec 的隐私规则,隐私测试覆盖 FcmSender 路径)。
 
 ### 4.3 备份子命令
