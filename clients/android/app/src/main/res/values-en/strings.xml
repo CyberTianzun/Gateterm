@@ -47,6 +47,8 @@
     <string name="msg_copied">Copied</string>
     <string name="msg_import_failed">The clipboard is not an appearance config</string>
     <string name="msg_too_many_sessions">Too many sessions are open. Close one first.</string>
+    <string name="msg_connect_server_first">Connect to this server once first; after that, tapping a notification goes straight there</string>
+    <string name="msg_session_gone">That session has ended</string>
 
     <string name="session_new">New session</string>
     <string name="session_empty_title">No sessions yet</string>

@@ -236,5 +236,7 @@ private fun android.content.Context.messageText(message: UserMessage): String {
         UserMessage.Copied -> getString(R.string.msg_copied)
         UserMessage.ImportFailed -> getString(R.string.msg_import_failed)
         UserMessage.TooManySessions -> getString(R.string.msg_too_many_sessions)
+        UserMessage.ConnectServerFirst -> getString(R.string.msg_connect_server_first)
+        UserMessage.SessionGone -> getString(R.string.msg_session_gone)
     }
 }

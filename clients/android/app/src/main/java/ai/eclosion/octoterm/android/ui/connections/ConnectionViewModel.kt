@@ -71,6 +71,26 @@ sealed class AppScreen {
     data object CloudAccount : AppScreen()
 }
 
+/** `consumePendingOpen` 该做什么:打开会话、报告会话已消失,或者(`null`)还没到时候,继续等。纯函数,便于单测。 */
+internal sealed class PendingOpenDecision {
+    data class Open(val session: Long) : PendingOpenDecision()
+    data object SessionGone : PendingOpenDecision()
+}
+
+/**
+ * 给定点通知要去的 (连接 id, 会话 id)、当前屏幕与会话列表,决定下一步。
+ * 还没连到目标连接(或者根本没有待处理的跳转)时返回 `null` —— 这表示"等下一次 Sessions 快照再看"。
+ */
+internal fun decidePendingOpen(
+    pendingOpen: Pair<String, Long>?,
+    screen: AppScreen,
+    sessions: List<SessionInfo>,
+): PendingOpenDecision? {
+    val (connectionId, session) = pendingOpen ?: return null
+    if (screen !is AppScreen.Server || screen.connectionId != connectionId) return null
+    return if (sessions.any { it.id == session }) PendingOpenDecision.Open(session) else PendingOpenDecision.SessionGone
+}
+
 data class EditorState(
     val name: String = "",
     val url: String = "",
@@ -99,6 +119,8 @@ sealed class UserMessage {
     data object Copied : UserMessage()
     data object ImportFailed : UserMessage()
     data object TooManySessions : UserMessage()
+    data object ConnectServerFirst : UserMessage()
+    data object SessionGone : UserMessage()
 }
 
 data class LauncherMenuState(
@@ -174,6 +196,8 @@ class ConnectionViewModel(
     private var httpOrigin: String? = null
     private var httpToken: String? = null
     private var awaitingCreated = false
+    /** 点通知要去的 (连接 id, 会话 id);连上并拿到会话列表后消费。 */
+    private var pendingOpen: Pair<String, Long>? = null
     private var agentJob: Job? = null
     private var agentAgain = false
     /** 每次 agent 表被事件改动就 +1:拉取期间到达的事件不能被较旧的快照覆盖 */
@@ -450,6 +474,35 @@ class ConnectionViewModel(
                 scrollOffset = 0,
                 mouseTracking = false,
             )
+        }
+    }
+
+    fun openFromNotification(cloudServerId: String, session: Long) {
+        val conn = CloudLink.find(_state.value.connections, cloudServerId) ?: run {
+            _messages.tryEmit(UserMessage.ConnectServerFirst)
+            return
+        }
+        pendingOpen = conn.id to session
+        val screen = _state.value.screen
+        if (screen is AppScreen.Server && screen.connectionId == conn.id && _state.value.connectingId == null) {
+            client?.send(ClientMsg.ListSessions) // 列表回来后在 handleServer 里打开
+            return
+        }
+        if (screen is AppScreen.Server) disconnect()
+        connect(conn.id)
+    }
+
+    private fun consumePendingOpen() {
+        when (val decision = decidePendingOpen(pendingOpen, _state.value.screen, _state.value.sessions)) {
+            null -> Unit
+            is PendingOpenDecision.Open -> {
+                pendingOpen = null
+                openSession(decision.session)
+            }
+            PendingOpenDecision.SessionGone -> {
+                pendingOpen = null
+                _messages.tryEmit(UserMessage.SessionGone)
+            }
         }
     }
 
@@ -772,7 +825,10 @@ class ConnectionViewModel(
 
     private fun handleServer(msg: ServerMsg) {
         when (msg) {
-            is ServerMsg.Sessions -> _state.update { it.copy(sessions = msg.sessions) }
+            is ServerMsg.Sessions -> {
+                _state.update { it.copy(sessions = msg.sessions) }
+                consumePendingOpen()
+            }
             is ServerMsg.SessionEvent -> {
                 client?.send(ClientMsg.ListSessions)
                 if (msg.event == ai.eclosion.octoterm.android.wire.SessionEventKind.Closed) {
