@@ -21,12 +21,12 @@ pub enum CloudFfiError {
     RateLimited { retry_after: Option<u64> },
     #[error("api error: {code}")]
     Api { code: String },
-    #[error("unreachable: {message}")]
-    Unreachable { message: String },
-    /// `message` is diagnostic only (e.g. a local I/O failure reading/writing `cloud.json`)
+    #[error("unreachable: {reason}")]
+    Unreachable { reason: String },
+    /// `reason` is diagnostic only (e.g. a local I/O failure reading/writing `cloud.json`)
     /// and must not be shown to end users as-is; it is not localized and may leak local paths.
-    #[error("local error: {message}")]
-    Local { message: String },
+    #[error("local error: {reason}")]
+    Local { reason: String },
 }
 
 impl From<CloudError> for CloudFfiError {
@@ -35,7 +35,7 @@ impl From<CloudError> for CloudFfiError {
             CloudError::Unauthorized => Self::Unauthorized,
             CloudError::RateLimited { retry_after } => Self::RateLimited { retry_after },
             CloudError::Api { code, .. } => Self::Api { code },
-            CloudError::Unreachable(message) => Self::Unreachable { message },
+            CloudError::Unreachable(reason) => Self::Unreachable { reason },
         }
     }
 }
@@ -44,7 +44,7 @@ impl From<OpsError> for CloudFfiError {
     fn from(e: OpsError) -> Self {
         match e {
             OpsError::NotLoggedIn => Self::NotLoggedIn,
-            OpsError::Local(message) => Self::Local { message },
+            OpsError::Local(reason) => Self::Local { reason },
             OpsError::Cloud(e) => e.into(),
         }
     }

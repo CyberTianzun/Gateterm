@@ -4,6 +4,31 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// google-services.json 不入库:有文件才启用推送插件。开源构建照常可用,只是没有推送。
+if (file("google-services.json").exists()) {
+    apply(plugin = libs.plugins.google.services.get().pluginId)
+}
+
+// Rust cloud-ffi:arm64 的 .so 与 UniFFI Kotlin 绑定都生成到 build/,不入库。
+val repoRoot: File = rootProject.projectDir.parentFile.parentFile
+val ffiJniDir = layout.buildDirectory.dir("generated/ffi/jniLibs")
+val ffiKotlinDir = layout.buildDirectory.dir("generated/ffi/kotlin")
+val buildCloudFfi by tasks.registering(Exec::class) {
+    description = "构建 cloud-ffi(arm64-v8a)并生成 Kotlin 绑定"
+    workingDir = repoRoot
+    commandLine(
+        "bash", "scripts/build-android-ffi.sh",
+        ffiJniDir.get().asFile.absolutePath,
+        ffiKotlinDir.get().asFile.absolutePath,
+    )
+    inputs.dir(File(repoRoot, "crates/cloud-ffi/src"))
+    inputs.dir(File(repoRoot, "crates/cloud-client/src"))
+    inputs.file(File(repoRoot, "scripts/build-android-ffi.sh"))
+    outputs.dir(ffiJniDir)
+    outputs.dir(ffiKotlinDir)
+}
+tasks.named("preBuild") { dependsOn(buildCloudFfi) }
+
 android {
     namespace = "ai.eclosion.octoterm.android"
     compileSdk = 36
@@ -14,7 +39,11 @@ android {
         targetSdk = 36
         versionCode = 3
         versionName = "0.2.2"
+        ndk { abiFilters += "arm64-v8a" }
     }
+
+    sourceSets["main"].jniLibs.srcDir(ffiJniDir)
+    sourceSets["main"].java.srcDir(ffiKotlinDir)
 
     buildTypes {
         release {
@@ -56,4 +85,8 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)
     testImplementation(libs.org.json)
+    implementation(libs.jna) { artifact { type = "aar" } }
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
+    implementation(libs.kotlinx.coroutines.android)
 }
