@@ -69,7 +69,7 @@ pub struct CloudStatus {
     pub url: String,
 }
 
-/// 一台设备上的 Cloud 账号。`cred_path` 由 App 给(Android:`filesDir/cloud.json`)。
+/// A Cloud account on one device. `cred_path` is supplied by the App (Android: `filesDir/cloud.json`).
 #[derive(uniffi::Object)]
 pub struct CloudAccount {
     path: PathBuf,
@@ -83,7 +83,7 @@ impl CloudAccount {
         Arc::new(Self { path: PathBuf::from(cred_path), label })
     }
 
-    /// 只读本地凭据文件,不联网。
+    /// Reads the local credential file only; no network access.
     pub fn status(&self) -> Option<CloudStatus> {
         ops::current(&self.path).ok().map(|c| CloudStatus { email: c.email, url: c.url })
     }
@@ -108,7 +108,7 @@ impl CloudAccount {
         Ok(())
     }
 
-    /// 本地登录态一定清掉。返回 true 表示 Cloud 上的凭据也已撤销。
+    /// Local login state is always cleared. Returns true if the Cloud-side credential was also revoked.
     pub async fn logout(&self) -> Result<bool, CloudFfiError> {
         Ok(ops::logout(&self.path).await?.is_none())
     }
