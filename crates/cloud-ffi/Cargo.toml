@@ -1,0 +1,29 @@
+[package]
+name = "octoterm-cloud-ffi"
+version = "0.2.1"
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "octoterm_cloud_ffi"
+# cdylib 给 Android(JNA 加载),staticlib 留给 iOS,lib 给本 crate 的 Rust 测试
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[features]
+cli = ["uniffi/cli"]
+
+[dependencies]
+octoterm-cloud-client = { path = "../cloud-client" }
+thiserror = "2"
+uniffi = { version = "0.29", features = ["tokio"] }
+
+[dev-dependencies]
+axum = "0.8"
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }

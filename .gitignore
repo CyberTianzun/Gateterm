@@ -21,3 +21,5 @@ clients/web/test/.queries.build.mjs
 
 .DS_Store
 
+clients/android/app/src/main/jniLibs/
+
