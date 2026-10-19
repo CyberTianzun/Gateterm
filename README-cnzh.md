@@ -166,7 +166,8 @@ Claude Code、Codex、pi、Grok 和 Antigravity CLI 记录,包括在 Octoterm �
 登录 Cloud 之后,agent 进入「等你」状态时会通过 Cloud 推送到手机(手机端推送将在后续版本提供)。不登录不影响任何功能。
 
 - Cloud 不转发终端数据,拿不到本机的访问 token;推送只包含会话编号、agent 名称与工具名。
-- 登录态保存在配置目录的 `cloud.json`(权限 0600)。
+- 登录态保存在配置目录的 `cloud.json`,在 Unix 上权限仅属主可读写(0600)。
+- 同一台机器上的 desktop 应用和独立运行的 octoterm-server 共用这份 cloud.json,其中一边登录或退出,另一边也会同步生效。
 
 ```bash
 octoterm-server cloud register        # 注册并登录(邮件验证码)

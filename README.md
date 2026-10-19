@@ -203,7 +203,8 @@ agent stores for the server user, excluding WSL, other users and custom roots.
 Signing in to Octoterm Cloud lets agent "waiting for you" events reach your phone as push notifications (mobile push lands in a later release). Everything works without signing in.
 
 - Cloud never relays terminal data and never sees this machine's access token; a push carries only the session number, agent name and tool name.
-- The sign-in state lives in `cloud.json` in the config directory (mode 0600).
+- The sign-in state lives in `cloud.json` in the config directory, with owner-only permissions (0600) on Unix.
+- The desktop app and a standalone `octoterm-server` running on the same machine share this file, so signing in (or out) from either one is reflected in both.
 
 ```bash
 octoterm-server cloud register        # sign up and sign in (email code)
