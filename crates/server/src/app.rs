@@ -27,6 +27,8 @@ pub struct AppState {
     pub agents: crate::config::AgentsConfig,
     /// agent 会话表。内存态,与 HTTP 层的生死无关(desktop 重建 HTTP 层时要沿用同一个)。
     pub agent_sessions: Arc<crate::agent::store::AgentSessionStore>,
+    /// Cloud 登录态(只读)。握手时回带 `cloud_server_id`;未登录时为空。
+    pub cloud: crate::cloud::creds::SharedCreds,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -132,6 +134,7 @@ async fn handshake(socket: &mut WebSocket, state: &AppState) -> bool {
             let _ = socket.send(control_msg(&ServerMsg::HelloOk {
                 proto: PROTO_VERSION,
                 os: std::env::consts::OS.to_string(),
+                cloud_server_id: state.cloud.server_id(),
             })).await;
             true
         }

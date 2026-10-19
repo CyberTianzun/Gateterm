@@ -35,6 +35,9 @@ pub struct Supervisor {
     /// agent 会话表由 Supervisor 长期持有 —— 重建 HTTP 层不该把它清空,
     /// 就像 SessionManager 一样。
     agent_sessions: Arc<octoterm_server::agent::store::AgentSessionStore>,
+    /// Cloud 登录态。重建 HTTP 层不重新读取 —— `SharedCreds` 自己按 (mtime, 长度)
+    /// 缓存并在每次 `get()` 时探测文件变化,不需要跟着 restart 的节奏走。
+    cloud: octoterm_server::cloud::creds::SharedCreds,
     running: Option<Running>,
 }
 
@@ -50,6 +53,9 @@ impl Supervisor {
             launchers: Arc::new(octoterm_server::launcher::providers(specs)),
             agents,
             agent_sessions: Arc::new(octoterm_server::agent::store::AgentSessionStore::new()),
+            cloud: octoterm_server::cloud::creds::SharedCreds::new(
+                octoterm_cloud_client::credentials::default_path(),
+            ),
             running: None,
         }
     }
@@ -60,6 +66,10 @@ impl Supervisor {
 
     pub fn agent_sessions(&self) -> &Arc<octoterm_server::agent::store::AgentSessionStore> {
         &self.agent_sessions
+    }
+
+    pub fn cloud_creds(&self) -> &octoterm_server::cloud::creds::SharedCreds {
+        &self.cloud
     }
 
     pub fn listen(&self) -> Option<SocketAddr> {
@@ -129,6 +139,7 @@ impl Supervisor {
             listen_port: actual.port(),
             agents: self.agents,
             agent_sessions: self.agent_sessions.clone(),
+            cloud: self.cloud.clone(),
         };
         octoterm_server::agent::history::start_index(&state, false);
         let join = tokio::spawn(async move {

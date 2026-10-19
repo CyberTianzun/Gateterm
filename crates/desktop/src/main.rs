@@ -102,7 +102,7 @@ fn main() -> Result<()> {
         octoterm_server::cloud::notifier::spawn(
             sup.manager().clone(),
             sup.agent_sessions().clone(),
-            octoterm_cloud_client::credentials::default_path(),
+            sup.cloud_creds().clone(),
         );
     }
     // 监听失败同样不是退出的理由:端口被占用时用户要能打开设置窗口换一个端口。

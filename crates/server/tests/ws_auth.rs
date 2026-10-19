@@ -1,22 +1,19 @@
 mod common;
-use common::{control, parse_server, start_test_server};
+use common::{control, parse_server, start_test_server, start_test_server_at};
 
 use futures_util::{SinkExt, StreamExt};
-use octoterm_protocol::{ClientMsg, ServerMsg, CONTROL_CHANNEL, PROTO_VERSION};
+use octoterm_protocol::{ClientMsg, ServerMsg, PROTO_VERSION};
+use octoterm_server::config::WindowSize;
 use tokio_tungstenite::tungstenite::Message;
 
 #[tokio::test]
 async fn good_token_gets_hello_ok() {
-    let url = start_test_server("s3cret").await;
-    let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
-    ws.send(control(&ClientMsg::Hello { token: "s3cret".into(), proto: PROTO_VERSION }))
-        .await
-        .unwrap();
-    let (ch, msg) = parse_server(ws.next().await.unwrap().unwrap()).unwrap();
-    assert_eq!(ch, CONTROL_CHANNEL);
-    assert_eq!(msg.unwrap(), ServerMsg::HelloOk {
+    let addr = start_test_server_at("s3cret", 1 << 20, WindowSize::default(), Vec::new()).await;
+    let msg = common::hello_and_first_control(addr, "s3cret").await;
+    assert_eq!(msg, ServerMsg::HelloOk {
             proto: PROTO_VERSION,
             os: std::env::consts::OS.to_string(),
+            cloud_server_id: None,
         });
 }
 

@@ -1112,6 +1112,7 @@ mod tests {
             listen_port: 0,
             agents: Default::default(),
             agent_sessions: Arc::new(super::super::store::AgentSessionStore::new()),
+            cloud: Default::default(),
         }
     }
 

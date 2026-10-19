@@ -8,6 +8,7 @@ use axum::routing::post;
 use octoterm_cloud_client::credentials::{self, Credentials};
 use octoterm_protocol::{AgentState, ServerMsg};
 use octoterm_server::agent::store::AgentSessionStore;
+use octoterm_server::cloud::creds::SharedCreds;
 use octoterm_server::cloud::notifier;
 use octoterm_server::session::manager::SessionManager;
 use serde_json::{Value, json};
@@ -64,7 +65,7 @@ impl Rig {
             .unwrap();
         }
         let manager = SessionManager::new(1 << 20, Default::default());
-        notifier::spawn(manager.clone(), Arc::new(AgentSessionStore::new()), Some(path));
+        notifier::spawn(manager.clone(), Arc::new(AgentSessionStore::new()), SharedCreds::new(Some(path)));
         Self { manager, dir }
     }
 

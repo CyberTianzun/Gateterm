@@ -49,9 +49,40 @@ pub async fn start_test_server_with_agents(
         listen_port: addr.port(),
         agents,
         agent_sessions: std::sync::Arc::new(octoterm_server::agent::store::AgentSessionStore::new()),
+        cloud: Default::default(),
     };
     tokio::spawn(async move { serve(listener, state).await.unwrap() });
     addr
+}
+
+/// 带 Cloud 登录态的 server,用于验证握手回带 cloud_server_id。
+pub async fn spawn_server_with_cloud(
+    cloud: octoterm_server::cloud::creds::SharedCreds,
+    token: &str,
+) -> std::net::SocketAddr {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let state = AppState {
+        manager: SessionManager::new(1 << 20, WindowSize::default()),
+        token: token.into(),
+        launchers: std::sync::Arc::new(octoterm_server::launcher::providers(&Vec::new())),
+        listen_port: addr.port(),
+        agents: Default::default(),
+        agent_sessions: std::sync::Arc::new(octoterm_server::agent::store::AgentSessionStore::new()),
+        cloud,
+    };
+    tokio::spawn(async move { serve(listener, state).await.unwrap() });
+    addr
+}
+
+/// 连上指定地址、发 hello、读回第一条控制消息并解析为 `ServerMsg`。
+/// 不像 `connect()` 那样循环跳过非 HelloOk 的消息 —— 调用方关心的就是握手回的第一条。
+pub async fn hello_and_first_control(addr: std::net::SocketAddr, token: &str) -> ServerMsg {
+    let url = format!("ws://{addr}/ws");
+    let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    ws.send(control(&ClientMsg::Hello { token: token.into(), proto: PROTO_VERSION })).await.unwrap();
+    let (_, msg) = parse_server(ws.next().await.unwrap().unwrap()).unwrap();
+    msg.unwrap()
 }
 
 pub fn control(msg: &ClientMsg) -> Message {

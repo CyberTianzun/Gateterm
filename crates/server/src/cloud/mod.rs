@@ -2,4 +2,5 @@
 //! 没登录时两者都是空操作。
 
 pub mod cli;
+pub mod creds;
 pub mod notifier;

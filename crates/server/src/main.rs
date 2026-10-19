@@ -109,12 +109,9 @@ async fn run_server() -> anyhow::Result<()> {
     }
     let agents = config.agents;
     let agent_sessions = std::sync::Arc::new(octoterm_server::agent::store::AgentSessionStore::new());
-    let state = AppState { manager, token, launchers, listen_port, agents, agent_sessions };
-    octoterm_server::cloud::notifier::spawn(
-        state.manager.clone(),
-        state.agent_sessions.clone(),
-        octoterm_cloud_client::credentials::default_path(),
-    );
+    let cloud = octoterm_server::cloud::creds::SharedCreds::new(octoterm_cloud_client::credentials::default_path());
+    let state = AppState { manager, token, launchers, listen_port, agents, agent_sessions, cloud };
+    octoterm_server::cloud::notifier::spawn(state.manager.clone(), state.agent_sessions.clone(), state.cloud.clone());
     octoterm_server::agent::history::start_index(&state, false);
     serve(listener, state).await
 }

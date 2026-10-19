@@ -104,6 +104,10 @@ pub enum ServerMsg {
         proto: u32,
         #[serde(default)]
         os: String,
+        /// 本机登录 Octoterm Cloud 后的 server_id。手机收到推送时用它找回本地保存的连接。
+        /// 新增可选字段,旧客户端忽略,不 bump proto。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cloud_server_id: Option<String>,
     },
     /// `channel` 有值时表示这个错误是针对某个具体 channel 的操作(attach/
     /// detach/resize/input)失败;省略(None)表示连接级/会话级错误,序列化时
@@ -185,11 +189,21 @@ mod tests {
     #[test]
     fn hello_ok_accepts_old_servers_and_reports_os() {
         let old: ServerMsg = serde_json::from_str(r#"{"type":"hello-ok","proto":1}"#).unwrap();
-        assert_eq!(old, ServerMsg::HelloOk { proto: 1, os: String::new() });
-        let current = ServerMsg::HelloOk { proto: 1, os: "windows".into() };
+        assert_eq!(old, ServerMsg::HelloOk { proto: 1, os: String::new(), cloud_server_id: None });
+        let current = ServerMsg::HelloOk { proto: 1, os: "windows".into(), cloud_server_id: None };
         let json = serde_json::to_value(&current).unwrap();
         assert_eq!(json["os"], "windows");
         assert_eq!(serde_json::from_value::<ServerMsg>(json).unwrap(), current);
+    }
+
+    #[test]
+    fn hello_ok_cloud_server_id_is_optional() {
+        let none = ServerMsg::HelloOk { proto: 1, os: "macos".into(), cloud_server_id: None };
+        assert!(serde_json::to_value(&none).unwrap().get("cloud_server_id").is_none());
+        let some = ServerMsg::HelloOk { proto: 1, os: "macos".into(), cloud_server_id: Some("srv".into()) };
+        let json = serde_json::to_value(&some).unwrap();
+        assert_eq!(json["cloud_server_id"], "srv");
+        assert_eq!(serde_json::from_value::<ServerMsg>(json).unwrap(), some);
     }
 
     #[test]
