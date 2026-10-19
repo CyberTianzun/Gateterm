@@ -78,10 +78,10 @@ agent 在等人时,手机收到一条系统通知;在别处处理掉后通知自
       "token": "<push_token>",
       "data": {"server_id": "...", "session": "7", "agent_id": "claude-code", "kind": "permission",
                "tool_name": "Bash", "expires_at": "1760000000"},
-      "android": {"priority": "HIGH", "collapse_key": "<server_id>:<session>", "ttl": "<秒>s"}
+      "android": {"priority": "HIGH", "collapse_key": "<server_id>:<session>:<agent_id>", "ttl": "<秒>s"}
     }}
     ```
-    data 值一律字符串;`tool_name`/`expires_at` 缺省时不出现;`ttl` 仅在有 `expires_at` 时设置(= 剩余秒数),否则用 FCM 默认。
+    data 值一律字符串;`tool_name`/`expires_at` 缺省时不出现;`ttl` 仅在有 `expires_at` 时设置(= 剩余秒数),否则用 FCM 默认。`collapse_key` 带上 `agent_id`,避免手机离线期间一个 agent 的 `resolved` 顶掉另一个 agent 还没收到的 `waiting`;`kind == "resolved"` 时 `priority` 为 `"NORMAL"`(其余为 `"HIGH"`),因为它只撤销通知、从不展示新通知,避免 FCM 因高优先级消息不产生可见通知而降权该 app。
   - 错误:错误详情含 `UNREGISTERED` → `InvalidToken`;401/403(凭据问题)、429、5xx、裸 404(无 `UNREGISTERED`,如 `FCM_API_BASE` 配错或代理返回的 404)→ `Other`,只记日志不重试(撤回 + 过期保证不会留下错误状态)。
   - 日志不得含 push_token、tool_name(沿用账号 spec 的隐私规则,隐私测试覆盖 FcmSender 路径)。
 
