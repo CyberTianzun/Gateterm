@@ -6,6 +6,9 @@ license.workspace = true
 
 [dependencies]
 octoterm-protocol = { path = "../protocol" }
+octoterm-cloud-client = { path = "../cloud-client" }
+# `cloud register/login` 在终端里读密码时不回显
+rpassword = "7"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 alacritty_terminal = "0.25"

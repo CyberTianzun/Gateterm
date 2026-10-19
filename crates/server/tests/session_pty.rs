@@ -62,14 +62,11 @@ async fn write_input_reaches_child() {
     let mut acc = Vec::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while tokio::time::Instant::now() < deadline {
-        match tokio::time::timeout(Duration::from_millis(500), rx.recv()).await {
-            Ok(Ok(SessionOutput::Data { bytes, .. })) => {
-                acc.extend_from_slice(&bytes);
-                if String::from_utf8_lossy(&acc).matches("MARKER_B").count() >= 2 {
-                    break; // 回显 + 命令输出
-                }
+        if let Ok(Ok(SessionOutput::Data { bytes, .. })) = tokio::time::timeout(Duration::from_millis(500), rx.recv()).await {
+            acc.extend_from_slice(&bytes);
+            if String::from_utf8_lossy(&acc).matches("MARKER_B").count() >= 2 {
+                break; // 回显 + 命令输出
             }
-            _ => {}
         }
     }
     assert!(String::from_utf8_lossy(&acc).contains("MARKER_B"));

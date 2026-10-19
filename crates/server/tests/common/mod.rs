@@ -124,12 +124,12 @@ pub async fn read_channel_until(ws: &mut Ws, channel: u32, needle: &str) -> Stri
         let Ok(Some(Ok(msg))) = tokio::time::timeout(timeout, ws.next()).await else {
             continue;
         };
-        if let Some((ch, Err(bytes))) = parse_server(msg) {
-            if ch == channel {
-                acc.extend_from_slice(&bytes);
-                if String::from_utf8_lossy(&acc).contains(needle) {
-                    break;
-                }
+        if let Some((ch, Err(bytes))) = parse_server(msg)
+            && ch == channel
+        {
+            acc.extend_from_slice(&bytes);
+            if String::from_utf8_lossy(&acc).contains(needle) {
+                break;
             }
         }
     }

@@ -122,6 +122,14 @@ impl Default for AgentsConfig {
     }
 }
 
+/// `[cloud]` —— 可选的 Octoterm Cloud(账号 + 手机推送中继)。
+/// `url` 只是登录时的默认地址;真正的登录态在 `cloud.json`(见 `octoterm_cloud_client::credentials`)。
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CloudConfig {
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Config {
     /// 配置文件里没写就是 `None` —— **「没指定」是个真实存在的状态**,不能在这一层
@@ -137,6 +145,8 @@ pub struct Config {
     pub launchers: Vec<LauncherSpec>,
     #[serde(default)]
     pub agents: AgentsConfig,
+    #[serde(default)]
+    pub cloud: CloudConfig,
 }
 
 
@@ -341,6 +351,14 @@ mod tests {
         }
         let (t, generated) = resolve_token(Some("  ".into()), None);
         assert!(generated && !t.trim().is_empty());
+    }
+
+    #[test]
+    fn cloud_section_is_optional() {
+        let c: Config = toml::from_str("").unwrap();
+        assert_eq!(c.cloud.url, None);
+        let c: Config = toml::from_str("[cloud]\nurl = \"https://cloud.example.com\"\n").unwrap();
+        assert_eq!(c.cloud.url.as_deref(), Some("https://cloud.example.com"));
     }
 
     #[test]
