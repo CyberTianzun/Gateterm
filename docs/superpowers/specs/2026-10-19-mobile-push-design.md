@@ -131,13 +131,14 @@ agent 在等人时,手机收到一条系统通知;在别处处理掉后通知自
 
 ### 7.1 镜像
 
-- OctotermCloud 仓库加 GitHub Actions:构建 Dockerfile,推 `ghcr.io/cybertianzun/octoterm-cloud:<git tag>` 与 `:latest`。本机无 docker,由 CI 首次验证镜像构建。
-- **前置**:OctotermCloud 需要一个 GitHub 仓库(目前无 remote);GHCR 包若为私有,ops 上的 Portainer 需配置 registry 凭据。
+- OctotermCloud 仓库(私有,`git@github.com:CyberTianzun/OctotermCloud.git`)加 GitHub Actions:构建 Dockerfile,推私有镜像仓库 `registry.hnminigames.fun/octoterm-cloud:<git tag>` 与 `:latest`。本机无 docker,由 CI 首次验证镜像构建。
+- CI 登录凭据只放在 GitHub Actions secrets `REGISTRY_USERNAME` / `REGISTRY_PASSWORD`,不进仓库、不进 workflow 明文。
+- ops 上的 Portainer 已有该 registry 的拉取凭据(部署前只读核实)。
 
 ### 7.2 Stack
 
 - `deploy/compose.yml`(入 git),Portainer Edge Stack 从 git 引用:
-  - 服务 `octoterm-cloud`:镜像如上;环境变量 `RESEND_API_KEY`、`MAIL_FROM`、`FCM_SERVICE_ACCOUNT_JSON`、`TRUST_PROXY=1` 在 stack 里设置;命名卷 `cloud-data:/data`;**不发布端口**;加入 Caddy 所在的外部 docker 网络(网络名在部署时确认,做成变量)。
+  - 服务 `octoterm-cloud`:镜像 `registry.hnminigames.fun/octoterm-cloud:<tag>`(tag 做成 stack 变量,升级只改它);环境变量 `RESEND_API_KEY`、`MAIL_FROM`、`FCM_SERVICE_ACCOUNT_JSON`、`TRUST_PROXY=1` 在 stack 里设置;命名卷 `cloud-data:/data`;**不发布端口**;加入 Caddy 所在的外部 docker 网络(网络名在部署时确认,做成变量)。
 - Caddy 站点块(按部署时确认的配置方式二选一):
   - caddy-docker-proxy:写成 `octoterm-cloud` 服务的 labels(随 git 走);
   - Caddyfile:在共享 Caddyfile 加
