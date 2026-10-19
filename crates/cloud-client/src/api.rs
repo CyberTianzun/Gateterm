@@ -159,8 +159,9 @@ impl CloudClient {
             .ok()
             .and_then(|v| v["error"].as_str().map(String::from))
             .unwrap_or_else(|| status.as_str().to_string());
-        // 只有凭据失效是 `unauthorized`;登录失败是 401 + `invalid_credentials`,不能混为一谈。
-        if code == "unauthorized" {
+        // 只有 401 + `unauthorized` 才是凭据失效;登录失败是 401 + `invalid_credentials`,
+        // 别的接口在别的状态码下复用 `unauthorized` 这个词也不算,不能混为一谈。
+        if status == StatusCode::UNAUTHORIZED && code == "unauthorized" {
             return Err(CloudError::Unauthorized);
         }
         Err(CloudError::Api { status: status.as_u16(), code })

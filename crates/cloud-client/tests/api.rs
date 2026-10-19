@@ -37,6 +37,15 @@ async fn revoked_token_is_unauthorized() {
     assert_eq!(cloud.last("GET /v1/account").auth.as_deref(), Some("Bearer oct_x"));
 }
 
+/// `unauthorized` 之外的状态码即便带着这个错误码也不是凭据失效——只信 401。
+#[tokio::test]
+async fn unauthorized_code_without_401_status_is_api_error() {
+    let cloud = FakeCloud::start().await;
+    cloud.respond("GET /v1/account", 403, json!({"error": "unauthorized"}));
+    let err = CloudClient::new(&cloud.url).account("oct_x").await.unwrap_err();
+    assert_eq!(err, CloudError::Api { status: 403, code: "unauthorized".into() });
+}
+
 #[tokio::test]
 async fn rate_limit_carries_retry_after() {
     let cloud = FakeCloud::start().await;
