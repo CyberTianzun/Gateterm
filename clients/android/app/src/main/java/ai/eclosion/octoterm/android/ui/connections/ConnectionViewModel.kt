@@ -41,6 +41,7 @@ import ai.eclosion.octoterm.android.wire.AttachMode
 import ai.eclosion.octoterm.android.wire.ClientMsg
 import ai.eclosion.octoterm.android.wire.ServerMsg
 import ai.eclosion.octoterm.android.wire.SessionInfo
+import ai.eclosion.octoterm.android.wire.TermColors
 import android.content.ClipData
 import android.os.Handler
 import android.os.Looper
@@ -658,6 +659,7 @@ class ConnectionViewModel(
                 it.copy(appearance = it.appearance.withTheme(AppearanceCodec.default(prefersDark)))
             } else it
         }
+        reportColors()
     }
 
     fun followSystemTheme() {
@@ -958,7 +960,7 @@ class ConnectionViewModel(
                 open.pendingAttach = false
                 open.lastSentCols = proposedCols
                 open.lastSentRows = proposedRows
-                client?.attach(open.id, open.channel, proposedCols, proposedRows)
+                client?.attach(open.id, open.channel, proposedCols, proposedRows, termColors())
                 continue
             }
             if (!open.paintGate.shouldSendResize()) continue
@@ -1028,6 +1030,16 @@ class ConnectionViewModel(
         for (open in opens.values) open.emulator.setMaxScrollback(next.scrollback)
         _state.update { it.copy(appearance = next, appearanceFollowsSystem = followsSystem) }
         if (activeId != null) publishTerm(allowEmpty = true)
+        reportColors()
+    }
+
+    private fun termColors(): TermColors =
+        _state.value.appearance.let { TermColors.fromRgb(it.foreground, it.background) }
+
+    /** 服务端拿这个应答 OSC 10/11 颜色查询,主题一变就得重报。 */
+    private fun reportColors() {
+        val colors = termColors()
+        for (open in opens.values) client?.setColors(open.channel, colors)
     }
 
     private fun onMain(block: () -> Unit) {

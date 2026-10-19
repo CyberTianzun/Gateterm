@@ -53,6 +53,7 @@ async fn win32_keyboard_records_survive_websocket_and_conpty() {
         last_seq: None,
         cols: 160,
         rows: 24,
+        colors: None,
     }))
     .await
     .unwrap();

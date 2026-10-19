@@ -35,7 +35,7 @@ async fn attach_echo_roundtrip() {
     let mut ws = connect(&url).await;
     let id = create_session(&mut ws, long_lived_cmd()).await;
 
-    ws.send(control(&ClientMsg::Attach { id, channel: 1, last_seq: None, cols: 100, rows: 30 }))
+    ws.send(control(&ClientMsg::Attach { id, channel: 1, last_seq: None, cols: 100, rows: 30, colors: None }))
         .await
         .unwrap();
     match next_control(&mut ws).await {
@@ -77,7 +77,7 @@ async fn reconnect_replays_missed_bytes() {
     let mut ws = connect(&url).await;
     let id = create_session(&mut ws, long_lived_cmd()).await;
 
-    ws.send(control(&ClientMsg::Attach { id, channel: 1, last_seq: None, cols: 80, rows: 24 }))
+    ws.send(control(&ClientMsg::Attach { id, channel: 1, last_seq: None, cols: 80, rows: 24, colors: None }))
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -87,7 +87,7 @@ async fn reconnect_replays_missed_bytes() {
     // 记录断点:重连时从 0 开始请求——0 仍在 1MiB 缓冲内,应得到 replay
     drop(ws);
     let mut ws2 = connect(&url).await;
-    ws2.send(control(&ClientMsg::Attach { id, channel: 5, last_seq: Some(0), cols: 80, rows: 24 }))
+    ws2.send(control(&ClientMsg::Attach { id, channel: 5, last_seq: Some(0), cols: 80, rows: 24, colors: None }))
         .await
         .unwrap();
     match next_control(&mut ws2).await {
@@ -105,7 +105,7 @@ async fn stale_seq_gets_resync() {
     // 用极小缓冲的服务端逼出超窗:start_test_server 固定 1MiB,这里直接以 last_seq 超过 end_seq 触发 resync 分支
     let mut ws = connect(&url).await;
     let id = create_session(&mut ws, long_lived_cmd()).await;
-    ws.send(control(&ClientMsg::Attach { id, channel: 1, last_seq: Some(u64::MAX), cols: 80, rows: 24 }))
+    ws.send(control(&ClientMsg::Attach { id, channel: 1, last_seq: Some(u64::MAX), cols: 80, rows: 24, colors: None }))
         .await
         .unwrap();
     match next_control(&mut ws).await {
@@ -127,13 +127,13 @@ async fn duplicate_channel_rejected() {
     let url = start_test_server("t").await;
     let mut ws = connect(&url).await;
     let id = create_session(&mut ws, long_lived_cmd()).await;
-    ws.send(control(&ClientMsg::Attach { id, channel: 1, last_seq: None, cols: 80, rows: 24 }))
+    ws.send(control(&ClientMsg::Attach { id, channel: 1, last_seq: None, cols: 80, rows: 24, colors: None }))
         .await
         .unwrap();
     loop {
         if let ServerMsg::ResyncEnd { .. } = next_control(&mut ws).await { break; }
     }
-    ws.send(control(&ClientMsg::Attach { id, channel: 1, last_seq: None, cols: 80, rows: 24 }))
+    ws.send(control(&ClientMsg::Attach { id, channel: 1, last_seq: None, cols: 80, rows: 24, colors: None }))
         .await
         .unwrap();
     assert!(matches!(next_control(&mut ws).await, ServerMsg::Error { .. }));
@@ -148,7 +148,7 @@ async fn evicted_seq_downgrades_to_resync() {
     let mut ws = connect(&url).await;
     let id = create_session(&mut ws, long_lived_cmd()).await;
 
-    ws.send(control(&ClientMsg::Attach { id, channel: 1, last_seq: None, cols: 80, rows: 24 }))
+    ws.send(control(&ClientMsg::Attach { id, channel: 1, last_seq: None, cols: 80, rows: 24, colors: None }))
         .await
         .unwrap();
     match next_control(&mut ws).await {
@@ -180,7 +180,7 @@ async fn evicted_seq_downgrades_to_resync() {
 
     drop(ws);
     let mut ws2 = connect(&url).await;
-    ws2.send(control(&ClientMsg::Attach { id, channel: 2, last_seq: Some(0), cols: 80, rows: 24 }))
+    ws2.send(control(&ClientMsg::Attach { id, channel: 2, last_seq: Some(0), cols: 80, rows: 24, colors: None }))
         .await
         .unwrap();
     match next_control(&mut ws2).await {
@@ -219,7 +219,7 @@ async fn slow_reader_gets_lag_resync() {
     // last_seq: Some(0) → 会话刚创建、buffer 里 seq 0 显然还在,attach 走 replay
     // 分支(不会自带 ResyncBegin/ResyncEnd),这样后面观察到的 resync 只可能来自
     // lag 触发,不会跟 attach 自带的初始 resync 混淆。
-    ws.send(control(&ClientMsg::Attach { id, channel: 1, last_seq: Some(0), cols: 80, rows: 24 }))
+    ws.send(control(&ClientMsg::Attach { id, channel: 1, last_seq: Some(0), cols: 80, rows: 24, colors: None }))
         .await
         .unwrap();
 

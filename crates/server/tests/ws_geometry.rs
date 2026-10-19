@@ -29,7 +29,7 @@ async fn next_resized(ws: &mut Ws, channel: u32) -> (u16, u16) {
 }
 
 async fn attach(ws: &mut Ws, id: u64, channel: u32, cols: u16, rows: u16) {
-    ws.send(control(&ClientMsg::Attach { id, channel, last_seq: None, cols, rows })).await.unwrap();
+    ws.send(control(&ClientMsg::Attach { id, channel, last_seq: None, cols, rows, colors: None })).await.unwrap();
 }
 
 /// 后到的小窗口把 pty 压到两个维度各自的最小值,并且**两端**都被告知新尺寸——
@@ -146,7 +146,7 @@ async fn latest_policy_follows_the_most_recent_request() {
     assert_eq!(next_resized(&mut a, 1).await, (120, 40), "smallest 下这里会是 100×30");
 
     // A 再动一次窗口,权威又回到 A
-    a.send(control(&ClientMsg::Resize { channel: 1, cols: 90, rows: 25 })).await.unwrap();
+    a.send(control(&ClientMsg::Resize { channel: 1, cols: 90, rows: 25, colors: None })).await.unwrap();
     assert_eq!(next_resized(&mut b, 2).await, (90, 25));
 
     a.send(control(&ClientMsg::KillSession { id })).await.unwrap();

@@ -6,7 +6,7 @@ use axum::extract::ws::{Message, WebSocket};
 use base64::Engine;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use octoterm_protocol::{AttachMode, ClientMsg, Frame, ServerMsg, CONTROL_CHANNEL};
+use octoterm_protocol::{AttachMode, ClientMsg, Frame, ServerMsg, TermColors, CONTROL_CHANNEL};
 use tokio::sync::mpsc;
 
 use crate::app::AppState;
@@ -240,7 +240,7 @@ async fn handle_control(
             }
             None => send_err(out, "no such session").await,
         },
-        ClientMsg::Attach { id, channel, last_seq, cols, rows } => {
+        ClientMsg::Attach { id, channel, last_seq, cols, rows, colors } => {
             if channel == CONTROL_CHANNEL || conn.attachments.contains_key(&channel) {
                 return send_err_ch(out, "channel unavailable", channel).await;
             }
@@ -251,6 +251,9 @@ async fn handle_control(
             // 先登记尺寸诉求再订阅:这次 attach 引起的尺寸变化广播给已有的
             // attach 就够了,本端的权威尺寸由下面的 resized 一并带出去。
             let viewport = session.viewport(cols, rows);
+            if let Some(colors) = &colors {
+                set_default_colors(&session, colors, channel);
+            }
             let rx = session.subscribe(); // 先订阅再快照,不丢中间字节
 
             // 决定 replay 还是 resync,并发送恢复数据
@@ -287,8 +290,11 @@ async fn handle_control(
             Some(a) => a.pump.abort(), // a 在此析构 → viewport 摘除 → 尺寸重算
             None => send_err_ch(out, "no such channel", channel).await,
         },
-        ClientMsg::Resize { channel, cols, rows } => match conn.attachments.get(&channel) {
+        ClientMsg::Resize { channel, cols, rows, colors } => match conn.attachments.get(&channel) {
             Some(a) => {
+                if let Some(colors) = &colors {
+                    set_default_colors(&a.session, colors, channel);
+                }
                 if let Err(e) = a.viewport.set(cols, rows) {
                     tracing::warn!(channel, error = %e, "resize failed");
                     send_err_ch(out, &format!("resize failed: {e:#}"), channel).await;
@@ -296,6 +302,13 @@ async fn handle_control(
             }
             None => send_err_ch(out, "no such channel", channel).await,
         },
+    }
+}
+
+/// 颜色写坏不影响 attach/resize 本身,只记日志:最坏是 OSC 10/11 没人回答。
+fn set_default_colors(session: &Session, colors: &TermColors, channel: u32) {
+    if let Err(e) = session.set_default_colors(colors) {
+        tracing::warn!(channel, error = %e, "ignoring client colors");
     }
 }
 

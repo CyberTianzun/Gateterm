@@ -5,21 +5,34 @@ use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term, TermMode};
-use alacritty_terminal::vte::ansi::{Color, Handler, ModifyOtherKeys, NamedColor, Processor};
+use alacritty_terminal::vte::ansi::{Color, Handler, ModifyOtherKeys, NamedColor, Processor, Rgb};
 
+/// 终端查询一律由这里应答,客户端不应答(见 clients/web/src/queries.ts)。
+///
 /// ConPTY / 应用会发 DSR 等查询(如 `ESC [ 6 n`);alacritty 解析后通过
 /// `Event::PtyWrite` 给出应答。必须写回 PTY,否则 Windows 上 shell 会一直
 /// 卡在等光标位置,表现为"命令行没启动"。
+///
+/// 颜色查询(OSC 4/10/11/12 的 `?`)alacritty 只给 `Event::ColorRequest`,
+/// 颜色由我们来查,见 [`SessionGrid::take_pty_replies`]。
 #[derive(Clone)]
 struct ReplyListener {
-    pending: Arc<Mutex<Vec<u8>>>,
+    pending: Arc<Mutex<Vec<PendingReply>>>,
+}
+
+enum PendingReply {
+    Text(String),
+    Color(usize, Arc<dyn Fn(Rgb) -> String + Sync + Send>),
 }
 
 impl EventListener for ReplyListener {
     fn send_event(&self, event: Event) {
-        if let Event::PtyWrite(text) = event {
-            self.pending.lock().unwrap().extend_from_slice(text.as_bytes());
-        }
+        let reply = match event {
+            Event::PtyWrite(text) => PendingReply::Text(text),
+            Event::ColorRequest(index, format) => PendingReply::Color(index, format),
+            _ => return,
+        };
+        self.pending.lock().unwrap().push(reply);
     }
 }
 
@@ -55,7 +68,9 @@ pub struct SessionGrid {
     key_modes_parser: Processor,
     cols: u16,
     rows: u16,
-    pty_replies: Arc<Mutex<Vec<u8>>>,
+    pty_replies: Arc<Mutex<Vec<PendingReply>>>,
+    /// 客户端报来的默认前景/背景色;没报过就不回答 OSC 10/11,让程序自己超时。
+    default_colors: Option<(Rgb, Rgb)>,
 }
 
 impl SessionGrid {
@@ -75,6 +90,7 @@ impl SessionGrid {
             cols,
             rows,
             pty_replies,
+            default_colors: None,
         }
     }
 
@@ -83,8 +99,41 @@ impl SessionGrid {
         self.key_modes_parser.advance(&mut self.key_modes, bytes);
     }
 
+    /// 取走累积的查询应答,按查询到达的顺序拼好。
+    ///
+    /// 颜色优先用程序自己设过的(OSC 4/10/11 设色),其次是客户端报来的默认
+    /// 前景/背景。都没有就不回答:编一个颜色会让程序选错深浅主题,不回答它只是
+    /// 多等一会儿然后用自己的缺省。
     pub fn take_pty_replies(&self) -> Vec<u8> {
-        std::mem::take(&mut *self.pty_replies.lock().unwrap())
+        let pending = std::mem::take(&mut *self.pty_replies.lock().unwrap());
+        let mut out = String::new();
+        for reply in pending {
+            match reply {
+                PendingReply::Text(text) => out.push_str(&text),
+                PendingReply::Color(index, format) => {
+                    if let Some(rgb) = self.query_color(index) {
+                        out.push_str(&format(rgb));
+                    }
+                }
+            }
+        }
+        out.into_bytes()
+    }
+
+    fn query_color(&self, index: usize) -> Option<Rgb> {
+        if let Some(rgb) = self.term.colors()[index] {
+            return Some(rgb);
+        }
+        let (fg, bg) = self.default_colors?;
+        match index {
+            i if i == NamedColor::Foreground as usize => Some(fg),
+            i if i == NamedColor::Background as usize => Some(bg),
+            _ => None,
+        }
+    }
+
+    pub fn set_default_colors(&mut self, fg: Rgb, bg: Rgb) {
+        self.default_colors = Some((fg, bg));
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
@@ -244,6 +293,47 @@ mod tests {
         assert!(
             reply.contains("\x1b[") && reply.contains('R'),
             "expected CPR reply like ESC[row;colR, got {reply:?}"
+        );
+    }
+
+    #[test]
+    fn background_query_is_unanswered_until_client_reports_colors() {
+        let mut g = SessionGrid::new(80, 24);
+        g.advance(b"\x1b]11;?\x1b\\");
+        assert!(g.take_pty_replies().is_empty());
+
+        g.set_default_colors(Rgb { r: 0xd4, g: 0xd4, b: 0xd4 }, Rgb { r: 0x19, g: 0x1a, b: 0x1b });
+        g.advance(b"\x1b]11;?\x1b\\");
+        assert_eq!(
+            String::from_utf8(g.take_pty_replies()).unwrap(),
+            "\x1b]11;rgb:1919/1a1a/1b1b\x1b\\"
+        );
+        g.advance(b"\x1b]10;?\x07");
+        assert_eq!(
+            String::from_utf8(g.take_pty_replies()).unwrap(),
+            "\x1b]10;rgb:d4d4/d4d4/d4d4\x07"
+        );
+    }
+
+    #[test]
+    fn color_set_by_the_program_wins_over_client_default() {
+        let mut g = SessionGrid::new(80, 24);
+        g.set_default_colors(Rgb { r: 0, g: 0, b: 0 }, Rgb { r: 0, g: 0, b: 0 });
+        g.advance(b"\x1b]11;#ffffff\x07\x1b]11;?\x07");
+        assert_eq!(
+            String::from_utf8(g.take_pty_replies()).unwrap(),
+            "\x1b]11;rgb:ffff/ffff/ffff\x07"
+        );
+    }
+
+    #[test]
+    fn replies_keep_query_order() {
+        let mut g = SessionGrid::new(80, 24);
+        g.set_default_colors(Rgb { r: 1, g: 2, b: 3 }, Rgb { r: 4, g: 5, b: 6 });
+        g.advance(b"\x1b]11;?\x07\x1b[6n");
+        assert_eq!(
+            String::from_utf8(g.take_pty_replies()).unwrap(),
+            "\x1b]11;rgb:0404/0505/0606\x07\x1b[1;1R"
         );
     }
 

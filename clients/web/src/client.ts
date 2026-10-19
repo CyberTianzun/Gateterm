@@ -6,12 +6,14 @@ import {
   encodeControl,
   encodeFrame,
 } from "./protocol";
+import type { TermColors } from "./queries";
 
 interface AttachState {
   sessionId: number;
   cols: number;
   rows: number;
   lastSeq: number | null;
+  colors: TermColors;
 }
 
 export class OctoClient {
@@ -95,6 +97,7 @@ export class OctoClient {
             last_seq: a.lastSeq,
             cols: a.cols,
             rows: a.rows,
+            colors: a.colors,
           });
         }
         this.onOpen();
@@ -125,9 +128,10 @@ export class OctoClient {
     this.ws?.send(encodeFrame(channel, bytes));
   }
 
-  attach(sessionId: number, channel: number, cols: number, rows: number) {
-    this.attachments.set(channel, { sessionId, cols, rows, lastSeq: null });
-    this.send({ type: "attach", id: sessionId, channel, last_seq: null, cols, rows });
+  /** `colors` 是本端画这个会话用的前景/背景,服务端拿它应答 OSC 10/11(见 queries.ts)。 */
+  attach(sessionId: number, channel: number, cols: number, rows: number, colors: TermColors) {
+    this.attachments.set(channel, { sessionId, cols, rows, lastSeq: null, colors });
+    this.send({ type: "attach", id: sessionId, channel, last_seq: null, cols, rows, colors });
   }
 
   /** 服务端 Data 帧没带 seq(裸字节)。lastSeq 只能从控制消息锚定:要么是
@@ -153,5 +157,15 @@ export class OctoClient {
     a.cols = cols;
     a.rows = rows;
     this.send({ type: "resize", channel, cols, rows });
+  }
+
+  /** 换了主题。协议没有单独的"改颜色"消息(新增 client→server 类型要 bump
+   *  proto),按 X4 搭在 resize 上,尺寸照旧。 */
+  setColors(channel: number, colors: TermColors) {
+    const a = this.attachments.get(channel);
+    if (!a) return;
+    if (a.colors.fg === colors.fg && a.colors.bg === colors.bg) return;
+    a.colors = colors;
+    this.send({ type: "resize", channel, cols: a.cols, rows: a.rows, colors });
   }
 }

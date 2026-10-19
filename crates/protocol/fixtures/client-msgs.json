@@ -9,6 +9,8 @@
   { "type": "preview", "id": 1 },
   { "type": "attach", "id": 1, "channel": 1, "last_seq": 42, "cols": 80, "rows": 24 },
   { "type": "attach", "id": 1, "channel": 2, "last_seq": null, "cols": 120, "rows": 40 },
+  { "type": "attach", "id": 1, "channel": 3, "last_seq": null, "cols": 80, "rows": 24, "colors": { "fg": "#d4d4d4", "bg": "#191a1b" } },
   { "type": "detach", "channel": 1 },
-  { "type": "resize", "channel": 1, "cols": 100, "rows": 30 }
+  { "type": "resize", "channel": 1, "cols": 100, "rows": 30 },
+  { "type": "resize", "channel": 1, "cols": 100, "rows": 30, "colors": { "fg": "#1e1e1e", "bg": "#ffffff" } }
 ]

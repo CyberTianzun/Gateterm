@@ -5,9 +5,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use alacritty_terminal::vte::ansi::Rgb;
 use anyhow::{bail, Context, Result};
 use bytes::Bytes;
-use octoterm_protocol::SessionInfo;
+use octoterm_protocol::{SessionInfo, TermColors};
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use tokio::sync::broadcast;
 
@@ -15,6 +16,16 @@ use crate::config::WindowSize;
 
 use super::buffer::SeqBuffer;
 use super::grid::SessionGrid;
+
+/// `#rrggbb`。
+fn parse_hex_color(s: &str) -> Result<Rgb> {
+    let hex = s.strip_prefix('#').context("missing #")?;
+    if hex.len() != 6 || !hex.is_ascii() {
+        bail!("expected #rrggbb, got {s:?}");
+    }
+    let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).context("not hex");
+    Ok(Rgb { r: channel(0)?, g: channel(2)?, b: channel(4)? })
+}
 
 pub const BROADCAST_CAP: usize = 256;
 
@@ -350,6 +361,15 @@ impl Session {
         let w = guard.as_mut().context("session pty closed")?;
         w.write_all(bytes).context("write pty input")?;
         w.flush().context("flush pty input")?;
+        Ok(())
+    }
+
+    /// 记下客户端渲染用的默认前景/背景色,用来应答 OSC 10/11。多个 attach 报的
+    /// 颜色不同时以最后一次为准:pty 只有一个,应答也只能有一份。
+    pub fn set_default_colors(&self, colors: &TermColors) -> Result<()> {
+        let fg = parse_hex_color(&colors.fg).context("bad fg color")?;
+        let bg = parse_hex_color(&colors.bg).context("bad bg color")?;
+        self.shared.lock().unwrap().grid.set_default_colors(fg, bg);
         Ok(())
     }
 

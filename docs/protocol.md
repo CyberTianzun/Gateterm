@@ -259,9 +259,9 @@ Launcher { id:str, provider:str, name:str, detail:str, command:[str], cwd:str? }
 | `kill-session` | `id:u64` | auth | kills child; → `session-event{closed}` when reaped |
 | `rename-session` | `id:u64`, `name:str` | auth | → `session-event{renamed}` broadcast |
 | `preview` | `id:u64` | auth | → `preview-data{id}` |
-| `attach` | `id:u64`, `channel:u32`, `last_seq:u64?`, `cols:u16`, `rows:u16` | auth | registers this attachment's desired size (G2), then → `attached` + recovery burst (§8) |
+| `attach` | `id:u64`, `channel:u32`, `last_seq:u64?`, `cols:u16`, `rows:u16`, `colors:TermColors?` | auth | registers this attachment's desired size (G2) and, if given, the session's default colors (D8), then → `attached` + recovery burst (§8) |
 | `detach` | `channel:u32` | attached | stops the pump, drops the desired size (G8); session keeps running (CH6) |
-| `resize` | `channel:u32`, `cols:u16`, `rows:u16` | attached | updates this attachment's desired size (G2) |
+| `resize` | `channel:u32`, `cols:u16`, `rows:u16`, `colors:TermColors?` | attached | updates this attachment's desired size (G2) and, if given, the session's default colors (D8). A theme change with an unchanged size is sent as a `resize` repeating the current size |
 
 `name: null` → server-generated default (U5). `command: null` → the built-in
 default shell, which is by construction the first entry of `GET /api/launchers`
@@ -298,6 +298,7 @@ runs as the user who started the daemon. The bearer token is the only boundary
 SessionInfo      { id:u64, name:str, cols:u16, rows:u16, created_at:u64 }  # created_at = unix seconds
 AttachMode       "replay" | "resync"
 SessionEventKind "created" | "renamed" | "closed"
+TermColors       { fg:str, bg:str }  # "#rrggbb", the colors this client paints the session's default fg/bg with
 ```
 
 ## 7. Data plane [D]
@@ -317,6 +318,19 @@ SessionEventKind "created" | "renamed" | "closed"
 - **D6** `preview-data` is the sole place VT bytes travel over the control
   channel, base64-encoded, because a preview has no channel. It is bounded by
   one screen. New messages MUST NOT carry bulk VT bytes over channel 0 (R4).
+- **D7** Terminal queries in the output stream (DA, DSR/CPR, DECRQM, XTVERSION,
+  DECRQSS, OSC 4/10/11/12 `?`) are answered **by the server only**, from its own
+  screen model, written straight to the pty. Clients MUST NOT answer them on
+  their data channel. A client-side answer travels the network twice and often
+  lands after the asking program has timed out, at which point the shell reads
+  it as typed input (`11;rgb:1919/1a1a/1b1b2;1R`); it also duplicates the
+  server's answer and is repeated whenever a replay (S4) re-feeds old queries.
+- **D8** For OSC 10/11 the server needs the client's default fg/bg, reported as
+  `colors` on `attach`/`resize`. A color the program set itself (OSC 10/11 set)
+  takes precedence. With several attachments the last report wins — the pty has
+  one answer. Before any report the server leaves OSC 10/11 unanswered rather
+  than guess. Unparseable `colors` are logged and ignored; the `attach`/`resize`
+  itself still succeeds. OSC 4/12 are answered only for colors the program set.
 
 ## 8. Session state, resume and seq [S]
 

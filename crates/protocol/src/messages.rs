@@ -60,9 +60,37 @@ pub enum ClientMsg {
     KillSession { id: u64 },
     RenameSession { id: u64, name: String },
     Preview { id: u64 },
-    Attach { id: u64, channel: u32, last_seq: Option<u64>, cols: u16, rows: u16 },
+    /// `colors` 见 [`TermColors`]。新增可选字段(X4),旧客户端不发,不 bump proto。
+    Attach {
+        id: u64,
+        channel: u32,
+        last_seq: Option<u64>,
+        cols: u16,
+        rows: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        colors: Option<TermColors>,
+    },
     Detach { channel: u32 },
-    Resize { channel: u32, cols: u16, rows: u16 },
+    /// 主题变了而尺寸没变时,客户端也可以带着原尺寸和新 `colors` 发一次 resize。
+    Resize {
+        channel: u32,
+        cols: u16,
+        rows: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        colors: Option<TermColors>,
+    },
+}
+
+/// 客户端渲染这个会话用的默认前景/背景色,`#rrggbb`。
+///
+/// 终端查询(OSC 10/11 问颜色、DSR 问光标、DA 问身份……)统一由服务端应答:
+/// 应答要赶在发问的程序超时之前到,绕一圈网络经常赶不上,迟到的应答就成了
+/// shell 的输入。光标、身份服务端自己知道,只有"客户端用什么颜色画"得由客户端
+/// 告诉它。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TermColors {
+    pub fg: String,
+    pub bg: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,10 +166,18 @@ mod tests {
 
     #[test]
     fn client_msg_wire_format() {
-        let msg = ClientMsg::Attach { id: 3, channel: 1, last_seq: Some(42), cols: 80, rows: 24 };
+        let msg = ClientMsg::Attach {
+            id: 3,
+            channel: 1,
+            last_seq: Some(42),
+            cols: 80,
+            rows: 24,
+            colors: None,
+        };
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["type"], "attach");
         assert_eq!(json["last_seq"], 42);
+        assert!(json.get("colors").is_none(), "absent colors must not be serialized");
         let back: ClientMsg = serde_json::from_value(json).unwrap();
         assert_eq!(back, msg);
     }

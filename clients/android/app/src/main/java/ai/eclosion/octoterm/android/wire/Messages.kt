@@ -31,10 +31,21 @@ sealed class ClientMsg {
         val lastSeq: Long?,
         val cols: Int,
         val rows: Int,
+        val colors: TermColors? = null,
     ) : ClientMsg()
 
     data class Detach(val channel: Int) : ClientMsg()
-    data class Resize(val channel: Int, val cols: Int, val rows: Int) : ClientMsg()
+    data class Resize(val channel: Int, val cols: Int, val rows: Int, val colors: TermColors? = null) : ClientMsg()
+}
+
+/**
+ * 本端画会话用的默认前景/背景色(`#rrggbb`),服务端拿它应答程序的 OSC 10/11 颜色查询。
+ * 终端查询只由服务端应答,客户端不答:绕一圈网络的应答常常迟到,会落进 shell 成为乱码。
+ */
+data class TermColors(val fg: String, val bg: String) {
+    companion object {
+        fun fromRgb(fg: Int, bg: Int) = TermColors("#%06x".format(fg and 0xFFFFFF), "#%06x".format(bg and 0xFFFFFF))
+    }
 }
 
 sealed class ServerMsg {

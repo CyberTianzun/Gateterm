@@ -8,6 +8,8 @@ pub mod frame;
 pub use frame::{Frame, FrameError, CONTROL_CHANNEL};
 
 pub mod messages;
-pub use messages::{AgentState, AttachMode, ClientMsg, ServerMsg, SessionEventKind, SessionInfo};
+pub use messages::{
+    AgentState, AttachMode, ClientMsg, ServerMsg, SessionEventKind, SessionInfo, TermColors,
+};
 
 pub const PROTO_VERSION: u32 = 1;

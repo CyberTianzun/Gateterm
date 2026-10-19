@@ -17,6 +17,7 @@ clients/web/test/.agents.build.mjs
 clients/web/test/.chat.build.mjs
 clients/web/test/.history.build.mjs
 clients/web/test/.keys.build.mjs
+clients/web/test/.queries.build.mjs
 
 .DS_Store
 

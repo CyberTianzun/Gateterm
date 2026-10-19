@@ -5,6 +5,7 @@ import ai.eclosion.octoterm.android.wire.ClientMsg
 import ai.eclosion.octoterm.android.wire.ControlJson
 import ai.eclosion.octoterm.android.wire.Frame
 import ai.eclosion.octoterm.android.wire.ServerMsg
+import ai.eclosion.octoterm.android.wire.TermColors
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -22,6 +23,7 @@ class OctoClient(
         var cols: Int,
         var rows: Int,
         var lastSeq: Long?,
+        var colors: TermColors,
     )
 
     var onOpen: () -> Unit = {}
@@ -63,9 +65,9 @@ class OctoClient(
         ws?.send(ByteString.of(*Frame.encode(channel, bytes)))
     }
 
-    fun attach(sessionId: Long, channel: Int, cols: Int, rows: Int) {
-        attachments[channel] = AttachState(sessionId, cols, rows, null)
-        send(ClientMsg.Attach(sessionId, channel, null, cols, rows))
+    fun attach(sessionId: Long, channel: Int, cols: Int, rows: Int, colors: TermColors) {
+        attachments[channel] = AttachState(sessionId, cols, rows, null, colors)
+        send(ClientMsg.Attach(sessionId, channel, null, cols, rows, colors))
     }
 
     fun detach(channel: Int) {
@@ -79,6 +81,15 @@ class OctoClient(
         state.cols = cols
         state.rows = rows
         send(ClientMsg.Resize(channel, cols, rows))
+    }
+
+    /** 换了主题。协议没有单独的改颜色消息(新增 client→server 类型要 bump proto),
+     *  按 X4 搭在 resize 上,尺寸照旧。 */
+    fun setColors(channel: Int, colors: TermColors) {
+        val state = attachments[channel] ?: return
+        if (state.colors == colors) return
+        state.colors = colors
+        send(ClientMsg.Resize(channel, state.cols, state.rows, colors))
     }
 
     fun noteData(channel: Int, byteLen: Int) {
@@ -166,6 +177,7 @@ class OctoClient(
                     lastSeq = state.lastSeq,
                     cols = state.cols,
                     rows = state.rows,
+                    colors = state.colors,
                 ),
             )
         }

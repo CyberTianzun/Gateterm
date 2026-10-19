@@ -28,6 +28,16 @@ class FrameAndControlTest {
     }
 
     @Test
+    fun attachAndResizeCarryColorsOnlyWhenGiven() {
+        fun json(msg: ClientMsg) = String(Frame.decode(ControlJson.encode(msg)).payload, StandardCharsets.UTF_8)
+        val colors = TermColors.fromRgb(0xD4D4D4, 0x191A1B)
+        assertEquals(TermColors("#d4d4d4", "#191a1b"), colors)
+        assertTrue(json(ClientMsg.Attach(1, 1, null, 80, 24, colors)).contains("\"colors\":{\"fg\":\"#d4d4d4\",\"bg\":\"#191a1b\"}"))
+        assertTrue(json(ClientMsg.Resize(1, 80, 24, colors)).contains("\"colors\":{"))
+        assertTrue(!json(ClientMsg.Resize(1, 80, 24)).contains("colors"))
+    }
+
+    @Test
     fun parseHelloOkAndError() {
         val ok = ControlJson.parse("""{"type":"hello-ok","proto":1}""".toByteArray())
         assertEquals(ServerMsg.HelloOk(1), ok)

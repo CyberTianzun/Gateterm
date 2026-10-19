@@ -11,6 +11,7 @@ import { OctoClient } from "./client";
 import { readToken } from "./auth";
 import { type OctoConfig, loadConfig, saveConfig, toTerminalOptions } from "./config";
 import { resolveTheme } from "./theme-catalog";
+import { swallowTerminalQueries, termColors } from "./queries";
 import { applyUiColors } from "./appearance";
 import { mountSettings } from "./settings";
 import { type Launcher, fetchLaunchers } from "./launchers";
@@ -171,6 +172,7 @@ function applyConfig(next: OctoConfig) {
   if (term) {
     term.options = toTerminalOptions(config);
     applyRenderer(term);
+    client.setColors(TERM_CHANNEL, termColors(term.options.theme));
     // 字号/行高/字距一变,cell 尺寸就变了,能放下的 cols×rows 也跟着变。xterm
     // 要一帧才把新的 cell 尺寸量出来,这里等一帧再上报,否则量到的还是旧值。
     requestAnimationFrame(refit);
@@ -333,6 +335,8 @@ function openTerminal(id: number) {
   term.open($("terminal"));
   // WebGL addon 必须在 open() 之后装:它要拿 DOM 里的 canvas 上下文。
   applyRenderer(term);
+  // onData 只该带用户输入;终端查询由服务端应答,见 queries.ts
+  swallowTerminalQueries(term);
   term.onData((d) => client.sendInput(TERM_CHANNEL, new TextEncoder().encode(d)));
   const terminal = term;
   const adapter = keyboard = new KeyboardAdapter(
@@ -375,7 +379,13 @@ function openTerminal(id: number) {
     return false;
   });
   const want = proposeSize();
-  client.attach(id, TERM_CHANNEL, want?.cols ?? term.cols, want?.rows ?? term.rows);
+  client.attach(
+    id,
+    TERM_CHANNEL,
+    want?.cols ?? term.cols,
+    want?.rows ?? term.rows,
+    termColors(term.options.theme),
+  );
   term.focus();
   renderSidebar();
   // 视图归位放在终端建好之后:showView 末尾会量尺寸

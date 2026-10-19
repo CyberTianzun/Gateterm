@@ -35,15 +35,21 @@ object ControlJson {
                     .put("last_seq", msg.lastSeq ?: JSONObject.NULL)
                     .put("cols", msg.cols)
                     .put("rows", msg.rows)
+                    .putColors(msg.colors)
             }
             is ClientMsg.Detach -> obj.put("type", "detach").put("channel", msg.channel)
             is ClientMsg.Resize ->
                 obj.put("type", "resize").put("channel", msg.channel).put("cols", msg.cols).put("rows", msg.rows)
+                    .putColors(msg.colors)
         }
         return Frame.encode(Frame.CONTROL_CHANNEL, obj.toString().toByteArray(StandardCharsets.UTF_8))
     }
 
     fun encodeHello(token: String): ByteArray = encode(ClientMsg.Hello(token))
+
+    /** 可选字段(协议 X4):没有就不写,旧服务端照常解析。 */
+    private fun JSONObject.putColors(colors: TermColors?): JSONObject =
+        if (colors == null) this else put("colors", JSONObject().put("fg", colors.fg).put("bg", colors.bg))
 
     fun parse(payload: ByteArray): ServerMsg {
         val obj = JSONObject(String(payload, StandardCharsets.UTF_8))
