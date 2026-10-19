@@ -216,4 +216,10 @@
     <string name="cloud_err_invalid_email">That email address is invalid</string>
     <string name="cloud_err_wrong_password">Wrong password</string>
     <string name="cloud_err_generic">Cloud returned an error</string>
+
+    <string name="notif_channel_name">Agent waiting alerts</string>
+    <string name="notif_waiting_title">%1$s is waiting for you</string>
+    <string name="notif_permission_title">%1$s needs your approval</string>
+    <string name="notif_permission_body">Tool: %1$s</string>
+    <string name="notif_tap_to_open">Tap to open the session</string>
 </resources>
