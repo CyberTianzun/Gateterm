@@ -59,8 +59,12 @@ pub struct ClientInfo {
 }
 
 impl ClientInfo {
+    pub fn new(kind: ClientKind, label: &str) -> Self {
+        Self { kind, label: label.to_string() }
+    }
+
     pub fn server(label: &str) -> Self {
-        Self { kind: ClientKind::Server, label: label.to_string() }
+        Self::new(ClientKind::Server, label)
     }
 }
 
@@ -116,6 +120,9 @@ pub struct Notify {
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    /// 待授权请求的过期时刻(unix 秒)。App 用它让通知到点自动消失。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
 }
 
 /// 登录时给 Cloud 看的这台机器的名字。
@@ -212,5 +219,11 @@ impl CloudClient {
     pub async fn notify(&self, token: &str, n: &Notify) -> Result<u32, CloudError> {
         let v: Value = self.send_json(self.http.post(self.url("/v1/notify")).bearer_auth(token).json(n)).await?;
         Ok(v["delivered"].as_u64().unwrap_or(0) as u32)
+    }
+
+    /// 登记本设备的推送 token(仅 device 凭据可用)。
+    pub async fn register_push_target(&self, token: &str, platform: &str, push_token: &str) -> Result<(), CloudError> {
+        let body = json!({"platform": platform, "push_token": push_token});
+        self.send(self.http.put(self.url("/v1/push-target")).bearer_auth(token).json(&body)).await.map(drop)
     }
 }

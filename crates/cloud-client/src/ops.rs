@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::api::{AccountInfo, AuthOk, ClientInfo, CloudClient, CloudError};
+use crate::api::{AccountInfo, AuthOk, ClientInfo, ClientKind, CloudClient, CloudError};
 use crate::credentials::{self, Credentials};
 
 #[derive(Debug)]
@@ -63,16 +63,24 @@ pub async fn register(
     email: &str,
     code: &str,
     password: &str,
+    kind: ClientKind,
     label: &str,
 ) -> Result<Credentials, OpsError> {
     let email = normalize_email(email);
-    let ok = CloudClient::new(url).register(&email, code.trim(), password, &ClientInfo::server(label)).await?;
+    let ok = CloudClient::new(url).register(&email, code.trim(), password, &ClientInfo::new(kind, label)).await?;
     persist(path, url, email, ok)
 }
 
-pub async fn login(path: &Path, url: &str, email: &str, password: &str, label: &str) -> Result<Credentials, OpsError> {
+pub async fn login(
+    path: &Path,
+    url: &str,
+    email: &str,
+    password: &str,
+    kind: ClientKind,
+    label: &str,
+) -> Result<Credentials, OpsError> {
     let email = normalize_email(email);
-    let ok = CloudClient::new(url).login(&email, password, &ClientInfo::server(label)).await?;
+    let ok = CloudClient::new(url).login(&email, password, &ClientInfo::new(kind, label)).await?;
     persist(path, url, email, ok)
 }
 
@@ -145,5 +153,12 @@ pub async fn delete_account(path: &Path, password: &str, code: &str) -> Result<(
 pub async fn account_status(path: &Path) -> Result<AccountInfo, OpsError> {
     let c = current(path)?;
     let r = CloudClient::new(&c.url).account(&c.token).await;
+    revoke_on_401(path, &c.token, r)
+}
+
+/// 登记本设备的推送 token。401 unauthorized 时与其它 Bearer 操作一样清掉本地凭据。
+pub async fn register_push_target(path: &Path, platform: &str, push_token: &str) -> Result<(), OpsError> {
+    let c = current(path)?;
+    let r = CloudClient::new(&c.url).register_push_target(&c.token, platform, push_token).await;
     revoke_on_401(path, &c.token, r)
 }

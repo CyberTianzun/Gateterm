@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use octoterm_cloud_client::ops::{self, OpsError};
-use octoterm_cloud_client::{CloudClient, CodePurpose};
+use octoterm_cloud_client::{ClientKind, CloudClient, CodePurpose};
 
 use crate::settings::cloud::CloudJob;
 
@@ -21,11 +21,11 @@ pub async fn run(job: CloudJob, path: PathBuf, label: String) -> Result<String, 
             })
         }
         CloudJob::Register { url, email, code, password } => {
-            let c = ops::register(&path, &url, &email, &code, &password, &label).await.map_err(msg)?;
+            let c = ops::register(&path, &url, &email, &code, &password, ClientKind::Server, &label).await.map_err(msg)?;
             Ok(format!("注册成功,已登录为 {}", c.email))
         }
         CloudJob::Login { url, email, password } => {
-            let c = ops::login(&path, &url, &email, &password, &label).await.map_err(msg)?;
+            let c = ops::login(&path, &url, &email, &password, ClientKind::Server, &label).await.map_err(msg)?;
             Ok(format!("已登录为 {}", c.email))
         }
         CloudJob::ResetPassword { url, email, code, password } => {

@@ -99,7 +99,7 @@ pub fn spawn(manager: Arc<SessionManager>, store: Arc<AgentSessionStore>, cred_p
                 .as_ref()
                 .and_then(|id| store.list_pending().into_iter().find(|p| &p.id == id))
                 .and_then(|p| p.tool_name);
-            let note = Notify { session, agent_id, kind: kind.into(), tool_name };
+            let note = Notify { session, agent_id, kind: kind.into(), tool_name, expires_at: None };
             let client = clients.entry(creds.url.clone()).or_insert_with(|| Arc::new(CloudClient::new(&creds.url))).clone();
             tokio::spawn(send(path.clone(), client, creds, note));
         }

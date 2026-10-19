@@ -1,6 +1,7 @@
 mod common;
 
 use common::FakeCloud;
+use octoterm_cloud_client::ClientKind;
 use octoterm_cloud_client::credentials;
 use octoterm_cloud_client::ops::{self, OpsError};
 use serde_json::json;
@@ -14,9 +15,17 @@ async fn register_saves_credentials_with_normalized_email() {
     let cloud = FakeCloud::start().await;
     cloud.respond("POST /v1/auth/register", 201, json!({"token": "oct_t", "account_id": "a", "server_id": "s"}));
     let dir = tempfile::tempdir().unwrap();
-    let c = ops::register(&path(&dir), &format!("{}/", cloud.url), " A@Example.com ", "123456", "pw-pw-pw", "box")
-        .await
-        .unwrap();
+    let c = ops::register(
+        &path(&dir),
+        &format!("{}/", cloud.url),
+        " A@Example.com ",
+        "123456",
+        "pw-pw-pw",
+        ClientKind::Server,
+        "box",
+    )
+    .await
+    .unwrap();
     assert_eq!(c.email, "a@example.com");
     assert_eq!(c.url, cloud.url);
     assert_eq!(credentials::load(&path(&dir)).unwrap(), Some(c));
@@ -28,14 +37,14 @@ async fn failed_login_writes_nothing() {
     let cloud = FakeCloud::start().await;
     cloud.respond("POST /v1/auth/login", 401, json!({"error": "invalid_credentials"}));
     let dir = tempfile::tempdir().unwrap();
-    let err = ops::login(&path(&dir), &cloud.url, "a@example.com", "nope", "box").await.unwrap_err();
+    let err = ops::login(&path(&dir), &cloud.url, "a@example.com", "nope", ClientKind::Server, "box").await.unwrap_err();
     assert_eq!(err.user_message(), "邮箱或密码错误");
     assert_eq!(credentials::load(&path(&dir)).unwrap(), None);
 }
 
 async fn logged_in(cloud: &FakeCloud, dir: &tempfile::TempDir) {
     cloud.respond("POST /v1/auth/login", 200, json!({"token": "oct_t", "account_id": "a", "server_id": "s"}));
-    ops::login(&path(dir), &cloud.url, "a@example.com", "pw-pw-pw", "box").await.unwrap();
+    ops::login(&path(dir), &cloud.url, "a@example.com", "pw-pw-pw", ClientKind::Server, "box").await.unwrap();
 }
 
 #[tokio::test]
@@ -184,5 +193,26 @@ async fn delete_account_flow() {
 
     cloud.respond("DELETE /v1/account", 204, json!(null));
     ops::delete_account(&path(&dir), "pw-pw-pw", "123456").await.unwrap();
+    assert_eq!(credentials::load(&path(&dir)).unwrap(), None);
+}
+
+#[tokio::test]
+async fn device_login_sends_device_kind() {
+    let cloud = FakeCloud::start().await;
+    cloud.respond("POST /v1/auth/login", 200, json!({"token": "oct_d", "account_id": "a"}));
+    let dir = tempfile::tempdir().unwrap();
+    ops::login(&path(&dir), &cloud.url, "a@example.com", "pw-pw-pw", ClientKind::Device, "Pixel 9").await.unwrap();
+    assert_eq!(cloud.last("POST /v1/auth/login").body["client"], json!({"kind": "device", "label": "Pixel 9"}));
+}
+
+#[tokio::test]
+async fn register_push_target_revokes_on_401() {
+    let cloud = FakeCloud::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    logged_in(&cloud, &dir).await;
+    cloud.respond("PUT /v1/push-target", 204, json!(null));
+    ops::register_push_target(&path(&dir), "fcm", "tok").await.unwrap();
+    cloud.respond("PUT /v1/push-target", 401, json!({"error": "unauthorized"}));
+    assert!(ops::register_push_target(&path(&dir), "fcm", "tok").await.is_err());
     assert_eq!(credentials::load(&path(&dir)).unwrap(), None);
 }

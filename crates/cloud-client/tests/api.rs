@@ -5,6 +5,25 @@ use octoterm_cloud_client::{ClientInfo, CloudClient, CloudError, CodePurpose, No
 use serde_json::json;
 
 #[tokio::test]
+async fn register_push_target_puts_platform_and_token() {
+    let cloud = FakeCloud::start().await;
+    cloud.respond("PUT /v1/push-target", 204, json!(null));
+    CloudClient::new(&cloud.url).register_push_target("oct_d", "fcm", "fcm-token-1").await.unwrap();
+    let seen = cloud.last("PUT /v1/push-target");
+    assert_eq!(seen.auth.as_deref(), Some("Bearer oct_d"));
+    assert_eq!(seen.body, json!({"platform": "fcm", "push_token": "fcm-token-1"}));
+}
+
+#[tokio::test]
+async fn notify_includes_expires_at_only_when_set() {
+    let cloud = FakeCloud::start().await;
+    cloud.respond("POST /v1/notify", 202, json!({"delivered": 1}));
+    let n = Notify { session: 1, agent_id: "a".into(), kind: "permission".into(), tool_name: None, expires_at: Some(123) };
+    CloudClient::new(&cloud.url).notify("t", &n).await.unwrap();
+    assert_eq!(cloud.last("POST /v1/notify").body["expires_at"], 123);
+}
+
+#[tokio::test]
 async fn login_parses_auth_and_sends_client_info() {
     let cloud = FakeCloud::start().await;
     cloud.respond("POST /v1/auth/login", 200, json!({"token": "oct_t", "account_id": "a1", "server_id": "s1"}));
@@ -64,7 +83,7 @@ async fn unreachable_cloud() {
 async fn notify_sends_minimal_payload() {
     let cloud = FakeCloud::start().await;
     cloud.respond("POST /v1/notify", 202, json!({"delivered": 2}));
-    let n = Notify { session: 7, agent_id: "claude-code".into(), kind: "waiting".into(), tool_name: None };
+    let n = Notify { session: 7, agent_id: "claude-code".into(), kind: "waiting".into(), tool_name: None, expires_at: None };
     assert_eq!(CloudClient::new(&cloud.url).notify("oct_s", &n).await.unwrap(), 2);
     let seen = cloud.last("POST /v1/notify");
     assert_eq!(seen.body, json!({"session": 7, "agent_id": "claude-code", "kind": "waiting"}));

@@ -5,7 +5,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use octoterm_cloud_client::ops::{self, OpsError};
-use octoterm_cloud_client::{CloudClient, CloudError, CodePurpose, credentials, default_label};
+use octoterm_cloud_client::{ClientKind, CloudClient, CloudError, CodePurpose, credentials, default_label};
 
 #[derive(clap::Subcommand, Debug, Clone, Copy)]
 pub enum CloudCmd {
@@ -110,7 +110,7 @@ async fn dispatch(cmd: CloudCmd, path: &Path, default_url: Option<String>) -> Re
             println!("验证码已发送到 {email}(10 分钟内有效)");
             let code = ask("验证码:")?;
             let password = ask_new_password()?;
-            let c = ops::register(path, &url, &email, &code, &password, &default_label()).await.map_err(msg)?;
+            let c = ops::register(path, &url, &email, &code, &password, ClientKind::Server, &default_label()).await.map_err(msg)?;
             println!("注册成功,本机已登录为 {}", c.email);
         }
         CloudCmd::Login => {
@@ -120,7 +120,7 @@ async fn dispatch(cmd: CloudCmd, path: &Path, default_url: Option<String>) -> Re
             let url = ask_url(default_url)?;
             let email = ask("邮箱:")?;
             let password = ask_secret("密码:")?;
-            let c = ops::login(path, &url, &email, &password, &default_label()).await.map_err(msg)?;
+            let c = ops::login(path, &url, &email, &password, ClientKind::Server, &default_label()).await.map_err(msg)?;
             println!("已登录为 {}", c.email);
         }
         CloudCmd::Logout => match ops::logout(path).await {
