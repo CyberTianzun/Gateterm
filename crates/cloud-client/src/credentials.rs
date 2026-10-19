@@ -6,6 +6,7 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -36,12 +37,18 @@ pub fn load(path: &Path) -> io::Result<Option<Credentials>> {
     }
 }
 
+/// 同进程内给临时文件名去重;配合 pid 后就不会和另一个 CLI/desktop/notifier 进程撞上。
+static SAVE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 pub fn save(path: &Path, creds: &Credentials) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
-    let tmp = path.with_extension("json.tmp");
-    // 先删:OpenOptions 的 mode 只在创建时生效,残留的临时文件可能是别的权限。
+    // 每次调用独占一个临时文件名:CLI、desktop、notifier 可能同时往同一个 cloud.json
+    // 写,共享一个固定的 `.tmp` 名会让它们互相踩到对方还没 rename 完的临时文件。
+    let n = SAVE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_extension(format!("json.{}.{n}.tmp", std::process::id()));
+    // 先删:这个名字本该是独占的,但万一是上次崩溃留下的残留,mode 只在创建时生效。
     let _ = fs::remove_file(&tmp);
     {
         let mut opts = fs::OpenOptions::new();
@@ -106,5 +113,36 @@ mod tests {
         let path = dir.path().join("cloud.json");
         fs::write(&path, b"{not json").unwrap();
         assert!(load(&path).is_err());
+    }
+
+    /// CLI、desktop、notifier 都可能同时往同一个 cloud.json 写:并发 save() 不该互相
+    /// 踩到对方的临时文件(表现为莫名其妙的 AlreadyExists / NotFound)。
+    #[test]
+    fn concurrent_saves_do_not_clobber_each_others_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cloud.json");
+        let results: Vec<io::Result<()>> = std::thread::scope(|scope| {
+            (0..16)
+                .map(|i| {
+                    let path = &path;
+                    scope.spawn(move || {
+                        let creds = Credentials {
+                            url: "https://cloud.example.com".into(),
+                            email: format!("user{i}@example.com"),
+                            token: format!("oct_token_{i}"),
+                            server_id: None,
+                        };
+                        save(path, &creds)
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect()
+        });
+        for r in &results {
+            assert!(r.is_ok(), "concurrent save() failed: {r:?}");
+        }
+        assert!(load(&path).unwrap().is_some());
     }
 }
