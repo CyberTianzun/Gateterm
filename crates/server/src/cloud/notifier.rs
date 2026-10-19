@@ -29,26 +29,32 @@ pub fn classify(prev: Option<&(AgentState, Option<String>)>, state: AgentState, 
     (!was_waiting || new_pending).then_some(if pending.is_some() { "permission" } else { "waiting" })
 }
 
-/// 按 mtime 缓存的 cloud.json:desktop 登录/退出后不用重启 server 就能生效。
+/// 按 (mtime, 文件长度) 缓存的 cloud.json:desktop 登录/退出后不用重启 server 就能生效。
+/// 单看 mtime 在粗粒度文件系统上不够:同一个 tick 里内容换了,mtime 可能没变。
 struct CredCache {
     path: PathBuf,
-    cached: Option<(SystemTime, Credentials)>,
+    cached: Option<((SystemTime, u64), Credentials)>,
 }
 
 impl CredCache {
     fn get(&mut self) -> Option<Credentials> {
-        let Ok(mtime) = std::fs::metadata(&self.path).and_then(|m| m.modified()) else {
+        let Ok(meta) = std::fs::metadata(&self.path) else {
             self.cached = None;
             return None;
         };
-        if let Some((t, c)) = &self.cached
-            && *t == mtime
+        let Ok(mtime) = meta.modified() else {
+            self.cached = None;
+            return None;
+        };
+        let key = (mtime, meta.len());
+        if let Some((k, c)) = &self.cached
+            && *k == key
         {
             return Some(c.clone());
         }
         match credentials::load(&self.path) {
             Ok(Some(c)) => {
-                self.cached = Some((mtime, c.clone()));
+                self.cached = Some((key, c.clone()));
                 Some(c)
             }
             Ok(None) => {
@@ -68,6 +74,8 @@ pub fn spawn(manager: Arc<SessionManager>, store: Arc<AgentSessionStore>, cred_p
     let mut rx = manager.events();
     tokio::spawn(async move {
         let mut cache = CredCache { path: path.clone(), cached: None };
+        // 同一个 Cloud url 复用一个 reqwest::Client(连接池),而不是每次推送都新建一个。
+        let mut clients: HashMap<String, Arc<CloudClient>> = HashMap::new();
         let mut last: HashMap<(String, String), (AgentState, Option<String>)> = HashMap::new();
         loop {
             let msg = match rx.recv().await {
@@ -92,13 +100,14 @@ pub fn spawn(manager: Arc<SessionManager>, store: Arc<AgentSessionStore>, cred_p
                 .and_then(|id| store.list_pending().into_iter().find(|p| &p.id == id))
                 .and_then(|p| p.tool_name);
             let note = Notify { session, agent_id, kind: kind.into(), tool_name };
-            tokio::spawn(send(path.clone(), creds, note));
+            let client = clients.entry(creds.url.clone()).or_insert_with(|| Arc::new(CloudClient::new(&creds.url))).clone();
+            tokio::spawn(send(path.clone(), client, creds, note));
         }
     });
 }
 
-async fn send(path: PathBuf, creds: Credentials, note: Notify) {
-    match CloudClient::new(&creds.url).notify(&creds.token, &note).await {
+async fn send(path: PathBuf, client: Arc<CloudClient>, creds: Credentials, note: Notify) {
+    match client.notify(&creds.token, &note).await {
         Ok(_) => {}
         Err(CloudError::Unauthorized) => {
             // 只删「还是这把 token」的文件:期间用户可能已经重新登录了。
@@ -117,6 +126,31 @@ async fn send(path: PathBuf, creds: Credentials, note: Notify) {
 mod tests {
     use super::*;
     use AgentState::*;
+
+    /// 粗粒度文件系统(常见于 HFS+/一些容器挂载)上 mtime 的精度可能只有 1 秒;
+    /// 同一秒内两次写入内容不同但 mtime 相同的 cloud.json,缓存键只看 mtime 会读到旧内容。
+    #[test]
+    fn cred_cache_busts_on_length_change_even_when_mtime_is_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cloud.json");
+        let creds1 = Credentials { url: "https://cloud.example.com".into(), email: "a@example.com".into(), token: "t1".into(), server_id: None };
+        credentials::save(&path, &creds1).unwrap();
+        let mtime1 = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let mut cache = CredCache { path: path.clone(), cached: None };
+        assert_eq!(cache.get(), Some(creds1));
+
+        let creds2 = Credentials {
+            url: "https://cloud.example.com".into(),
+            email: "someone-else@example.com".into(),
+            token: "a-much-longer-replacement-token".into(),
+            server_id: Some("srv-2".into()),
+        };
+        credentials::save(&path, &creds2).unwrap();
+        // 把新内容的 mtime 强行拨回旧值,模拟低精度文件系统下两次写撞在同一个 tick 里。
+        std::fs::File::open(&path).unwrap().set_modified(mtime1).unwrap();
+
+        assert_eq!(cache.get(), Some(creds2), "内容变了但 mtime 没变时,缓存也该失效");
+    }
 
     #[test]
     fn classify_transitions() {

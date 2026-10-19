@@ -103,7 +103,11 @@ async fn new_pending_request_notifies_as_permission() {
     rig.manager.publish(event(AgentState::Waiting, None));
     rig.manager.publish(event(AgentState::Waiting, Some("p1")));
     wait_for(&seen, 2).await;
-    assert_eq!(seen.lock().unwrap()[1]["kind"], "permission");
+    // 两条推送是各自独立 spawn 出去的 HTTP 请求,到达假 Cloud 的顺序不保证跟发出顺序一致;
+    // 只断言两种 kind 都收到了,别靠下标。
+    let seen = seen.lock().unwrap().clone();
+    assert!(seen.iter().any(|v| v["kind"] == "waiting"), "{seen:?}");
+    assert!(seen.iter().any(|v| v["kind"] == "permission"), "{seen:?}");
 }
 
 #[tokio::test]
