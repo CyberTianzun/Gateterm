@@ -78,6 +78,50 @@ fn blocking_hook_gets_a_human_sized_timeout() {
     let doc = installed(home.path(), json!({}));
     assert_eq!(doc["hooks"]["PermissionRequest"][0]["hooks"][0]["timeout"], 600);
     assert_eq!(doc["hooks"]["Stop"][0]["hooks"][0]["timeout"], 30);
+    for event in ["Interrupt", "SessionEnd"] {
+        let hook = &doc["hooks"][event][0]["hooks"][0];
+        assert_eq!(hook["timeout"], 3, "{event} 的超时不能超过 Codex 的上限");
+        assert!(hook["command"].as_str().unwrap().contains(
+            &format!("/hook/codex/{}", octoterm_server::agent::edit::slug_of_event(event))
+        ));
+    }
+}
+
+#[test]
+fn interrupt_keeps_the_session_but_session_end_finishes_it() {
+    use octoterm_protocol::AgentState;
+    let adapter = find("codex").unwrap();
+    assert_eq!(adapter.parse("Interrupt", &json!({})).unwrap().state, Some(AgentState::Idle));
+    assert_eq!(adapter.parse("Stop", &json!({})).unwrap().state, Some(AgentState::Idle));
+    assert_eq!(adapter.parse("SessionEnd", &json!({})).unwrap().state, Some(AgentState::Done));
+}
+
+#[tokio::test]
+async fn ctrl_c_updates_the_http_snapshot_and_broadcasts_the_transition() {
+    use octoterm_protocol::{AgentState, ServerMsg};
+    let addr = common::start_test_server_at("t", 1 << 16, Default::default(), vec![]).await;
+    let mut ws = common::connect(&format!("ws://{addr}/ws")).await;
+    let client = reqwest::Client::new();
+    for (event, expected) in [
+        ("session-start", AgentState::Idle),
+        ("pre-tool-use", AgentState::Working),
+        ("interrupt", AgentState::Idle),
+        ("user-prompt-submit", AgentState::Thinking),
+        ("session-end", AgentState::Done),
+    ] {
+        let response = client.post(format!("http://{addr}/hook/codex/{event}"))
+            .bearer_auth(hook_token())
+            .header("X-Octoterm-Session", "9")
+            .json(&json!({"session_id": "cx-ctrl-c"}))
+            .send().await.unwrap();
+        assert_eq!(response.status(), 200);
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), common::next_control(&mut ws))
+            .await.unwrap();
+        assert!(matches!(event, ServerMsg::AgentEvent { state, .. } if state == expected));
+        let body: Value = client.get(format!("http://{addr}/api/agents/sessions"))
+            .bearer_auth("t").send().await.unwrap().json().await.unwrap();
+        assert_eq!(body["sessions"][0]["state"], serde_json::to_value(expected).unwrap());
+    }
 }
 
 #[test]

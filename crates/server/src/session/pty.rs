@@ -68,6 +68,8 @@ struct Shared {
 
 pub struct Session {
     pub id: u64,
+    /// PTY 的根进程,用来把终端内的 CLI 与共享后台进程区分开。
+    pub process_id: Option<u32>,
     created_at: u64,
     window_size: WindowSize,
     shared: Mutex<Shared>,
@@ -245,6 +247,7 @@ impl Session {
 
         let session = Arc::new(Session {
             id,
+            process_id: child.process_id(),
             created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
             window_size,
             shared: Mutex::new(Shared {

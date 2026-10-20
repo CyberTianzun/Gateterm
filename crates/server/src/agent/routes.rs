@@ -322,6 +322,7 @@ pub async fn hook(
         state.manager.publish(gone.to_msg());
     }
     state.manager.publish(snapshot.to_msg());
+    super::process::watch_codex(&state, &snapshot, &event).await;
     match adapter.telemetry_reply() {
         Some(body) => (StatusCode::OK, Json(body)).into_response(),
         None => StatusCode::OK.into_response(),
@@ -364,12 +365,15 @@ async fn blocking_hook(
     // 先确保会话存在,并把工具名带进去 —— 广播出去的 `AgentEvent.detail` 就是它。
     // 命令原文(`tool_input`)**不进广播**:控制通道有 4 KiB 上限且不许走大块数据
     // (协议 §10 / R4),客户端要详情就去拉 `/api/agents/pending`。
-    state.agent_sessions.apply(
+    let snapshot = state.agent_sessions.apply(
         adapter.id(),
         agent_session_id,
         Some(session),
         Update { detail: tool_name.clone(), ..Default::default() },
     );
+    if snapshot.state == octoterm_protocol::AgentState::Done {
+        return Json(adapter.render(&Decision::NoDecision)).into_response();
+    }
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -391,6 +395,7 @@ async fn blocking_hook(
     let guard = PendingGuard { store: state.agent_sessions.clone(), id: id.clone() };
     if let Some(s) = state.agent_sessions.snapshot(adapter.id(), agent_session_id) {
         state.manager.publish(s.to_msg());
+        super::process::watch_codex(state, &s, "PermissionRequest").await;
     }
 
     // 我们的超时必须短于写进 hook 的那个(600 秒):超时由我们主动写「无决定」,

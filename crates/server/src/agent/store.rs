@@ -166,6 +166,8 @@ pub struct AgentSession {
     /// 用户「知道了」的时刻。清理的空闲基准取 `max(updated_at, acked_at)` ——
     /// 否则用户刚看过一眼的会话会因为「很久没有新事件」被扫掉。
     pub acked_at: u64,
+    #[serde(skip)]
+    pub(crate) process: Option<super::process::Identity>,
 }
 
 impl AgentSession {
@@ -241,12 +243,16 @@ pub enum AnswerResult {
 /// 网络抖动重试一次,拿到的会是 404「这个请求根本不存在」,而事实是「你已经答过了」。
 /// 这两件事对客户端不是一回事,不能混成同一个码。
 const ANSWERED_MEMORY: usize = 64;
+const RETIRED_PROCESS_MEMORY: usize = 64;
 
 #[derive(Default)]
 pub struct AgentSessionStore {
     pub(crate) history: Mutex<super::history::Catalog>,
     pub(crate) history_open: tokio::sync::Mutex<()>,
     sessions: Mutex<HashMap<(String, String), AgentSession>>,
+    /// Codex 的共享后台进程可能在 CLI 退出后补发工具事件。保留少量结束记录,
+    /// 直到新的 SessionStart/UserPromptSubmit,避免旧事件把已关闭的聊天入口重新打开。
+    retired_processes: Mutex<VecDeque<AgentSession>>,
     pending: Mutex<HashMap<String, PendingEntry>>,
     answered: Mutex<VecDeque<String>>,
     sweeper_started: AtomicBool,
@@ -359,6 +365,16 @@ impl AgentSessionStore {
         let supports = crate::agent::find(agent_id).is_some_and(|a| a.supports_transcript());
         let key = (agent_id.to_string(), agent_session_id.to_string());
         let mut guard = self.sessions.lock().unwrap();
+        {
+            let mut retired = self.retired_processes.lock().unwrap();
+            let matches = |s: &AgentSession| s.agent_id == agent_id
+                && s.agent_session_id == agent_session_id && s.session == session;
+            if supersede {
+                retired.retain(|s| !matches(s));
+            } else if let Some(gone) = retired.iter().find(|s| matches(s)) {
+                return (gone.clone(), Vec::new());
+            }
+        }
         let mut superseded = Vec::new();
         if supersede
             && let Some(host) = session
@@ -387,6 +403,7 @@ impl AgentSessionStore {
             pending: None,
             updated_at: now(),
             acked_at: 0,
+            process: None,
         });
         if let Some(s) = up.state {
             entry.state = s;
@@ -430,6 +447,49 @@ impl AgentSessionStore {
             .unwrap()
             .get(&(agent_id.to_string(), agent_session_id.to_string()))
             .cloned()
+    }
+
+    pub(crate) fn bind_process(&self, s: &AgentSession, process: super::process::Identity) -> bool {
+        let mut guard = self.sessions.lock().unwrap();
+        let Some(current) = guard.get_mut(&(s.agent_id.clone(), s.agent_session_id.clone())) else {
+            return false;
+        };
+        if current.session != s.session || current.state == AgentState::Done
+            || current.process == Some(process)
+        {
+            return false;
+        }
+        current.process = Some(process);
+        true
+    }
+
+    /// 只移除仍绑定这个进程的会话,旧进程的监视器不能删掉后来 resume 的新实例。
+    pub(crate) fn finish_process(
+        &self,
+        s: &AgentSession,
+        process: super::process::Identity,
+    ) -> Option<AgentSession> {
+        let mut guard = self.sessions.lock().unwrap();
+        let key = (s.agent_id.clone(), s.agent_session_id.clone());
+        let current = guard.get(&key)?;
+        if current.session != s.session || current.process != Some(process) {
+            return None;
+        }
+        let mut gone = guard.remove(&key)?;
+        let pending = gone.pending.take();
+        gone.state = AgentState::Done;
+        {
+            let mut retired = self.retired_processes.lock().unwrap();
+            retired.push_back(gone.clone());
+            while retired.len() > RETIRED_PROCESS_MEMORY {
+                retired.pop_front();
+            }
+        }
+        drop(guard);
+        if let Some(id) = pending {
+            self.answer(&id, Decision::NoDecision);
+        }
+        Some(gone)
     }
 
     pub fn list(&self) -> Vec<AgentSession> {
@@ -652,6 +712,7 @@ mod tests {
             pending: None,
             updated_at,
             acked_at: 0,
+            process: None,
         }
     }
 

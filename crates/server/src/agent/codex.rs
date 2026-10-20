@@ -36,11 +36,11 @@ use octoterm_protocol::AgentState;
 
 pub struct Codex;
 
-/// 只装本机上已被 Codex 接受过的那六个事件。
-///
-/// 二进制里能看到更多事件名(SessionEnd、SubagentStart、PreCompact…),但没实测过,
-/// 而多装一个不被接受的事件可能让整份 hooks.json 被拒。宁可少,不冒险。
-const TELEMETRY: &[&str] = &["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"];
+/// Interrupt 只结束当前回合;SessionEnd 才结束会话。漏装前者会在 Ctrl+C 后卡在
+/// working,漏装后者会在退出后继续显示聊天入口。
+const TELEMETRY: &[&str] = &[
+    "SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "Interrupt",
+];
 const BLOCKING: &[&str] = &["PermissionRequest"];
 
 const TELEMETRY_TIMEOUT_SECS: u64 = 30;
@@ -55,10 +55,16 @@ fn hooks_path(home: &Path) -> PathBuf {
 }
 
 fn hook_spec(port: u16, event: &str, blocking: bool) -> Value {
+    // Codex 对退出/中断 hook 的超时上限是 3 秒,不能沿用普通遥测的 30 秒。
+    let timeout = match event {
+        "SessionEnd" | "Interrupt" => 3,
+        _ if blocking => BLOCKING_TIMEOUT_SECS,
+        _ => TELEMETRY_TIMEOUT_SECS,
+    };
     json!({
         "type": "command",
         "command": super::hook_cli::command_for("codex", port, event),
-        "timeout": if blocking { BLOCKING_TIMEOUT_SECS } else { TELEMETRY_TIMEOUT_SECS },
+        "timeout": timeout,
     })
 }
 
@@ -80,7 +86,7 @@ fn state_of(event: &str) -> Option<AgentState> {
         "SessionEnd" => AgentState::Done,
         "UserPromptSubmit" => AgentState::Thinking,
         "PreToolUse" | "PostToolUse" => AgentState::Working,
-        "Stop" => AgentState::Idle,
+        "Stop" | "Interrupt" => AgentState::Idle,
         _ => return None,
     })
 }
