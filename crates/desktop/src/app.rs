@@ -34,6 +34,7 @@ pub enum UserEvent {
     SessionsChanged,
     /// 设置窗口发起的 Cloud 操作完成了(在 tokio 线程上跑,结果经 proxy 送回主线程)。
     CloudDone(crate::settings::cloud::CloudAction, Result<String, String>),
+    UpdateAvailable(octoterm_server::update::ReleaseUpdate),
 }
 
 /// 把监听地址的 IP 部分整理成用户能直接用的样子:`0.0.0.0` / `::` 这类「监听所有
@@ -319,6 +320,20 @@ impl App {
         });
     }
 
+    /// Check once after the tray is ready; show native dialogs on the main thread.
+    fn check_for_updates(&self) {
+        let proxy = self.proxy.clone();
+        self.rt.spawn(async move {
+            match octoterm_server::update::check_latest(env!("CARGO_PKG_VERSION")).await {
+                Ok(Some(update)) => {
+                    proxy.send_event(UserEvent::UpdateAvailable(update)).ok();
+                }
+                Ok(None) => {}
+                Err(e) => tracing::debug!(error = %e, "检查更新失败"),
+            }
+        });
+    }
+
     /// 建托盘。成功了顺手把随之而来的一次性初始化做掉,失败了排重试、退避用完就
     /// 弹框退出。
     ///
@@ -334,6 +349,7 @@ impl App {
                 self.tray_retry_at = None;
                 self.watch_sessions(self.sup.manager().clone());
                 self.refresh_status();
+                self.check_for_updates();
 
                 // 起不来的时候必须主动把窗口推到用户面前:这时候 Web UI 是打不开的,
                 // 设置窗口是唯一的出路。
@@ -446,14 +462,8 @@ const CANCEL_LABEL: &str = "取消";
 /// 平台差异(rfd 0.15.4 实测,与 brief 的写法有出入):
 /// * macOS 无父窗口时走 `CFUserNotificationDisplayAlert`,自定义按钮文案生效,
 ///   点第一个按钮返回 `Custom(QUIT_LABEL)`;
-/// * Windows 在**没开** `common-controls-v6` 特性时,`OkCancelCustom` 会退化成
-///   普通的 `MessageBoxW(MB_OKCANCEL)`,按钮是系统本地化的「确定 / 取消」,返回的
-///   是 `MessageDialogResult::Ok` 而**不是** `Custom`。所以这里两种都认,只比
-///   `Custom` 的话 Windows 上会永远退不出去。
-///
-/// (没有开 `common-controls-v6` 是有意的:那条路径走 `TaskDialogIndirect`,它只
-/// 存在于 comctl32 v6,而要激活 v6 得给 exe 嵌一份 side-by-side 清单 —— 缺清单时
-/// 是**加载期**符号解析失败,整个程序起不来,代价远大于按钮上少两个汉字。)
+/// * Windows 启用 `common-controls-v6`,并由 build.rs 嵌入激活清单,支持自定义
+///   按钮文案。保留 `Ok` 判断以兼容未使用该特性的 rfd 后端。
 fn confirm_quit(sessions: usize) -> bool {
     let result = rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Warning)
@@ -533,6 +543,17 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if let Some(w) = &self.settings_window {
                     w.request_redraw();
+                }
+            }
+            UserEvent::UpdateAvailable(update) => {
+                if crate::dialog::confirm_update(env!("CARGO_PKG_VERSION"), &update)
+                    && let Err(e) = open::that_detached(&update.url)
+                {
+                    tracing::error!(error = %e, "打开 Release 页面失败");
+                    crate::dialog::notice(
+                        "无法打开 Release 页面",
+                        &format!("请在浏览器中打开以下链接:\n\n{}\n\n{e}", update.url),
+                    );
                 }
             }
             UserEvent::MenuClicked(MenuAction::OpenWeb) => match self.url() {

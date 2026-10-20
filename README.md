@@ -96,6 +96,10 @@ each IPv4 address on an active network interface, including LAN and VPN addresse
 When exposing it beyond localhost, bring your own network-layer security
 (Tailscale / reverse proxy + TLS).
 
+On each startup, the server checks the latest stable GitHub Release in the background.
+If a newer version is available, it prints the version and Release page URL to the
+console. Offline or failed checks do not interrupt startup.
+
 ## Desktop app (Windows / macOS)
 
 `octoterm-desktop` runs the same server embedded in a tray-resident process,
@@ -105,6 +109,10 @@ still live in the browser.
 ```sh
 cargo run -p octoterm-desktop
 ```
+
+The desktop app also checks for a newer stable Release at startup. A native dialog
+offers “Update now” (立刻更新) to open the Release page in your default browser, or
+“Cancel” (取消) to keep working. Updates are never downloaded or installed automatically.
 
 Changing the listen address or token from the settings window only rebuilds
 the HTTP layer: **your running sessions are not affected**. But a page you

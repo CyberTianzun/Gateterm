@@ -113,6 +113,18 @@ async fn run_server() -> anyhow::Result<()> {
     let state = AppState { manager, token, launchers, listen_port, agents, agent_sessions, cloud };
     octoterm_server::cloud::notifier::spawn(state.manager.clone(), state.agent_sessions.clone(), state.cloud.clone());
     octoterm_server::agent::history::start_index(&state, false);
+    tokio::spawn(async {
+        match octoterm_server::update::check_latest(env!("CARGO_PKG_VERSION")).await {
+            Ok(Some(update)) => eprintln!(
+                "octoterm 有新版本 {} (当前版本 {}),可前往 Release 页面更新:\n    {}",
+                update.version,
+                env!("CARGO_PKG_VERSION"),
+                update.url
+            ),
+            Ok(None) => {}
+            Err(e) => tracing::debug!(error = %e, "检查更新失败"),
+        }
+    });
     serve(listener, state).await
 }
 
