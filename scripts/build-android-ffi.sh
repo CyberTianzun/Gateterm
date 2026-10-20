@@ -9,9 +9,17 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT_JNI="${1:?需要 jniLibs 输出目录}"
-OUT_KT="${2:?需要 Kotlin 输出目录}"
+# Gradle 在 Windows 上传入反斜杠路径。统一成正斜杠后,下面的安全检查和 [ -f ]
+# 在 Git Bash 里才能命中,Windows 版 cargo 也接受这种路径。
+normalize_path() {
+  local p="$1"
+  p="${p//\\//}"
+  printf '%s' "$p"
+}
+OUT_JNI="$(normalize_path "${1:?需要 jniLibs 输出目录}")"
+OUT_KT="$(normalize_path "${2:?需要 Kotlin 输出目录}")"
 : "${ANDROID_NDK_HOME:?需要 ANDROID_NDK_HOME(本机:/Users/hiro/frameworks/android-ndk-r30)}"
+export ANDROID_NDK_HOME="$(normalize_path "$ANDROID_NDK_HOME")"
 
 cd "$ROOT"
 
@@ -35,9 +43,23 @@ cargo ndk -t arm64-v8a -o "$OUT_JNI" build --release -p octoterm-cloud-ffi
 # 绑定从本机 debug 构建生成:release 的 `strip` 会剥掉 .symtab,UniFFI 读不到元数据、
 # 静默生成空目录;接口元数据与目标平台无关,host 库生成的 Kotlin 与 arm64 .so 完全对应。
 cargo build -q -p octoterm-cloud-ffi
-TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON=python3
+elif command -v python >/dev/null 2>&1; then
+  PYTHON=python
+else
+  echo "需要 python3(或 python)来解析 cargo metadata" >&2
+  exit 1
+fi
+TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | "$PYTHON" -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
+TARGET_DIR="$(normalize_path "$TARGET_DIR")"
 HOST_LIB=""
-for f in "$TARGET_DIR/debug/liboctoterm_cloud_ffi.dylib" "$TARGET_DIR/debug/liboctoterm_cloud_ffi.so"; do
+for f in \
+  "$TARGET_DIR/debug/liboctoterm_cloud_ffi.dylib" \
+  "$TARGET_DIR/debug/liboctoterm_cloud_ffi.so" \
+  "$TARGET_DIR/debug/liboctoterm_cloud_ffi.dll" \
+  "$TARGET_DIR/debug/octoterm_cloud_ffi.dll"
+do
   [ -f "$f" ] && { HOST_LIB="$f"; break; }
 done
 [ -n "$HOST_LIB" ] || { echo "找不到本机 debug 版 liboctoterm_cloud_ffi" >&2; exit 1; }

@@ -29,8 +29,11 @@ val ffiKotlinDir = layout.buildDirectory.dir("generated/ffi/kotlin")
 val buildCloudFfi by tasks.registering(Exec::class) {
     description = "构建 cloud-ffi(arm64-v8a)并生成 Kotlin 绑定"
     workingDir = repoRoot
+    // Windows 上的 System32\bash.exe 是 WSL，看不到 Windows 环境变量，也配不了本机 cargo。
+    val gitBash = File("C:/Program Files/Git/bin/bash.exe")
+    val bashExe = if (gitBash.isFile) gitBash.absolutePath else "bash"
     commandLine(
-        "bash", "scripts/build-android-ffi.sh",
+        bashExe, "scripts/build-android-ffi.sh",
         ffiJniDir.get().asFile.absolutePath,
         ffiKotlinDir.get().asFile.absolutePath,
     )
