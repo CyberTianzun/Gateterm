@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import ai.eclosion.octoterm.android.R
+import ai.eclosion.octoterm.android.ui.components.AppBarTitle
 import ai.eclosion.octoterm.android.appearance.AppearanceCodec
 import ai.eclosion.octoterm.android.appearance.TermAppearance
 import ai.eclosion.octoterm.android.appearance.TermFontKind
@@ -62,7 +63,7 @@ fun AppearanceScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.settings_title)) },
+                title = { AppBarTitle(stringResource(R.string.settings_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(

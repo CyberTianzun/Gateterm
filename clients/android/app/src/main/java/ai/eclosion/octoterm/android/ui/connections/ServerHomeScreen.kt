@@ -46,6 +46,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import ai.eclosion.octoterm.android.R
+import ai.eclosion.octoterm.android.ui.components.AppBarTitle
 import ai.eclosion.octoterm.android.connection.ServerConnection
 import ai.eclosion.octoterm.android.launcher.Launcher
 import ai.eclosion.octoterm.android.wire.SessionInfo
@@ -89,7 +90,7 @@ fun ServerHomeScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(connection.title()) },
+                title = { AppBarTitle(connection.title()) },
                 actions = { TextButton(onClick = { historyOpen = true }) { Text(stringResource(R.string.history_title)) } },
                 navigationIcon = {
                     IconButton(onClick = onBack) {

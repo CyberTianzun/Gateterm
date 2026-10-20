@@ -47,6 +47,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import ai.eclosion.octoterm.android.R
+import ai.eclosion.octoterm.android.ui.components.AppBarTitle
 import ai.eclosion.octoterm.android.appearance.TermAppearance
 import ai.eclosion.octoterm.android.appearance.TermFontKind
 import ai.eclosion.octoterm.android.term.TermFrame
@@ -149,7 +150,7 @@ fun TerminalScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(title) },
+                title = { AppBarTitle(title) },
                 navigationIcon = {
                     IconButton(onClick = { releaseKeyboard(); onBack() }) {
                         Icon(

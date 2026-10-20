@@ -49,6 +49,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ai.eclosion.octoterm.android.R
+import ai.eclosion.octoterm.android.ui.components.AppBarTitle
 import ai.eclosion.octoterm.android.agent.ChatWindow
 import ai.eclosion.octoterm.android.agent.HistoryAgent
 import ai.eclosion.octoterm.android.agent.HistoryEntry
@@ -129,7 +130,7 @@ fun HistoryScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(stringResource(R.string.history_title), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    AppBarTitle(stringResource(R.string.history_title), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 },
                 navigationIcon = { HistoryBackButton(onBack) },
                 actions = {
@@ -248,7 +249,7 @@ private fun HistoryConversationScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(historyTitle(entry), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                title = { AppBarTitle(historyTitle(entry), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = { HistoryBackButton(onBack) },
                 actions = {
                     IconToggleButton(checked = detailsOpen, onCheckedChange = { detailsOpen = it }) {
@@ -304,7 +305,7 @@ private fun HistoryFilterScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.history_filter)) },
+                title = { AppBarTitle(stringResource(R.string.history_filter)) },
                 navigationIcon = { HistoryBackButton(onBack) },
                 actions = {
                     TextButton(onClick = { onApply(draft) }) { Text(stringResource(R.string.history_filter_apply)) }

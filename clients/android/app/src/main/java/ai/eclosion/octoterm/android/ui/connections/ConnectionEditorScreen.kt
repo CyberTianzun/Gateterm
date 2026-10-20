@@ -32,6 +32,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import ai.eclosion.octoterm.android.R
+import ai.eclosion.octoterm.android.ui.components.AppBarTitle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -50,7 +51,7 @@ fun ConnectionEditorScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
+                    AppBarTitle(
                         stringResource(
                             if (editing) R.string.editor_title_edit else R.string.editor_title_add,
                         ),

@@ -47,6 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import ai.eclosion.octoterm.android.R
+import ai.eclosion.octoterm.android.ui.components.AppBarTitle
 import ai.eclosion.octoterm.android.connection.ServerConnection
 import androidx.compose.foundation.background
 
@@ -69,7 +70,7 @@ fun ConnectionListScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.servers_title)) },
+                title = { AppBarTitle(stringResource(R.string.servers_title)) },
                 actions = {
                     IconButton(onClick = onCloudAccount) {
                         Icon(Icons.Filled.AccountCircle, contentDescription = stringResource(R.string.cloud_title))
