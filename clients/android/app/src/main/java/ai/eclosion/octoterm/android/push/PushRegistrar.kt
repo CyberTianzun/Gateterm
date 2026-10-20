@@ -4,6 +4,14 @@ import android.content.Context
 import android.util.Log
 import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.GoogleApiAvailabilityLight
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -11,12 +19,17 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import uniffi.octoterm_cloud_ffi.CloudAccount
 import java.io.File
+import java.io.IOException
+import uniffi.octoterm_cloud_ffi.CloudFfiException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /** 取 FCM token 并登记到 Cloud。没有 google-services.json 的构建里整体降级为空操作。 */
 object PushRegistrar {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val registration = Mutex()
+    private val _state = MutableStateFlow(PushRegistration.Idle)
+    val state = _state.asStateFlow()
 
     fun pushAvailable(context: Context): Boolean = FirebaseApp.getApps(context).isNotEmpty()
 
@@ -25,14 +38,34 @@ object PushRegistrar {
     fun account(context: Context): CloudAccount =
         CloudAccount(accountFile(context).absolutePath, android.os.Build.MODEL ?: "Android")
 
-    suspend fun registerCurrentToken(context: Context, account: CloudAccount) {
-        if (!pushAvailable(context)) return
-        val token = suspendCancellableCoroutine { cont ->
-            FirebaseMessaging.getInstance().token
-                .addOnSuccessListener { cont.resume(it) }
-                .addOnFailureListener { cont.resumeWithException(it) }
+    suspend fun registerCurrentToken(context: Context, account: CloudAccount, refreshedToken: String? = null) = registration.withLock {
+        if (!pushAvailable(context)) {
+            _state.value = PushRegistration.MissingConfiguration
+            return@withLock
         }
-        account.registerPushTarget("fcm", token)
+        if (GoogleApiAvailabilityLight.getInstance().isGooglePlayServicesAvailable(context) != ConnectionResult.SUCCESS) {
+            _state.value = PushRegistration.MissingPlayServices
+            return@withLock
+        }
+        _state.value = PushRegistration.Registering
+        try {
+            val token = refreshedToken ?: suspendCancellableCoroutine { cont ->
+                FirebaseMessaging.getInstance().token
+                    .addOnSuccessListener { cont.resume(it) }
+                    .addOnFailureListener { cont.resumeWithException(it) }
+            }
+            account.registerPushTarget("fcm", token)
+            _state.value = PushRegistration.Registered
+        } catch (e: Exception) {
+            _state.value = when (e) {
+                is TimeoutCancellationException -> PushRegistration.TimedOut
+                is CancellationException -> PushRegistration.Idle
+                is CloudFfiException -> PushRegistration.CloudError
+                is IOException -> PushRegistration.NetworkError
+                else -> PushRegistration.Failed
+            }
+            throw e
+        }
     }
 
     /** FCM 换了 token:已登录就重新登记;失败只记日志,下次启动/登录会再登记。 */
@@ -42,7 +75,7 @@ object PushRegistrar {
         scope.launch {
             account(app).use { account ->
                 if (account.status() == null) return@launch
-                registerWithTimeout { account.registerPushTarget("fcm", token) }?.let(::logFailure)
+                registerWithTimeout { registerCurrentToken(app, account, token) }?.let(::logFailure)
             }
         }
     }

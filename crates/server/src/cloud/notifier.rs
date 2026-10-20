@@ -14,7 +14,15 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::agent::store::AgentSessionStore;
 use crate::cloud::creds::SharedCreds;
-use crate::session::manager::SessionManager;
+use crate::session::manager::{AgentNotice, SessionManager};
+
+/// Only an explicit successful Stop hook means a completed turn. Idle can also mean
+/// startup, interruption, process cleanup or stale state; none should notify completion.
+pub fn is_turn_completed(event: &str, payload: &serde_json::Value, state: AgentState) -> bool {
+    event == "Stop" && state == AgentState::Idle
+        && !matches!(payload.get("reason").and_then(serde_json::Value::as_str),
+            Some("shutdown" | "channel_closed" | "cancelled" | "interrupted" | "error"))
+}
 
 /// 这条事件要不要推,推哪一种。
 ///
@@ -36,6 +44,7 @@ pub struct Track {
     pub state: Option<AgentState>,
     pub pending: Option<String>,
     pub notified: bool,
+    pub completed: bool,
 }
 
 /// 在 `classify`(进入/新 pending)之上补「离开 waiting → resolved」。
@@ -65,7 +74,7 @@ struct Job {
 pub fn spawn(manager: Arc<SessionManager>, store: Arc<AgentSessionStore>, creds: SharedCreds) {
     // 没有可用配置目录(等同「永远未登录」)时不启动:与旧行为「无路径不启动」一致。
     let Some(path) = creds.path().map(Path::to_path_buf) else { return };
-    let mut rx = manager.events();
+    let mut rx = manager.agent_notices();
     // unbounded 是有意的:事件速率低(只在 waiting/permission/resolved 迁移时才排队),
     // 且每条请求都有客户端 15s 超时托底,不会无限堆积。
     let (tx, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<Job>();
@@ -85,9 +94,20 @@ pub fn spawn(manager: Arc<SessionManager>, store: Arc<AgentSessionStore>, creds:
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => break,
             };
-            let ServerMsg::AgentEvent { agent_id, agent_session_id, session, state, pending, .. } = msg else {
-                continue;
+            let msg = match msg {
+                AgentNotice::TurnCompleted { session, agent_id, agent_session_id } => {
+                    let prev = last.entry((agent_id.clone(), agent_session_id)).or_default();
+                    if prev.completed { continue; }
+                    prev.completed = true;
+                    let Some(login) = creds.get() else { continue };
+                    let client = clients.entry(login.url.clone()).or_insert_with(|| Arc::new(CloudClient::new(&login.url))).clone();
+                    let note = Notify { session, agent_id, kind: "done".into(), tool_name: None, expires_at: None };
+                    let _ = tx.send(Job { path: path.clone(), client, creds: login, note });
+                    continue;
+                }
+                AgentNotice::State(msg) => msg,
             };
+            let ServerMsg::AgentEvent { agent_id, agent_session_id, session, state, pending, .. } = msg else { continue };
             let key = (agent_id.clone(), agent_session_id);
             let prev = last.get(&key).cloned().unwrap_or_default();
             let kind = decide(&prev, state, &pending);
@@ -102,7 +122,8 @@ pub fn spawn(manager: Arc<SessionManager>, store: Arc<AgentSessionStore>, creds:
             if state == AgentState::Done {
                 last.remove(&key);
             } else {
-                last.insert(key, Track { state: Some(state), pending: pending.clone(), notified });
+                let completed = prev.completed && !matches!(state, AgentState::Working | AgentState::Thinking);
+                last.insert(key, Track { state: Some(state), pending: pending.clone(), notified, completed });
             }
             let (Some(kind), Some(session), Some(login)) = (kind, session, login) else { continue };
             let pending_req = (kind == "permission")
@@ -125,6 +146,7 @@ pub fn spawn(manager: Arc<SessionManager>, store: Arc<AgentSessionStore>, creds:
 
 async fn send(path: PathBuf, client: Arc<CloudClient>, creds: Credentials, note: Notify) {
     match client.notify(&creds.token, &note).await {
+        Ok(0) => tracing::warn!("Cloud 没有投递到设备，请检查手机推送登记及 Cloud 推送日志"),
         Ok(_) => {}
         Err(CloudError::Unauthorized) => {
             // 只删「还是这把 token」的文件:期间用户可能已经重新登录了。
@@ -163,7 +185,66 @@ mod tests {
     }
 
     fn track(state: Option<AgentState>, pending: Option<&str>, notified: bool) -> Track {
-        Track { state, pending: pending.map(String::from), notified }
+        Track { state, pending: pending.map(String::from), notified, completed: false }
+    }
+
+    #[test]
+    fn completion_requires_a_successful_stop_not_just_idle_or_session_exit() {
+        let empty = serde_json::json!({});
+        assert!(is_turn_completed("Stop", &empty, Idle));
+        for event in ["SessionStart", "SessionEnd", "Interrupt", "StopFailure", "StopCancelled", "Notification"] {
+            assert!(!is_turn_completed(event, &empty, Idle));
+        }
+        for reason in ["shutdown", "channel_closed", "cancelled", "interrupted", "error"] {
+            assert!(!is_turn_completed("Stop", &serde_json::json!({"reason": reason}), Idle));
+        }
+        assert!(!is_turn_completed("Stop", &empty, Done));
+        assert!(!is_turn_completed("Stop", &empty, Working));
+    }
+
+    #[tokio::test]
+    async fn completion_is_ordered_after_withdrawal_and_deduplicated_per_turn() {
+        use axum::{Json, Router, routing::post};
+        use serde_json::{Value, json};
+        use std::time::Duration;
+
+        let (notes, mut received) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        let app = Router::new().route("/v1/notify", post(move |Json(note): Json<Value>| {
+            let notes = notes.clone();
+            async move {
+                notes.send(note).unwrap();
+                (axum::http::StatusCode::ACCEPTED, Json(json!({"delivered": 1})))
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cloud.json");
+        credentials::save(&path, &Credentials {
+            url, email: "test@example.com".into(), token: "test".into(), server_id: Some("srv".into()),
+        }).unwrap();
+        let manager = SessionManager::new(1 << 20, Default::default());
+        spawn(manager.clone(), Arc::new(AgentSessionStore::new()), SharedCreds::new(Some(path)));
+        let publish = |state| manager.publish(ServerMsg::AgentEvent {
+            agent_id: "codex".into(), agent_session_id: "turns".into(), session: Some(7),
+            state, pending: None, detail: None,
+        });
+        publish(Waiting);
+        publish(Idle); // Withdrawal must precede completion, otherwise it could erase the completion alert.
+        manager.turn_completed(7, "codex", "turns");
+        manager.turn_completed(7, "codex", "turns"); // Duplicate Stop hook.
+        publish(Thinking); // A new prompt re-arms completion.
+        publish(Idle);
+        manager.turn_completed(7, "codex", "turns");
+        for expected in ["waiting", "resolved", "done", "done"] {
+            let note = tokio::time::timeout(Duration::from_secs(2), received.recv()).await.unwrap().unwrap();
+            assert_eq!(note["kind"], expected);
+            assert_eq!(note["session"], 7);
+            assert_eq!(note["agent_id"], "codex");
+        }
+        assert!(tokio::time::timeout(Duration::from_millis(100), received.recv()).await.is_err());
+        server.abort();
     }
 
     #[test]

@@ -170,7 +170,7 @@ Claude Code、Codex、pi、Grok 和 Antigravity CLI 记录,包括在 Octoterm �
 
 ## Octoterm Cloud(可选)
 
-登录 Cloud 之后,agent 进入「等你」状态时会通过 Cloud 推送到手机(手机端推送将在后续版本提供)。不登录不影响任何功能。
+登录 Cloud 之后，agent 进入「等你」状态时会通过 Cloud 推送到手机（Android 构建需要配置推送）。不登录不影响任何功能。
 
 - Cloud 不转发终端数据,拿不到本机的访问 token;推送只包含会话编号、agent 名称与工具名。
 - 登录态保存在配置目录的 `cloud.json`,在 Unix 上权限仅属主可读写(0600)。
@@ -202,6 +202,11 @@ Desktop 用户在「设置…」窗口底部的「Cloud 账号」区选择中继
 | 其它全球（暂未部署） | `https://global.octoterm.eclosion.ai/` |
 
 网页登录需要 Cloud 部署包含 `/auth/desktop` 与 `/v1/auth/desktop/*` 的版本。
+Android 同样使用三个中继地区预设，并在浏览器中完成登录、注册和找回密码。
+完成后自动返回 App，保存设备凭据并登记推送；需要 Cloud 部署 `/auth/mobile`
+和 `/v1/auth/mobile/*` 接口。登录后账号图标着色并在右下角显示小勾，未登录时显示小叉。
+账号页显示推送登记结果并提供重试；FCM 需要可用的 Google Play 服务、能访问 Google 服务的网络及通知权限。
+更新后的 Desktop/server 还会在 Stop hook 完成本轮任务时发送完成提醒。
 登录等待最多 10 分钟，可在客户端取消；本机回调只监听 `127.0.0.1` 的临时端口。
 
 ## 架构

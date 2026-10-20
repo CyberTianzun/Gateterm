@@ -100,6 +100,12 @@ pub struct DesktopAuthOk {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct MobileAuthOk {
+    pub token: String,
+    pub email: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct ServerEntry {
     pub id: String,
     pub name: String,
@@ -220,6 +226,12 @@ impl CloudClient {
     pub async fn reset_password(&self, email: &str, code: &str, new_password: &str) -> Result<(), CloudError> {
         let body = json!({"email": email, "code": code, "new_password": new_password});
         self.send(self.http.post(self.url("/v1/auth/password-reset")).json(&body)).await.map(drop)
+    }
+
+    /// Mobile browser sign-in issues a device credential, suitable for push registration.
+    pub async fn exchange_mobile_code(&self, code: &str, verifier: &str, redirect_uri: &str) -> Result<MobileAuthOk, CloudError> {
+        let body = json!({"code": code, "code_verifier": verifier, "redirect_uri": redirect_uri});
+        self.send_json(self.http.post(self.url("/v1/auth/mobile/token")).json(&body)).await
     }
 
     pub async fn logout(&self, token: &str) -> Result<(), CloudError> {

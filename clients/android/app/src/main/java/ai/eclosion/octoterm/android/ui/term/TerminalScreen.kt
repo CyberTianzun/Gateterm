@@ -20,7 +20,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -37,8 +36,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -165,11 +163,8 @@ fun TerminalScreen(
                         val desc = stringResource(
                             if (chatOpen) R.string.chat_back_to_terminal_desc else R.string.chat_open_desc,
                         )
-                        TextButton(
-                            onClick = ::toggleChat,
-                            modifier = Modifier.semantics { contentDescription = desc },
-                        ) {
-                            Text(stringResource(if (chatOpen) R.string.chat_back_to_terminal else R.string.chat_open))
+                        IconButton(onClick = ::toggleChat) {
+                            Icon(painterResource(if (chatOpen) R.drawable.ic_terminal else R.drawable.ic_chat), desc)
                         }
                     }
                 },

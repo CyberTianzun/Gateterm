@@ -26,6 +26,19 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".cloud.CloudCallbackActivity"
+            android:exported="true"
+            android:noHistory="true"
+            android:excludeFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="ai.eclosion.octoterm.android" android:host="cloud" android:path="/auth/callback" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name=".push.OctoMessagingService"
             android:exported="false">

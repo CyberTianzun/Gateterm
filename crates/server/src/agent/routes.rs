@@ -322,6 +322,9 @@ pub async fn hook(
         state.manager.publish(gone.to_msg());
     }
     state.manager.publish(snapshot.to_msg());
+    if crate::cloud::notifier::is_turn_completed(&event, &payload, snapshot.state) {
+        state.manager.turn_completed(session, adapter.id(), &agent_session_id);
+    }
     super::process::watch_codex(&state, &snapshot, &event).await;
     match adapter.telemetry_reply() {
         Some(body) => (StatusCode::OK, Json(body)).into_response(),

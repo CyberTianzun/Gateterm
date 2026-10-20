@@ -43,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import ai.eclosion.octoterm.android.R
@@ -91,7 +92,11 @@ fun ServerHomeScreen(
         topBar = {
             TopAppBar(
                 title = { AppBarTitle(connection.title()) },
-                actions = { TextButton(onClick = { historyOpen = true }) { Text(stringResource(R.string.history_title)) } },
+                actions = {
+                    IconButton(onClick = { historyOpen = true }) {
+                        Icon(painterResource(R.drawable.ic_history), stringResource(R.string.history_title))
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(

@@ -26,12 +26,19 @@ class AgentPushTest {
     }
 
     @Test
-    fun ignoresDoneUnknownAndBroken() {
-        assertNull(AgentPush.parse(base + ("kind" to "done")))
+    fun ignoresUnknownAndBroken() {
         assertNull(AgentPush.parse(base + ("kind" to "boom")))
         assertNull(AgentPush.parse(base - "server_id"))
         assertNull(AgentPush.parse(base + ("session" to "x")))
         assertEquals(AgentPush.Kind.Resolved, AgentPush.parse(base + ("kind" to "resolved"))!!.kind)
+    }
+
+    @Test
+    fun completionPostsInsteadOfBeingDiscardedOrCancelled() {
+        val completed = AgentPush.parse(base + ("kind" to "done"))!!
+        assertEquals(AgentPush.Kind.Done, completed.kind)
+        assertEquals(AgentPush.Display.Post(null), completed.display(nowSeconds = 600))
+        assertEquals(AgentPush.parse(base)!!.tag, completed.tag)
     }
 
     @Test

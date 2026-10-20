@@ -2,7 +2,7 @@ package ai.eclosion.octoterm.android.ui.cloud
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -12,12 +12,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,6 +46,8 @@ import ai.eclosion.octoterm.android.R
 import ai.eclosion.octoterm.android.cloud.CloudAction
 import ai.eclosion.octoterm.android.cloud.CloudForm
 import ai.eclosion.octoterm.android.cloud.CloudUiState
+import ai.eclosion.octoterm.android.cloud.RelayRegion
+import ai.eclosion.octoterm.android.push.PushRegistration
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -50,19 +55,21 @@ fun CloudAccountScreen(
     state: CloudUiState,
     pushAvailable: Boolean,
     notificationsEnabled: Boolean,
+    pushRegistration: PushRegistration,
+    onRetryPush: () -> Unit,
     onForm: ((CloudForm) -> CloudForm) -> Unit,
     onAction: (CloudAction) -> Unit,
     onOpenNotificationSettings: () -> Unit,
     onBack: () -> Unit,
 ) {
-    val enabled = !state.busy
+    val enabled = !state.busy && !state.waitingForBrowser
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(stringResource(R.string.cloud_title))
-                        if (state.busy) {
+                        if (state.busy || state.waitingForBrowser) {
                             CircularProgressIndicator(
                                 modifier = Modifier.padding(start = 12.dp).size(18.dp),
                                 strokeWidth = 2.dp,
@@ -117,7 +124,7 @@ fun CloudAccountScreen(
             }
 
             if (status == null) {
-                SignedOut(state.form, enabled, onForm, onAction)
+                SignedOut(state, enabled, onForm, onAction)
             } else {
                 Text(
                     stringResource(R.string.cloud_logged_in_as, status.email),
@@ -129,6 +136,30 @@ fun CloudAccountScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (pushAvailable) {
+                    val pushText = when (pushRegistration) {
+                        PushRegistration.Idle -> R.string.cloud_push_not_registered
+                        PushRegistration.Registering -> R.string.cloud_push_registering
+                        PushRegistration.Registered -> R.string.cloud_push_registered
+                        PushRegistration.MissingConfiguration -> R.string.cloud_push_unavailable
+                        PushRegistration.MissingPlayServices -> R.string.cloud_push_missing_play_services
+                        PushRegistration.TimedOut -> R.string.cloud_push_timeout
+                        PushRegistration.NetworkError -> R.string.cloud_push_network_error
+                        PushRegistration.CloudError -> R.string.cloud_push_cloud_error
+                        PushRegistration.Failed -> R.string.cloud_push_failed
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(stringResource(pushText), modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (pushRegistration == PushRegistration.Registered || pushRegistration == PushRegistration.Registering)
+                                MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
+                        if (pushRegistration != PushRegistration.Registered) {
+                            TextButton(onClick = onRetryPush, enabled = enabled && pushRegistration != PushRegistration.Registering) {
+                                Text(stringResource(R.string.cloud_push_retry))
+                            }
+                        }
+                    }
+                }
                 OutlinedButton(onClick = { onAction(CloudAction.Logout) }, enabled = enabled) {
                     Text(stringResource(R.string.cloud_logout))
                 }
@@ -150,46 +181,41 @@ fun CloudAccountScreen(
 
 @Composable
 private fun SignedOut(
-    form: CloudForm,
+    state: CloudUiState,
     enabled: Boolean,
     onForm: ((CloudForm) -> CloudForm) -> Unit,
     onAction: (CloudAction) -> Unit,
 ) {
-    OutlinedTextField(
-        value = form.url,
-        onValueChange = { v -> onForm { it.copy(url = v) } },
-        label = { Text(stringResource(R.string.cloud_url)) },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-        modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = form.email,
-        onValueChange = { v -> onForm { it.copy(email = v) } },
-        label = { Text(stringResource(R.string.cloud_email)) },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-        modifier = Modifier.fillMaxWidth(),
-    )
-    PasswordField(form, onForm)
-    CodeField(form, onForm, supporting = true)
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = { onAction(CloudAction.Login) }, enabled = enabled) {
-            Text(stringResource(R.string.cloud_login))
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Text(stringResource(R.string.cloud_not_connected), style = MaterialTheme.typography.bodyMedium)
+    Text(stringResource(R.string.cloud_relay_region), style = MaterialTheme.typography.labelLarge)
+    Box {
+        OutlinedButton(onClick = { expanded = true }, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(state.form.region.label), modifier = Modifier.weight(1f))
+            Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
         }
-        OutlinedButton(onClick = { onAction(CloudAction.SendRegisterCode) }, enabled = enabled) {
-            Text(stringResource(R.string.cloud_send_register_code))
-        }
-        OutlinedButton(onClick = { onAction(CloudAction.Register) }, enabled = enabled) {
-            Text(stringResource(R.string.cloud_register))
+        DropdownMenu(expanded = expanded && enabled, onDismissRequest = { expanded = false }) {
+            RelayRegion.entries.forEach { region ->
+                DropdownMenuItem(text = { Text(stringResource(region.label)) }, onClick = {
+                    onForm { it.copy(region = region) }
+                    expanded = false
+                })
+            }
         }
     }
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        TextButton(onClick = { onAction(CloudAction.SendResetCode) }, enabled = enabled) {
-            Text(stringResource(R.string.cloud_send_reset_code))
-        }
-        TextButton(onClick = { onAction(CloudAction.ResetPassword) }, enabled = enabled) {
-            Text(stringResource(R.string.cloud_reset_password))
+    if (!state.form.region.deployed) {
+        Text(stringResource(R.string.cloud_region_pending), color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    Text(stringResource(R.string.cloud_browser_hint), style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Button(onClick = { onAction(CloudAction.Login) }, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
+        Text(stringResource(R.string.cloud_login))
+    }
+    if (state.waitingForBrowser) {
+        Text(stringResource(R.string.cloud_waiting_browser))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { onAction(CloudAction.ReopenBrowser) }) { Text(stringResource(R.string.cloud_reopen_browser)) }
+            TextButton(onClick = { onAction(CloudAction.CancelLogin) }) { Text(stringResource(R.string.cloud_cancel_login)) }
         }
     }
 }

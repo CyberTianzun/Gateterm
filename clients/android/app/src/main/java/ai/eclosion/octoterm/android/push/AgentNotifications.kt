@@ -57,7 +57,10 @@ object AgentNotifications {
 
         val name = agentDisplayName(push.agentId)
         val title = when (push.kind) {
-            AgentPush.Kind.Permission -> context.getString(R.string.notif_permission_title, name)
+            AgentPush.Kind.Permission -> context.getString(
+                if (push.toolName in setOf("AskUserQuestion", "request_user_input")) R.string.notif_question_title
+                else R.string.notif_permission_title, name)
+            AgentPush.Kind.Done -> context.getString(R.string.notif_done_title, name)
             else -> context.getString(R.string.notif_waiting_title, name)
         }
         val body = push.toolName?.takeIf { push.kind == AgentPush.Kind.Permission }

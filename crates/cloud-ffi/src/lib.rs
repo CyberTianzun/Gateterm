@@ -105,6 +105,23 @@ impl CloudAccount {
         Ok(CloudStatus { email: c.email, url: c.url })
     }
 
+    /// Complete an Android browser callback. The long-lived token stays in the native credential file.
+    pub async fn finish_browser_login(&self, url: String, code: String, verifier: String, redirect_uri: String) -> Result<CloudStatus, CloudFfiError> {
+        let client = CloudClient::new(&url);
+        let auth = client.exchange_mobile_code(&code, &verifier, &redirect_uri).await?;
+        let creds = octoterm_cloud_client::Credentials {
+            url: url.trim().trim_end_matches('/').to_string(),
+            email: auth.email,
+            token: auth.token,
+            server_id: None,
+        };
+        if let Err(error) = octoterm_cloud_client::credentials::save(&self.path, &creds) {
+            let _ = client.logout(&creds.token).await;
+            return Err(CloudFfiError::Local { reason: error.to_string() });
+        }
+        Ok(CloudStatus { email: creds.email, url: creds.url })
+    }
+
     pub async fn reset_password(&self, url: String, email: String, code: String, new_password: String) -> Result<(), CloudFfiError> {
         ops::reset_password(&self.path, &url, &email, &code, &new_password).await?;
         Ok(())

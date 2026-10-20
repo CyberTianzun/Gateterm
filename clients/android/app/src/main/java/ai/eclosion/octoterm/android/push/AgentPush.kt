@@ -9,7 +9,7 @@ data class AgentPush(
     val toolName: String?,
     val expiresAt: Long?,
 ) {
-    enum class Kind { Waiting, Permission, Resolved }
+    enum class Kind { Waiting, Permission, Done, Resolved }
 
     /** 收到推送后该做什么:撤回这条通知,或发出(可带到期自动消失的毫秒数)。 */
     sealed class Display {
@@ -43,6 +43,7 @@ data class AgentPush(
             val kind = when (data["kind"]) {
                 "waiting" -> Kind.Waiting
                 "permission" -> Kind.Permission
+                "done" -> Kind.Done
                 "resolved" -> Kind.Resolved
                 else -> return null
             }

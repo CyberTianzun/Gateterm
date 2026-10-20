@@ -208,7 +208,7 @@ agent stores for the server user, excluding WSL, other users and custom roots.
 
 ## Octoterm Cloud (optional)
 
-Signing in to Octoterm Cloud lets agent "waiting for you" events reach your phone as push notifications (mobile push lands in a later release). Everything works without signing in.
+Signing in to Octoterm Cloud lets agent "waiting for you" events reach your phone as push notifications when push is configured in the Android build. Everything works without signing in.
 
 - Cloud never relays terminal data and never sees this machine's access token; a push carries only the session number, agent name and tool name.
 - The sign-in state lives in `cloud.json` in the config directory, with owner-only permissions (0600) on Unix.
@@ -241,6 +241,14 @@ Desktop receives a loopback callback and saves the sign-in state automatically.
 | Other global regions (not deployed yet) | `https://global.octoterm.eclosion.ai/` |
 
 Cloud must run a version with `/auth/desktop` and `/v1/auth/desktop/*` support.
+Android uses the same three relay presets and a browser sign-in flow, with registration
+and password recovery on the web page. The browser returns to the app, which saves a
+device credential and registers for push notifications. Android requires the Cloud
+`/auth/mobile` and `/v1/auth/mobile/*` endpoints. The account icon turns the theme's
+accent color with a small check when signed in, and shows a small cross when signed out.
+The account page reports push registration status and offers a retry. FCM requires
+Google Play services, network access to Google services, and notification permission.
+Updated Desktop/server builds also send a notification when a Stop hook completes a turn.
 Sign-in can be cancelled and expires after 10 minutes. The callback listens only on
 `127.0.0.1` using a temporary port.
 

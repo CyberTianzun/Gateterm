@@ -13,7 +13,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.MoreVert
@@ -50,6 +49,7 @@ import ai.eclosion.octoterm.android.R
 import ai.eclosion.octoterm.android.ui.components.AppBarTitle
 import ai.eclosion.octoterm.android.connection.ServerConnection
 import androidx.compose.foundation.background
+import ai.eclosion.octoterm.android.ui.cloud.CloudAccountButton
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -66,15 +66,14 @@ fun ConnectionListScreen(
     onDismissDelete: () -> Unit,
     onSettings: () -> Unit,
     onCloudAccount: () -> Unit,
+    cloudEmail: String?,
 ) {
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { AppBarTitle(stringResource(R.string.servers_title)) },
                 actions = {
-                    IconButton(onClick = onCloudAccount) {
-                        Icon(Icons.Filled.AccountCircle, contentDescription = stringResource(R.string.cloud_title))
-                    }
+                    CloudAccountButton(cloudEmail, onCloudAccount)
                     IconButton(onClick = onSettings) {
                         Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.settings_title))
                     }

@@ -17,7 +17,37 @@ async fn fake() -> (String, Seen) {
     let s1 = seen.clone();
     let s2 = seen.clone();
     let s3 = seen.clone();
+    let s4 = seen.clone();
+    let s5 = seen.clone();
     let app = Router::new()
+        .route(
+            "/v1/auth/mobile/token",
+            post(move |axum::Json(body): axum::Json<Value>| {
+                let seen = s4.clone();
+                async move {
+                    seen.lock()
+                        .unwrap()
+                        .push(("mobile-token".into(), None, body));
+                    axum::Json(json!({"token":"oct_phone","email":"phone@example.com"}))
+                }
+            }),
+        )
+        .route(
+            "/v1/auth/logout",
+            post(move |headers: HeaderMap| {
+                let seen = s5.clone();
+                async move {
+                    seen.lock().unwrap().push((
+                        "logout".into(),
+                        headers
+                            .get("authorization")
+                            .map(|v| v.to_str().unwrap().to_string()),
+                        Value::Null,
+                    ));
+                    StatusCode::NO_CONTENT
+                }
+            }),
+        )
         .route(
             "/v1/auth/login",
             post(move |axum::Json(b): axum::Json<Value>| {
@@ -84,6 +114,68 @@ async fn login_as_device_then_register_push_target() {
     assert_eq!(seen[0].2["client"], json!({"kind": "device", "label": "Pixel 9"}));
     assert_eq!(seen[1].1.as_deref(), Some("Bearer oct_dev"));
     assert_eq!(seen[1].2, json!({"platform": "fcm", "push_token": "fcm-tok"}));
+}
+
+#[tokio::test]
+async fn browser_login_saves_device_credentials_and_registers_pushes() {
+    let (url, seen) = fake().await;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("cloud.json");
+    let account = CloudAccount::new(path.display().to_string(), "Android phone".into());
+    let callback = "ai.eclosion.octoterm.android://cloud/auth/callback";
+    let status = account
+        .finish_browser_login(
+            url,
+            "single-use-code".into(),
+            "private-verifier".into(),
+            callback.into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status.email, "phone@example.com");
+    let creds = octoterm_cloud_client::credentials::load(&path)
+        .unwrap()
+        .unwrap();
+    assert!(creds.server_id.is_none());
+    account
+        .register_push_target("fcm".into(), "fcm-token".into())
+        .await
+        .unwrap();
+    let seen = seen.lock().unwrap();
+    assert_eq!(
+        seen[0].2,
+        json!({"code":"single-use-code","code_verifier":"private-verifier","redirect_uri":callback})
+    );
+    assert_eq!(seen[1].1.as_deref(), Some("Bearer oct_phone"));
+}
+
+#[tokio::test]
+async fn browser_login_revokes_the_issued_token_when_local_save_fails() {
+    let (url, seen) = fake().await;
+    let directory = tempfile::tempdir().unwrap();
+    let blocker = directory.path().join("not-a-directory");
+    std::fs::write(&blocker, b"file").unwrap();
+    let account = CloudAccount::new(
+        blocker.join("cloud.json").display().to_string(),
+        "phone".into(),
+    );
+    let error = account
+        .finish_browser_login(
+            url,
+            "code".into(),
+            "verifier".into(),
+            "ai.eclosion.octoterm.android://cloud/auth/callback".into(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CloudFfiError::Local { .. }));
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .any(|(operation, auth, _)| operation == "logout"
+                && auth.as_deref() == Some("Bearer oct_phone"))
+    );
 }
 
 #[tokio::test]

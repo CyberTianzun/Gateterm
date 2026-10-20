@@ -23,6 +23,7 @@ fun CloudFailure.messageRes(): Int = when (this) {
     CloudFailure.Local -> R.string.cloud_err_local
     is CloudFailure.Api -> when (code) {
         "invalid_credentials" -> R.string.cloud_err_invalid_credentials
+        "invalid_authorization_code" -> R.string.cloud_err_authorization_code
         "invalid_code" -> R.string.cloud_err_invalid_code
         "code_exhausted" -> R.string.cloud_err_code_exhausted
         "email_taken" -> R.string.cloud_err_email_taken

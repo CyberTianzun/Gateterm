@@ -10,23 +10,33 @@ use crate::config::WindowSize;
 
 use super::pty::{Launch, Session, SessionOutput};
 
+/// Internal notification events preserve hook order without extending the client wire protocol.
+#[derive(Clone)]
+pub(crate) enum AgentNotice {
+    State(ServerMsg),
+    TurnCompleted { session: u64, agent_id: String, agent_session_id: String },
+}
+
 pub struct SessionManager {
     buffer_cap: usize,
     window_size: WindowSize,
     next_id: AtomicU64,
     sessions: Mutex<HashMap<u64, Arc<Session>>>,
     events: broadcast::Sender<ServerMsg>,
+    agent_notices: broadcast::Sender<AgentNotice>,
 }
 
 impl SessionManager {
     pub fn new(buffer_cap: usize, window_size: WindowSize) -> Arc<Self> {
         let (events, _) = broadcast::channel(64);
+        let (agent_notices, _) = broadcast::channel(64);
         Arc::new(Self {
             buffer_cap,
             window_size,
             next_id: AtomicU64::new(1),
             sessions: Mutex::new(HashMap::new()),
             events,
+            agent_notices,
         })
     }
 
@@ -37,7 +47,20 @@ impl SessionManager {
     /// 往会话事件广播里塞一条消息。agent 集成用它把 `AgentEvent` 推给所有客户端 ——
     /// 复用同一条通路,`conn.rs` 那边一行都不用改。
     pub fn publish(&self, msg: ServerMsg) {
+        if matches!(msg, ServerMsg::AgentEvent { .. }) {
+            let _ = self.agent_notices.send(AgentNotice::State(msg.clone()));
+        }
         let _ = self.events.send(msg);
+    }
+
+    pub(crate) fn agent_notices(&self) -> broadcast::Receiver<AgentNotice> {
+        self.agent_notices.subscribe()
+    }
+
+    pub(crate) fn turn_completed(&self, session: u64, agent_id: &str, agent_session_id: &str) {
+        let _ = self.agent_notices.send(AgentNotice::TurnCompleted {
+            session, agent_id: agent_id.into(), agent_session_id: agent_session_id.into(),
+        });
     }
 
     fn emit(&self, event: SessionEventKind, session: SessionInfo) {
