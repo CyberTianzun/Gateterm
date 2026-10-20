@@ -48,6 +48,10 @@ const zh = {
   "conn.connected": "已连接",
   "conn.reconnecting": "重连中",
   "conn.disconnected": "已断开",
+  "cloud.connected": "{email} 已连接到 Octoterm Cloud",
+  "cloud.disconnected": "没有连接到 Octoterm Cloud",
+  "cloud.loading": "正在读取 Cloud 状态…",
+  "cloud.unavailable": "暂时无法获取 Octoterm Cloud 状态",
   "conn.banner.reconnecting": "正在重连…",
   "conn.banner.fatal": "连接失败:{message} — 刷新页面重新输入 token",
 
@@ -279,6 +283,10 @@ const en: Record<MsgKey, string> = {
   "conn.connected": "Connected",
   "conn.reconnecting": "Reconnecting",
   "conn.disconnected": "Disconnected",
+  "cloud.connected": "{email} connected to Octoterm Cloud",
+  "cloud.disconnected": "Not connected to Octoterm Cloud",
+  "cloud.loading": "Checking Cloud status…",
+  "cloud.unavailable": "Octoterm Cloud status is unavailable",
   "conn.banner.reconnecting": "Reconnecting…",
   "conn.banner.fatal": "Connection failed: {message} — reload the page to enter a token again",
 

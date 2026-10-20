@@ -9,6 +9,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { OctoClient } from "./client";
 import { readToken } from "./auth";
+import { mountCloudStatus } from "./cloud";
 import { type OctoConfig, loadConfig, saveConfig, toTerminalOptions } from "./config";
 import { resolveTheme } from "./theme-catalog";
 import { swallowTerminalQueries, termColors } from "./queries";
@@ -135,6 +136,7 @@ function applyStaticText() {
 
 /** 连接状态。存的是词条 key 而不是算好的字符串,这样切语言能原地重绘。 */
 let connKey: MsgKey = "conn.connected";
+const cloudStatus = mountCloudStatus($("cloud-state"), () => authToken);
 function setConn(key: MsgKey) {
   connKey = key;
   $("conn-state").textContent = t(key);
@@ -509,6 +511,7 @@ mountNewSessionMenu($("new-session"), {
 });
 
 client.onOpen = () => {
+  cloudStatus.setOnline(true);
   agentRevision++;
   // 断线期间漏掉的 agent-event 靠这次全量拉取补齐,不做增量对账
   void refreshAgents();
@@ -517,6 +520,7 @@ client.onOpen = () => {
   client.send({ type: "list-sessions" });
 };
 client.onReconnecting = () => {
+  cloudStatus.setOnline(false);
   agentRevision++;
   keyboard?.reset();
   transcriptEnabled = false;
@@ -526,6 +530,7 @@ client.onReconnecting = () => {
   setConn("conn.reconnecting");
 };
 client.onFatal = (message) => {
+  cloudStatus.setOnline(false);
   agentRevision++;
   keyboard?.reset();
   transcriptEnabled = false;

@@ -33,7 +33,7 @@ pub enum UserEvent {
     MenuClicked(MenuAction),
     SessionsChanged,
     /// 设置窗口发起的 Cloud 操作完成了(在 tokio 线程上跑,结果经 proxy 送回主线程)。
-    CloudDone(crate::settings::cloud::CloudAction, Result<String, String>),
+    CloudDone(u64, crate::settings::cloud::CloudAction, Result<String, String>),
     UpdateAvailable(octoterm_server::update::ReleaseUpdate),
 }
 
@@ -78,6 +78,8 @@ pub struct Startup {
 }
 
 pub struct App {
+    cloud_task: Option<tokio::task::JoinHandle<()>>,
+    cloud_generation: u64,
     rt: Runtime,
     sup: Supervisor,
     tray: Option<Tray>,
@@ -109,6 +111,8 @@ impl App {
         startup: Startup,
     ) -> Self {
         Self {
+            cloud_task: None,
+            cloud_generation: 0,
             rt,
             sup,
             tray: None,
@@ -166,14 +170,16 @@ impl App {
             banner,
             message: None,
             cloud: crate::settings::cloud::CloudForm {
-                url: Self::cloud_creds()
-                    .map(|c| c.url)
-                    .or_else(|| self.startup.config.cloud.url.clone())
-                    .unwrap_or_default(),
+                region: crate::settings::cloud::RelayRegion::from_url(
+                    &Self::cloud_creds()
+                        .map(|c| c.url)
+                        .or_else(|| self.startup.config.cloud.url.clone())
+                        .unwrap_or_default(),
+                ),
                 ..Default::default()
             },
             cloud_status: crate::settings::cloud::status_from(Self::cloud_creds()),
-            cloud_busy: false,
+            cloud_busy: self.cloud_task.is_some(),
             cloud_message: None,
         }
     }
@@ -186,7 +192,17 @@ impl App {
     fn start_cloud(&mut self, action: crate::settings::cloud::CloudAction) {
         use crate::settings::ui::Message;
         let Some(view) = self.view.as_mut() else { return };
-        if view.cloud_busy {
+        if action == crate::settings::cloud::CloudAction::CancelLogin {
+            if let Some(task) = self.cloud_task.take() {
+                task.abort();
+                self.cloud_generation += 1;
+            }
+            view.cloud_busy = false;
+            view.cloud_status = crate::settings::cloud::status_from(Self::cloud_creds());
+            view.cloud_message = Some(Message::Ok("已取消登录".into()));
+            return;
+        }
+        if self.cloud_task.is_some() {
             return;
         }
         let job = match crate::settings::cloud::prepare(&view.cloud, &view.cloud_status, action) {
@@ -203,10 +219,12 @@ impl App {
         view.cloud_busy = true;
         view.cloud_message = None;
         let proxy = self.proxy.clone();
-        self.rt.spawn(async move {
+        self.cloud_generation += 1;
+        let generation = self.cloud_generation;
+        self.cloud_task = Some(self.rt.spawn(async move {
             let result = crate::cloud_ops::run(job, path, octoterm_cloud_client::default_label()).await;
-            let _ = proxy.send_event(UserEvent::CloudDone(action, result));
-        });
+            let _ = proxy.send_event(UserEvent::CloudDone(generation, action, result));
+        }));
     }
 
     /// 执行「保存并应用」。真正的分支逻辑在 [`crate::settings::save::apply`],
@@ -526,7 +544,11 @@ impl ApplicationHandler<UserEvent> for App {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::SessionsChanged => self.refresh_status(),
-            UserEvent::CloudDone(action, result) => {
+            UserEvent::CloudDone(generation, action, result) => {
+                if generation != self.cloud_generation {
+                    return;
+                }
+                self.cloud_task = None;
                 use crate::settings::ui::Message;
                 if let Some(view) = self.view.as_mut() {
                     view.cloud_busy = false;

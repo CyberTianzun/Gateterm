@@ -230,7 +230,19 @@ Set a default Cloud address in `config.toml`:
 url = "https://cloud.example.com"
 ```
 
-Desktop users use the "Cloud account" section at the bottom of the Settings window.
+Desktop users select a relay region in the "Cloud account" section of Settings and click
+"Sign in through browser". Sign-in, registration and password recovery happen in the browser;
+Desktop receives a loopback callback and saves the sign-in state automatically.
+
+| Relay region | Address |
+|---|---|
+| Mainland China (default) | `https://octoterm.signal.top/` |
+| North America (not deployed yet) | `https://octoterm.eclosion.ai/` |
+| Other global regions (not deployed yet) | `https://global.octoterm.eclosion.ai/` |
+
+Cloud must run a version with `/auth/desktop` and `/v1/auth/desktop/*` support.
+Sign-in can be cancelled and expires after 10 minutes. The callback listens only on
+`127.0.0.1` using a temporary port.
 
 ## Architecture
 

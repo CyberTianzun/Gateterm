@@ -35,6 +35,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/ws", any(ws_handler))
         .route("/api/launchers", get(launchers_handler))
+        .route("/api/cloud/status", get(cloud_status_handler))
         .route("/api/agents", get(crate::agent::routes::list))
         .route("/api/agents/{id}/plan", get(crate::agent::routes::plan))
         .route("/api/agents/{id}/install", post(crate::agent::routes::install))
@@ -55,6 +56,24 @@ pub fn router(state: AppState) -> Router {
         )
         .fallback(crate::assets::static_handler)
         .with_state(state)
+}
+
+/// The account used by this server. Cloud credentials never leave the process.
+async fn cloud_status_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !bearer_ok(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let cloud = state.cloud.clone();
+    match tokio::task::spawn_blocking(move || cloud.get()).await {
+        Ok(creds) => (
+            [(header::CACHE_CONTROL, "no-store")],
+            Json(serde_json::json!({
+                "connected": creds.is_some(),
+                "email": creds.map(|c| c.email),
+            })),
+        ).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "cloud status unavailable").into_response(),
+    }
 }
 
 /// `GET /api/launchers` —— 新建会话时可选的启动项。

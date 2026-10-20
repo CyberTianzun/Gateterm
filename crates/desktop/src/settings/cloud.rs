@@ -1,11 +1,45 @@
-//! 「Cloud 账号」区的表单与校验。和 state.rs 一样不认识 egui,全部可单测。
+//! Cloud account form and relay presets, independent of egui.
 
-use octoterm_cloud_client::{CodePurpose, Credentials};
+use octoterm_cloud_client::Credentials;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RelayRegion {
+    #[default]
+    China,
+    NorthAmerica,
+    Global,
+}
+
+impl RelayRegion {
+    pub const ALL: [Self; 3] = [Self::China, Self::NorthAmerica, Self::Global];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::China => "中国大陆地区",
+            Self::NorthAmerica => "北美地区",
+            Self::Global => "其它全球",
+        }
+    }
+
+    pub fn url(self) -> &'static str {
+        match self {
+            Self::China => "https://octoterm.signal.top/",
+            Self::NorthAmerica => "https://octoterm.eclosion.ai/",
+            Self::Global => "https://global.octoterm.eclosion.ai/",
+        }
+    }
+
+    pub fn from_url(url: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|r| r.url().trim_end_matches('/') == url.trim().trim_end_matches('/'))
+            .unwrap_or_default()
+    }
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CloudForm {
-    pub url: String,
-    pub email: String,
+    pub region: RelayRegion,
     pub password: String,
     pub code: String,
     pub confirm_delete: bool,
@@ -19,89 +53,56 @@ pub enum CloudStatus {
 
 pub fn status_from(creds: Option<Credentials>) -> CloudStatus {
     match creds {
-        Some(c) => CloudStatus::LoggedIn { email: c.email, url: c.url },
+        Some(c) => CloudStatus::LoggedIn {
+            email: c.email,
+            url: c.url,
+        },
         None => CloudStatus::LoggedOut,
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloudAction {
-    SendRegisterCode,
-    Register,
     Login,
-    SendResetCode,
-    ResetPassword,
+    CancelLogin,
     Logout,
     SendDeleteCode,
     DeleteAccount,
 }
 
 impl CloudAction {
-    /// 发码只是中间一步,用户接下来还要用刚填的密码 —— 这时不清空表单里的密码。
     pub fn keeps_secrets(self) -> bool {
-        matches!(self, CloudAction::SendRegisterCode | CloudAction::SendResetCode | CloudAction::SendDeleteCode)
+        self == Self::SendDeleteCode
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CloudJob {
-    RequestCode { url: String, email: String, purpose: CodePurpose },
-    Register { url: String, email: String, code: String, password: String },
-    Login { url: String, email: String, password: String },
-    ResetPassword { url: String, email: String, code: String, password: String },
+    BrowserLogin { url: String },
     Logout,
     RequestDeleteCode,
     DeleteAccount { password: String, code: String },
 }
 
-fn url(form: &CloudForm) -> Result<String, String> {
-    let u = form.url.trim();
-    if u.starts_with("http://") || u.starts_with("https://") {
-        Ok(u.to_string())
-    } else {
-        Err("Cloud 地址必须以 http:// 或 https:// 开头".into())
-    }
-}
-
-fn email(form: &CloudForm) -> Result<String, String> {
-    let e = form.email.trim().to_lowercase();
-    if e.contains('@') { Ok(e) } else { Err("请填写邮箱".into()) }
-}
-
-fn password(form: &CloudForm) -> Result<String, String> {
-    let n = form.password.chars().count();
-    if (8..=128).contains(&n) { Ok(form.password.clone()) } else { Err("密码长度需为 8–128 个字符".into()) }
-}
-
-fn code(form: &CloudForm) -> Result<String, String> {
-    let c = form.code.trim();
-    if c.len() == 6 && c.chars().all(|ch| ch.is_ascii_digit()) {
-        Ok(c.to_string())
-    } else {
-        Err("请填写邮件里的 6 位验证码".into())
-    }
-}
-
-pub fn prepare(form: &CloudForm, status: &CloudStatus, action: CloudAction) -> Result<CloudJob, String> {
+pub fn prepare(
+    form: &CloudForm,
+    status: &CloudStatus,
+    action: CloudAction,
+) -> Result<CloudJob, String> {
     use CloudAction::*;
     let logged_in = matches!(status, CloudStatus::LoggedIn { .. });
-    let needs_login = matches!(action, Logout | SendDeleteCode | DeleteAccount);
-    if needs_login != logged_in {
-        return Err(if logged_in { "已登录;请先退出登录".into() } else { "当前未登录".into() });
+    if matches!(action, Login | CancelLogin) == logged_in {
+        return Err(if logged_in {
+            "已登录，请先退出登录".into()
+        } else {
+            "当前未登录".into()
+        });
     }
     Ok(match action {
-        SendRegisterCode => CloudJob::RequestCode { url: url(form)?, email: email(form)?, purpose: CodePurpose::Register },
-        SendResetCode => CloudJob::RequestCode { url: url(form)?, email: email(form)?, purpose: CodePurpose::Reset },
-        Register => CloudJob::Register { url: url(form)?, email: email(form)?, code: code(form)?, password: password(form)? },
-        Login => {
-            if form.password.is_empty() {
-                return Err("请填写密码".into());
-            }
-            CloudJob::Login { url: url(form)?, email: email(form)?, password: form.password.clone() }
-        }
-        ResetPassword => {
-            CloudJob::ResetPassword { url: url(form)?, email: email(form)?, code: code(form)?, password: password(form)? }
-        }
+        Login => CloudJob::BrowserLogin {
+            url: form.region.url().into(),
+        },
+        CancelLogin => return Err("没有正在进行的登录".into()),
         Logout => CloudJob::Logout,
         SendDeleteCode => CloudJob::RequestDeleteCode,
         DeleteAccount => {
@@ -111,7 +112,14 @@ pub fn prepare(form: &CloudForm, status: &CloudStatus, action: CloudAction) -> R
             if form.password.is_empty() {
                 return Err("请填写密码".into());
             }
-            CloudJob::DeleteAccount { password: form.password.clone(), code: code(form)? }
+            let code = form.code.trim();
+            if code.len() != 6 || !code.bytes().all(|c| c.is_ascii_digit()) {
+                return Err("请填写邮件里的 6 位验证码".into());
+            }
+            CloudJob::DeleteAccount {
+                password: form.password.clone(),
+                code: code.into(),
+            }
         }
     })
 }
@@ -120,67 +128,38 @@ pub fn prepare(form: &CloudForm, status: &CloudStatus, action: CloudAction) -> R
 mod tests {
     use super::*;
 
-    fn form() -> CloudForm {
-        CloudForm {
-            url: " https://cloud.example.com ".into(),
-            email: " A@Example.com ".into(),
-            password: "pw-pw-pw".into(),
-            code: " 012345 ".into(),
-            confirm_delete: false,
+    #[test]
+    fn login_uses_presets_and_needs_no_account_fields() {
+        let mut form = CloudForm::default();
+        assert_eq!(form.region, RelayRegion::China);
+        for region in RelayRegion::ALL {
+            form.region = region;
+            assert_eq!(
+                prepare(&form, &CloudStatus::LoggedOut, CloudAction::Login),
+                Ok(CloudJob::BrowserLogin {
+                    url: region.url().into()
+                })
+            );
+            assert_eq!(
+                RelayRegion::from_url(region.url().trim_end_matches('/')),
+                region
+            );
         }
-    }
-
-    fn logged_in() -> CloudStatus {
-        CloudStatus::LoggedIn { email: "a@example.com".into(), url: "https://cloud.example.com".into() }
-    }
-
-    #[test]
-    fn register_job_is_normalized() {
-        assert_eq!(
-            prepare(&form(), &CloudStatus::LoggedOut, CloudAction::Register),
-            Ok(CloudJob::Register {
-                url: "https://cloud.example.com".into(),
-                email: "a@example.com".into(),
-                code: "012345".into(),
-                password: "pw-pw-pw".into(),
-            })
-        );
-    }
-
-    #[test]
-    fn validation_errors() {
-        let mut f = form();
-        f.url = "cloud.example.com".into();
-        assert!(prepare(&f, &CloudStatus::LoggedOut, CloudAction::Login).is_err());
-        let mut f = form();
-        f.code = "12a456".into();
-        assert!(prepare(&f, &CloudStatus::LoggedOut, CloudAction::Register).is_err());
-        let mut f = form();
-        f.password = "short".into();
-        assert!(prepare(&f, &CloudStatus::LoggedOut, CloudAction::ResetPassword).is_err());
     }
 
     #[test]
     fn actions_require_matching_login_state() {
-        assert!(prepare(&form(), &logged_in(), CloudAction::Login).is_err());
-        assert!(prepare(&form(), &CloudStatus::LoggedOut, CloudAction::Logout).is_err());
-        assert_eq!(prepare(&form(), &logged_in(), CloudAction::Logout), Ok(CloudJob::Logout));
-    }
-
-    #[test]
-    fn delete_requires_confirmation() {
-        assert!(prepare(&form(), &logged_in(), CloudAction::DeleteAccount).is_err());
-        let mut f = form();
-        f.confirm_delete = true;
+        let form = CloudForm::default();
+        let status = CloudStatus::LoggedIn {
+            email: "a@example.com".into(),
+            url: RelayRegion::China.url().into(),
+        };
+        assert!(prepare(&form, &status, CloudAction::Login).is_err());
+        assert!(prepare(&form, &CloudStatus::LoggedOut, CloudAction::Logout).is_err());
         assert_eq!(
-            prepare(&f, &logged_in(), CloudAction::DeleteAccount),
-            Ok(CloudJob::DeleteAccount { password: "pw-pw-pw".into(), code: "012345".into() })
+            prepare(&form, &status, CloudAction::Logout),
+            Ok(CloudJob::Logout)
         );
-    }
-
-    #[test]
-    fn send_code_keeps_secrets() {
-        assert!(CloudAction::SendRegisterCode.keeps_secrets());
-        assert!(!CloudAction::Register.keeps_secrets());
+        assert!(prepare(&form, &status, CloudAction::DeleteAccount).is_err());
     }
 }

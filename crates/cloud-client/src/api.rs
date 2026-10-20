@@ -30,6 +30,7 @@ impl CloudError {
                 "email_taken" => "该邮箱已注册".into(),
                 "weak_password" => "密码长度需为 8–128 个字符".into(),
                 "invalid_email" => "邮箱格式不正确".into(),
+                "invalid_authorization_code" => "网页登录授权已失效，请重新登录".into(),
                 "wrong_password" => "密码错误".into(),
                 other => format!("Cloud 返回错误:{other}"),
             },
@@ -89,6 +90,13 @@ pub struct AuthOk {
     pub account_id: String,
     #[serde(default)]
     pub server_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DesktopAuthOk {
+    pub token: String,
+    pub email: String,
+    pub server_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -191,6 +199,22 @@ impl CloudClient {
     pub async fn login(&self, email: &str, password: &str, client: &ClientInfo) -> Result<AuthOk, CloudError> {
         let body = json!({"email": email, "password": password, "client": client});
         self.send_json(self.http.post(self.url("/v1/auth/login")).json(&body)).await
+    }
+
+    /// Redeem the browser's single-use code with the proof kept by Desktop.
+    pub async fn exchange_desktop_code(
+        &self,
+        code: &str,
+        verifier: &str,
+        redirect_uri: &str,
+    ) -> Result<DesktopAuthOk, CloudError> {
+        let body = json!({"code": code, "code_verifier": verifier, "redirect_uri": redirect_uri});
+        self.send_json(
+            self.http
+                .post(self.url("/v1/auth/desktop/token"))
+                .json(&body),
+        )
+        .await
     }
 
     pub async fn reset_password(&self, email: &str, code: &str, new_password: &str) -> Result<(), CloudError> {

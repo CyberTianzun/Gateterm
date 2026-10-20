@@ -19,7 +19,10 @@
         <button id="new-session" data-i18n-title="app.newSession">+</button>
       </div>
       <nav id="session-nav"></nav>
-      <div id="sidebar-foot"><span data-i18n="app.kernel"></span> · <span id="conn-state"></span></div>
+      <div id="sidebar-foot">
+        <div><span data-i18n="app.kernel"></span> · <span id="conn-state"></span></div>
+        <div id="cloud-state" role="status" aria-live="polite"></div>
+      </div>
     </aside>
     <div id="scrim" hidden></div>
     <main id="workspace">

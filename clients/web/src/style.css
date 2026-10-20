@@ -65,6 +65,8 @@ body[data-sidebar-position="right"] #sidebar { order: 2; border-right: 0; border
   color: var(--dim);
   font-size: 12px;
 }
+#cloud-state { margin-top: 6px; overflow-wrap: anywhere; line-height: 1.5; }
+#cloud-state[data-connected="true"] { color: var(--text); }
 
 .srow {
   position: relative;

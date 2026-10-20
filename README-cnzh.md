@@ -192,7 +192,17 @@ Cloud 地址可写进 `config.toml`:
 url = "https://cloud.example.com"
 ```
 
-desktop 用户在「设置…」窗口底部的「Cloud 账号」区操作。
+Desktop 用户在「设置…」窗口底部的「Cloud 账号」区选择中继地区，点击「通过浏览器登录」。
+注册、登录和找回密码在浏览器中完成，成功后自动回调本机并保存登录状态，无需填写 Cloud 地址。
+
+| 中继地区 | 地址 |
+|---|---|
+| 中国大陆地区（默认） | `https://octoterm.signal.top/` |
+| 北美地区（暂未部署） | `https://octoterm.eclosion.ai/` |
+| 其它全球（暂未部署） | `https://global.octoterm.eclosion.ai/` |
+
+网页登录需要 Cloud 部署包含 `/auth/desktop` 与 `/v1/auth/desktop/*` 的版本。
+登录等待最多 10 分钟，可在客户端取消；本机回调只监听 `127.0.0.1` 的临时端口。
 
 ## 架构
 

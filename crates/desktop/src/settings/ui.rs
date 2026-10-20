@@ -7,7 +7,7 @@
 //! 让整帧重跑一趟。所以这里只允许改 [`View`] 里的表单文本和返回 [`Outcome`],
 //! 一次性的动作(保存、写文件、重启 HTTP 层)必须由调用方在闭包外做一次。
 
-use crate::settings::cloud::{CloudAction, CloudForm, CloudStatus};
+use crate::settings::cloud::{CloudAction, CloudForm, CloudStatus, RelayRegion};
 use crate::settings::state::Form;
 
 pub use crate::settings::state::Message;
@@ -228,44 +228,33 @@ fn draw_cloud(ui: &mut egui::Ui, view: &mut View) -> Option<CloudAction> {
             });
         }
         CloudStatus::LoggedOut => {
-            egui::Grid::new("cloud-login").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-                ui.label("Cloud 地址");
-                ui.add(egui::TextEdit::singleline(&mut view.cloud.url).desired_width(220.0));
-                ui.end_row();
-                ui.label("邮箱");
-                ui.add(egui::TextEdit::singleline(&mut view.cloud.email).desired_width(220.0));
-                ui.end_row();
-                ui.label("密码");
-                ui.add(egui::TextEdit::singleline(&mut view.cloud.password).password(true).desired_width(220.0));
-                ui.end_row();
-                ui.label("验证码");
-                ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut view.cloud.code).desired_width(80.0));
-                    ui.small("注册或重置密码时需要");
-                });
-                ui.end_row();
-            });
             ui.horizontal(|ui| {
-                if ui.button("登录").clicked() {
-                    action = Some(CloudAction::Login);
-                }
-                if ui.button("发送注册验证码").clicked() {
-                    action = Some(CloudAction::SendRegisterCode);
-                }
-                if ui.button("注册").clicked() {
-                    action = Some(CloudAction::Register);
-                }
+                ui.label("中继地区");
+                egui::ComboBox::from_id_salt("cloud-region")
+                    .selected_text(view.cloud.region.label())
+                    .show_ui(ui, |ui| {
+                        for region in RelayRegion::ALL {
+                            ui.selectable_value(&mut view.cloud.region, region, region.label());
+                        }
+                    });
             });
-            ui.horizontal(|ui| {
-                if ui.button("发送重置验证码").clicked() {
-                    action = Some(CloudAction::SendResetCode);
-                }
-                if ui.button("用上面的密码重置").clicked() {
-                    action = Some(CloudAction::ResetPassword);
-                }
-            });
+            if view.cloud.region != RelayRegion::China {
+                ui.small("该地区暂未部署，稍后开放。");
+            }
+            ui.small("在浏览器中登录或创建账号，完成后自动返回客户端。");
+            if ui.button("通过浏览器登录").clicked() {
+                action = Some(CloudAction::Login);
+            }
         }
     });
+    if view.cloud_busy && matches!(status, CloudStatus::LoggedOut) {
+        ui.horizontal(|ui| {
+            ui.label("等待浏览器完成登录…");
+            if ui.button("取消登录").clicked() {
+                action = Some(CloudAction::CancelLogin);
+            }
+        });
+    }
     if let Some(m) = &view.cloud_message {
         match m {
             Message::Ok(t) => ui.colored_label(OK_COLOR, t.as_str()),
