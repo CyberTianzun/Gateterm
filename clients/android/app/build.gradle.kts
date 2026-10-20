@@ -1,3 +1,6 @@
+import java.io.File
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -11,6 +14,14 @@ if (file("google-services.json").exists()) {
 
 // Rust cloud-ffi:arm64 的 .so 与 UniFFI Kotlin 绑定都生成到 build/,不入库。
 val repoRoot: File = rootProject.projectDir.parentFile.parentFile
+// 签名文件放在仓库同级的 OctotermSecrets，其它机器保持这个相对位置即可。
+val signingPropertiesFile = File(repoRoot.parentFile, "OctotermSecrets/octoterm-release.signing.properties")
+val signingProperties = Properties()
+val hasOctotermSigning = signingPropertiesFile.isFile
+if (hasOctotermSigning) {
+    signingPropertiesFile.inputStream().use { signingProperties.load(it) }
+}
+
 val ffiJniDir = layout.buildDirectory.dir("generated/ffi/jniLibs")
 val ffiKotlinDir = layout.buildDirectory.dir("generated/ffi/kotlin")
 // 构建前提:PATH 上要有 cargo 与 cargo-ndk,并设置 ANDROID_NDK_HOME 指向 NDK。
@@ -50,8 +61,32 @@ android {
     sourceSets["main"].jniLibs.srcDir(ffiJniDir)
     sourceSets["main"].java.srcDir(ffiKotlinDir)
 
+    signingConfigs {
+        if (hasOctotermSigning) {
+            create("octoterm") {
+                val configuredStore = File(signingProperties.getProperty("storeFile"))
+                storeFile = if (configuredStore.isAbsolute) {
+                    configuredStore
+                } else {
+                    File(signingPropertiesFile.parentFile, configuredStore.path)
+                }
+                storePassword = signingProperties.getProperty("storePassword")
+                keyAlias = signingProperties.getProperty("keyAlias")
+                keyPassword = signingProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (hasOctotermSigning) {
+                signingConfig = signingConfigs.getByName("octoterm")
+            }
+        }
         release {
+            if (hasOctotermSigning) {
+                signingConfig = signingConfigs.getByName("octoterm")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
