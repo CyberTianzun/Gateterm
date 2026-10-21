@@ -48,6 +48,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import ai.eclosion.octoterm.android.R
 import ai.eclosion.octoterm.android.ui.components.AppBarTitle
+import ai.eclosion.octoterm.android.ui.components.AgentStatusBadge
+import ai.eclosion.octoterm.android.agent.AgentSession
+import ai.eclosion.octoterm.android.agent.AgentSessions
 import ai.eclosion.octoterm.android.connection.ServerConnection
 import ai.eclosion.octoterm.android.launcher.Launcher
 import ai.eclosion.octoterm.android.wire.SessionInfo
@@ -60,6 +63,7 @@ import ai.eclosion.octoterm.android.agent.HistoryPage
 fun ServerHomeScreen(
     connection: ServerConnection,
     sessions: List<SessionInfo>,
+    agents: Map<String, AgentSession>,
     openSessionIds: List<Long>,
     reconnecting: Boolean,
     pendingRename: SessionInfo?,
@@ -134,6 +138,7 @@ fun ServerHomeScreen(
                     items(sessions, key = { it.id }) { session ->
                         SessionRow(
                             session = session,
+                            agent = AgentSessions.forSession(agents, session.id),
                             open = session.id in openSessionIds,
                             onOpen = { onOpenSession(session.id) },
                             onRename = { onRename(session) },
@@ -293,6 +298,7 @@ private fun EmptySessions(modifier: Modifier, onNewSession: () -> Unit) {
 @Composable
 private fun SessionRow(
     session: SessionInfo,
+    agent: AgentSession?,
     open: Boolean,
     onOpen: () -> Unit,
     onRename: () -> Unit,
@@ -303,7 +309,10 @@ private fun SessionRow(
         headlineContent = { Text(session.name.ifBlank { "#${session.id}" }) },
         supportingContent = {
             val size = "${session.cols}×${session.rows}"
-            Text(if (open) "$size · ${stringResource(R.string.session_open)}" else size)
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (agent != null) AgentStatusBadge(agent)
+                Text(if (open) "$size · ${stringResource(R.string.session_open)}" else size)
+            }
         },
         trailingContent = {
             Box {

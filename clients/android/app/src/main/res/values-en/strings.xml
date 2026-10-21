@@ -71,6 +71,17 @@
     <string name="term_tab_close">Close</string>
 
     <string name="launcher_filter">Filter</string>
+    <string name="agent_state_idle">Idle</string>
+    <string name="agent_state_thinking">Thinking</string>
+    <string name="agent_state_working">Working</string>
+    <string name="agent_state_waiting">Waiting for you</string>
+    <string name="agent_state_waiting_terminal">Waiting in the terminal</string>
+    <string name="agent_state_error">Error</string>
+    <string name="agent_state_done">Finished</string>
+    <string name="agent_notice_permission">wants approval</string>
+    <string name="agent_notice_idle">idle, waiting on you</string>
+    <string name="agent_notice_input">needs your input</string>
+    <string name="agent_notice_choice">waiting for a choice</string>
     <string name="launcher_loading">Loading launchers…</string>
     <string name="launcher_default_name">Default shell</string>
     <string name="launcher_default_detail">The server picks the command</string>

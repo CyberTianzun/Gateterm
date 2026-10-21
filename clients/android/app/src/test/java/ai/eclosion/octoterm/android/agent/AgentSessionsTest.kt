@@ -62,6 +62,44 @@ class AgentSessionsTest {
     }
 
     @Test
+    fun sessionListStatusTracksEventsAndFallsBackAfterAgentExit() {
+        var map = AgentSessions.replaceAll(listOf(
+            s("codex", "active", 7, AgentState.Thinking),
+            s("claude-code", "idle", 7),
+            s("pi", "elsewhere", 8, AgentState.Waiting),
+            s("grok", "unmanaged", null, AgentState.Waiting),
+        ))
+        assertEquals("codex", AgentSessions.forSession(map, 7)?.agentId)
+        val working = s("codex", "active", 7, AgentState.Working).copy(detail = "Bash")
+        map = AgentSessions.applyEvent(map, working)
+        assertEquals(working, AgentSessions.forSession(map, 7))
+        val waiting = working.copy(state = AgentState.Waiting, pending = "approval-1")
+        map = AgentSessions.applyEvent(map, waiting)
+        assertEquals(waiting, AgentSessions.forSession(map, 7))
+        map = AgentSessions.applyEvent(map, waiting.copy(state = AgentState.Done))
+        assertEquals("claude-code", AgentSessions.forSession(map, 7)?.agentId)
+        assertEquals(AgentState.Idle, AgentSessions.forSession(map, 7)?.state)
+        map = AgentSessions.replaceAll(listOf(s("codex", "after-reconnect", 7)))
+        assertEquals("after-reconnect", AgentSessions.forSession(map, 7)?.agentSessionId)
+        assertNull(AgentSessions.forSession(map, 7)?.pending)
+        assertNull(AgentSessions.forSession(map, 99))
+    }
+
+    @Test
+    fun sessionListEmphasizesTheAgentNeedingAttentionRegardlessOfTranscriptSupport() {
+        val states = listOf(AgentState.Idle, AgentState.Thinking, AgentState.Working, AgentState.Error, AgentState.Waiting)
+        var map = AgentSessions.replaceAll(states.map { state ->
+            s("agent-${state.wire}", state.wire, 7, state, supports = state == AgentState.Idle)
+        })
+        for (state in states.reversed()) {
+            val selected = AgentSessions.forSession(map, 7)!!
+            assertEquals(state, selected.state)
+            map = AgentSessions.applyEvent(map, selected.copy(state = AgentState.Done))
+        }
+        assertNull(AgentSessions.forSession(map, 7))
+    }
+
+    @Test
     fun malformedAgentEventIsIgnoredNotFatal() {
         val msg = ControlJson.parse("""{"type":"agent-event","state":"idle"}""".toByteArray(StandardCharsets.UTF_8))
         assertTrue(msg is ServerMsg.Unknown)

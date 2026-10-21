@@ -71,6 +71,17 @@
     <string name="term_tab_close">关闭</string>
 
     <string name="launcher_filter">筛选</string>
+    <string name="agent_state_idle">空闲</string>
+    <string name="agent_state_thinking">思考中</string>
+    <string name="agent_state_working">执行中</string>
+    <string name="agent_state_waiting">等你回答</string>
+    <string name="agent_state_waiting_terminal">在终端里等你</string>
+    <string name="agent_state_error">出错</string>
+    <string name="agent_state_done">已结束</string>
+    <string name="agent_notice_permission">在等授权</string>
+    <string name="agent_notice_idle">闲着等你说话</string>
+    <string name="agent_notice_input">需要你的输入</string>
+    <string name="agent_notice_choice">在等你选择</string>
     <string name="launcher_loading">正在读取启动项…</string>
     <string name="launcher_default_name">默认 shell</string>
     <string name="launcher_default_detail">由服务器决定跑什么</string>

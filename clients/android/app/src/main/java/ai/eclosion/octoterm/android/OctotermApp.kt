@@ -235,6 +235,7 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                     ServerHomeScreen(
                         connection = connection,
                         sessions = state.sessions,
+                        agents = state.agents,
                         openSessionIds = state.openSessionIds,
                         reconnecting = state.reconnecting,
                         pendingRename = state.pendingRename,
