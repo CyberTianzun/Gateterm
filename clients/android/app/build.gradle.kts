@@ -1,5 +1,7 @@
 import java.io.File
 import java.util.Properties
+import groovy.json.JsonSlurper
+import groovy.json.JsonOutput
 
 plugins {
     alias(libs.plugins.android.application)
@@ -14,6 +16,14 @@ if (file("google-services.json").exists()) {
 
 // Rust cloud-ffi:arm64 的 .so 与 UniFFI Kotlin 绑定都生成到 build/,不入库。
 val repoRoot: File = rootProject.projectDir.parentFile.parentFile
+// Consume only Mobile Push app credentials; keep the downloaded EMAS file outside version control.
+val aliyunServicesFile = file("aliyun-emas-services.json")
+val aliyunConfig = if (aliyunServicesFile.isFile) {
+    val document = JsonSlurper().parse(aliyunServicesFile) as Map<*, *>
+    val config = document["config"] as Map<*, *>
+    require(config["emas.packageName"] == "ai.eclosion.octoterm.android") { "EMAS package name does not match Android applicationId" }
+    config
+} else emptyMap<Any, Any>()
 // 签名文件放在仓库同级的 OctotermSecrets，其它机器保持这个相对位置即可。
 val signingPropertiesFile = File(repoRoot.parentFile, "OctotermSecrets/octoterm-release.signing.properties")
 val signingProperties = Properties()
@@ -53,6 +63,8 @@ android {
     compileSdk = 36
 
     defaultConfig {
+        buildConfigField("String", "ALIYUN_APP_KEY", JsonOutput.toJson(aliyunConfig["emas.appKey"]?.toString() ?: ""))
+        buildConfigField("String", "ALIYUN_APP_SECRET", JsonOutput.toJson(aliyunConfig["emas.appSecret"]?.toString() ?: ""))
         applicationId = "ai.eclosion.octoterm.android"
         minSdk = 26
         targetSdk = 36
@@ -109,10 +121,12 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
 dependencies {
+    implementation("com.aliyun.ams:alicloud-android-push:4.0.0")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)

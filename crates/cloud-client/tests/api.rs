@@ -5,6 +5,24 @@ use octoterm_cloud_client::{ClientInfo, CloudClient, CloudError, CodePurpose, No
 use serde_json::json;
 
 #[tokio::test]
+async fn push_route_is_deployment_selected_with_legacy_fcm_compatibility() {
+    let cloud = FakeCloud::start().await;
+    let client = CloudClient::new(&cloud.url);
+    assert_eq!(client.push_config("device-token").await.unwrap().platform, "fcm");
+    cloud.respond("GET /v1/push-config", 200, json!({"platform":"aliyun","app_key":"123456"}));
+    let route = client.push_config("device-token").await.unwrap();
+    assert_eq!(route.platform, "aliyun");
+    assert_eq!(route.app_key.as_deref(), Some("123456"));
+    assert_eq!(cloud.last("GET /v1/push-config").auth.as_deref(), Some("Bearer device-token"));
+    cloud.respond("GET /v1/push-config", 200, json!({"platform":"none","app_key":null}));
+    assert_eq!(client.push_config("device-token").await.unwrap().platform, "none");
+    cloud.respond("GET /v1/push-config", 401, json!({"error":"unauthorized"}));
+    assert_eq!(client.push_config("device-token").await.unwrap_err(), CloudError::Unauthorized);
+    cloud.respond("GET /v1/push-config", 503, json!({"error":"unavailable"}));
+    assert!(client.push_config("device-token").await.is_err());
+}
+
+#[tokio::test]
 async fn register_push_target_puts_platform_and_token() {
     let cloud = FakeCloud::start().await;
     cloud.respond("PUT /v1/push-target", 204, json!(null));

@@ -69,7 +69,7 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
     LaunchedEffect(cloud.status?.email, cloud.askNotificationPermission, pushRegistration) {
         val explicitRequest = cloud.askNotificationPermission
         if (explicitRequest) cloudViewModel.consumePermissionRequest()
-        if (cloud.status != null && pushAvailable && (explicitRequest || pushRegistration == PushRegistration.Registered)) {
+        if (cloud.status != null && pushAvailable && pushRegistration.registered) {
             AgentNotifications.ensureChannel(context)
             if (Build.VERSION.SDK_INT >= 33 && !AgentNotifications.enabled(context) &&
                 (explicitRequest || !permissionPreferences.getBoolean("permission_requested", false))) {
@@ -80,7 +80,7 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
     }
     val lifecycleOwner = LocalLifecycleOwner.current
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
-        if (cloud.status != null && pushRegistration != PushRegistration.Registered && pushRegistration != PushRegistration.Registering) {
+        if (cloud.status != null && pushRegistration != PushRegistration.Registering) {
             PushRegistrar.refreshOnStart(context)
         }
     }

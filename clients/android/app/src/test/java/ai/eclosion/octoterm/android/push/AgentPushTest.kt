@@ -8,6 +8,19 @@ class AgentPushTest {
     private val base = mapOf("server_id" to "srv", "session" to "7", "agent_id" to "claude-code", "kind" to "waiting")
 
     @Test
+    fun aliyunDataMessagesUseTheSameNotificationAndWithdrawalRules() {
+        for (kind in listOf("waiting", "permission", "done", "resolved")) {
+            val fields = base + ("kind" to kind)
+            val json = org.json.JSONObject(fields).toString()
+            assertEquals(AgentPush.parse(fields), AgentPush.parseMessage(json))
+        }
+        assertNull(AgentPush.parseMessage("not json"))
+        assertNull(AgentPush.parseMessage("[]"))
+        assertNull(AgentPush.parseMessage("{}"))
+        assertNull(AgentPush.parseMessage("x".repeat(8193)))
+    }
+
+    @Test
     fun parsesWaiting() {
         val p = AgentPush.parse(base)!!
         assertEquals(AgentPush("srv", 7, "claude-code", AgentPush.Kind.Waiting, null, null), p)

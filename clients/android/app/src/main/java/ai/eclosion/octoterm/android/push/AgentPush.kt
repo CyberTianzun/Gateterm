@@ -33,6 +33,17 @@ data class AgentPush(
     }
 
     companion object {
+        fun parseMessage(body: String): AgentPush? {
+            if (body.length > 8192) return null
+            return try {
+                val json = org.json.JSONObject(body)
+                val values = json.keys().asSequence().mapNotNull { key ->
+                    (json.opt(key) as? String)?.let { key to it }
+                }.toMap()
+                parse(values)
+            } catch (_: Exception) { null }
+        }
+
         fun tag(serverId: String, session: Long, agentId: String): String = "$serverId:$session:$agentId"
         fun notificationId(tag: String): Int = tag.hashCode()
 

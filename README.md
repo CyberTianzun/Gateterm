@@ -246,8 +246,15 @@ and password recovery on the web page. The browser returns to the app, which sav
 device credential and registers for push notifications. Android requires the Cloud
 `/auth/mobile` and `/v1/auth/mobile/*` endpoints. The account icon turns the theme's
 accent color with a small check when signed in, and shows a small cross when signed out.
-The account page reports push registration status and offers a retry. FCM requires
-Google Play services, network access to Google services, and notification permission.
+The account page reports push registration status and offers a retry. Cloud selects
+Aliyun or FCM through its deployment configuration; Android reads `/v1/push-config`
+and registers with that provider. Put the downloaded Aliyun client configuration at
+`clients/android/app/aliyun-emas-services.json` (ignored by Git). Its app credentials
+are separate from the server-only Alibaba Cloud AccessKey. Aliyun does not require
+Google Play services; FCM requires Google Play services and network access to Google.
+Both routes require notification permission. Aliyun's proprietary channel requires
+the app process to be runnable; vendor channels need additional SDKs and credentials
+for timely delivery when the process has been killed.
 Updated Desktop/server builds also send a notification when a Stop hook completes a turn.
 Sign-in can be cancelled and expires after 10 minutes. The callback listens only on
 `127.0.0.1` using a temporary port.

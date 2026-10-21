@@ -14,6 +14,12 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Octoterm"
         android:usesCleartextTraffic="true">
+        <meta-data android:name="firebase_messaging_auto_init_enabled" android:value="false" />
+        <receiver android:name=".push.AliyunMessageReceiver" android:exported="false">
+            <intent-filter><action android:name="com.alibaba.sdk.android.push.RECEIVE" /></intent-filter>
+            <intent-filter><action android:name="com.alibaba.push2.action.NOTIFICATION_OPENED" /></intent-filter>
+            <intent-filter><action android:name="com.alibaba.push2.action.NOTIFICATION_REMOVED" /></intent-filter>
+        </receiver>
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|smallestScreenSize"

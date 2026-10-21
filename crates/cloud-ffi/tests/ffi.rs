@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use axum::Router;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::routing::{post, put};
+use axum::routing::{get, post, put};
 use octoterm_cloud_ffi::{CloudAccount, CloudFfiError, Purpose};
 use serde_json::{Value, json};
 
@@ -20,6 +20,10 @@ async fn fake() -> (String, Seen) {
     let s4 = seen.clone();
     let s5 = seen.clone();
     let app = Router::new()
+        .route("/v1/push-config", get(|headers: HeaderMap| async move {
+            assert_eq!(headers.get("authorization").unwrap(), "Bearer oct_dev");
+            axum::Json(json!({"platform":"aliyun","app_key":"123456"}))
+        }))
         .route(
             "/v1/auth/mobile/token",
             post(move |axum::Json(body): axum::Json<Value>| {
@@ -114,6 +118,20 @@ async fn login_as_device_then_register_push_target() {
     assert_eq!(seen[0].2["client"], json!({"kind": "device", "label": "Pixel 9"}));
     assert_eq!(seen[1].1.as_deref(), Some("Bearer oct_dev"));
     assert_eq!(seen[1].2, json!({"platform": "fcm", "push_token": "fcm-tok"}));
+}
+
+#[tokio::test]
+async fn native_bridge_negotiates_aliyun_without_exposing_credentials() {
+    let (url, seen) = fake().await;
+    let dir = tempfile::tempdir().unwrap();
+    let account = CloudAccount::new(dir.path().join("cloud.json").display().to_string(), "Android".into());
+    account.login(url, "phone@example.com".into(), "password".into()).await.unwrap();
+    let route = account.push_config().await.unwrap();
+    assert_eq!(route.platform, "aliyun");
+    assert_eq!(route.app_key.as_deref(), Some("123456"));
+    account.register_push_target(route.platform, "aliyun-device-id".into()).await.unwrap();
+    let calls = seen.lock().unwrap();
+    assert_eq!(calls[1].2, json!({"platform":"aliyun","push_token":"aliyun-device-id"}));
 }
 
 #[tokio::test]

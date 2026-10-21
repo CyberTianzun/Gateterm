@@ -53,6 +53,12 @@ pub enum ClientKind {
     Server,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct PushConfig {
+    pub platform: String,
+    pub app_key: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ClientInfo {
     pub kind: ClientKind,
@@ -255,6 +261,16 @@ impl CloudClient {
     pub async fn notify(&self, token: &str, n: &Notify) -> Result<u32, CloudError> {
         let v: Value = self.send_json(self.http.post(self.url("/v1/notify")).bearer_auth(token).json(n)).await?;
         Ok(v["delivered"].as_u64().unwrap_or(0) as u32)
+    }
+
+    /// The deployment chooses the Android push route. Older Cloud versions used FCM exclusively.
+    pub async fn push_config(&self, token: &str) -> Result<PushConfig, CloudError> {
+        let response = self.send_json(self.http.get(self.url("/v1/push-config")).bearer_auth(token)).await;
+        match response {
+            Ok(value) => serde_json::from_value(value).map_err(|_| CloudError::Unreachable("invalid push configuration".into())),
+            Err(CloudError::Api { status: 404, .. }) => Ok(PushConfig { platform: "fcm".into(), app_key: None }),
+            Err(error) => Err(error),
+        }
     }
 
     /// 登记本设备的推送 token(仅 device 凭据可用)。

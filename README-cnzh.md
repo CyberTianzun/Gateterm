@@ -205,7 +205,12 @@ Desktop 用户在「设置…」窗口底部的「Cloud 账号」区选择中继
 Android 同样使用三个中继地区预设，并在浏览器中完成登录、注册和找回密码。
 完成后自动返回 App，保存设备凭据并登记推送；需要 Cloud 部署 `/auth/mobile`
 和 `/v1/auth/mobile/*` 接口。登录后账号图标着色并在右下角显示小勾，未登录时显示小叉。
-账号页显示推送登记结果并提供重试；FCM 需要可用的 Google Play 服务、能访问 Google 服务的网络及通知权限。
+账号页显示推送登记结果并提供重试；Cloud 通过部署参数选择阿里云或 FCM，Android 从
+`/v1/push-config` 自动读取路线并登记对应设备。阿里云客户端配置放在
+`clients/android/app/aliyun-emas-services.json`（不入库），其中的 App 配置与仅供服务端使用的
+阿里云 AccessKey 分开。阿里云路线不依赖 Google Play 服务，FCM 需要可用的 Google Play
+服务和能访问 Google 的网络；两者都需要通知权限。阿里云自有通道要求应用进程可运行，
+进程被系统杀掉后及时展示还需要额外接入并配置厂商推送通道。
 更新后的 Desktop/server 还会在 Stop hook 完成本轮任务时发送完成提醒。
 登录等待最多 10 分钟，可在客户端取消；本机回调只监听 `127.0.0.1` 的临时端口。
 

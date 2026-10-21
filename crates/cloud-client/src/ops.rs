@@ -162,3 +162,9 @@ pub async fn register_push_target(path: &Path, platform: &str, push_token: &str)
     let r = CloudClient::new(&c.url).register_push_target(&c.token, platform, push_token).await;
     revoke_on_401(path, &c.token, r)
 }
+
+pub async fn push_config(path: &Path) -> Result<crate::api::PushConfig, OpsError> {
+    let c = current(path)?;
+    let result = CloudClient::new(&c.url).push_config(&c.token).await;
+    revoke_on_401(path, &c.token, result)
+}

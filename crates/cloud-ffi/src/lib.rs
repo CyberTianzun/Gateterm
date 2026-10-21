@@ -71,6 +71,12 @@ pub struct CloudStatus {
     pub url: String,
 }
 
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PushConfig {
+    pub platform: String,
+    pub app_key: Option<String>,
+}
+
 /// A Cloud account on one device. `cred_path` is supplied by the App (Android: `filesDir/cloud.json`).
 #[derive(uniffi::Object)]
 pub struct CloudAccount {
@@ -144,5 +150,10 @@ impl CloudAccount {
     pub async fn register_push_target(&self, platform: String, token: String) -> Result<(), CloudFfiError> {
         ops::register_push_target(&self.path, &platform, &token).await?;
         Ok(())
+    }
+
+    pub async fn push_config(&self) -> Result<PushConfig, CloudFfiError> {
+        let config = ops::push_config(&self.path).await?;
+        Ok(PushConfig { platform: config.platform, app_key: config.app_key })
     }
 }

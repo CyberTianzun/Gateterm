@@ -14,3 +14,4 @@ captures/
 kotlin-js-store/
 .kotlin/
 app/google-services.json
+app/aliyun-emas-services.json

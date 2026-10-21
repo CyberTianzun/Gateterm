@@ -141,6 +141,10 @@ fun CloudAccountScreen(
                         PushRegistration.Idle -> R.string.cloud_push_not_registered
                         PushRegistration.Registering -> R.string.cloud_push_registering
                         PushRegistration.Registered -> R.string.cloud_push_registered
+                        PushRegistration.RegisteredAliyun -> R.string.cloud_push_registered_aliyun
+                        PushRegistration.Disabled -> R.string.cloud_push_disabled
+                        PushRegistration.ProviderMismatch -> R.string.cloud_push_provider_mismatch
+                        PushRegistration.UnsupportedProvider -> R.string.cloud_push_unsupported_provider
                         PushRegistration.MissingConfiguration -> R.string.cloud_push_unavailable
                         PushRegistration.MissingPlayServices -> R.string.cloud_push_missing_play_services
                         PushRegistration.TimedOut -> R.string.cloud_push_timeout
@@ -151,9 +155,9 @@ fun CloudAccountScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(stringResource(pushText), modifier = Modifier.weight(1f),
                             style = MaterialTheme.typography.bodyMedium,
-                            color = if (pushRegistration == PushRegistration.Registered || pushRegistration == PushRegistration.Registering)
+                            color = if (pushRegistration.registered || pushRegistration == PushRegistration.Registering || pushRegistration == PushRegistration.Disabled)
                                 MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
-                        if (pushRegistration != PushRegistration.Registered) {
+                        if (!pushRegistration.registered && pushRegistration != PushRegistration.Disabled) {
                             TextButton(onClick = onRetryPush, enabled = enabled && pushRegistration != PushRegistration.Registering) {
                                 Text(stringResource(R.string.cloud_push_retry))
                             }

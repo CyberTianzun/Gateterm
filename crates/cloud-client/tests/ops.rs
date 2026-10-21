@@ -11,6 +11,19 @@ fn path(dir: &tempfile::TempDir) -> std::path::PathBuf {
 }
 
 #[tokio::test]
+async fn push_configuration_revocation_clears_saved_login() {
+    let cloud = FakeCloud::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    logged_in(&cloud, &dir).await;
+    cloud.respond("GET /v1/push-config", 200, json!({"platform":"aliyun","app_key":"123456"}));
+    assert_eq!(ops::push_config(&path(&dir)).await.unwrap().platform, "aliyun");
+    assert!(path(&dir).is_file());
+    cloud.respond("GET /v1/push-config", 401, json!({"error":"unauthorized"}));
+    assert!(ops::push_config(&path(&dir)).await.is_err());
+    assert!(!path(&dir).exists());
+}
+
+#[tokio::test]
 async fn register_saves_credentials_with_normalized_email() {
     let cloud = FakeCloud::start().await;
     cloud.respond("POST /v1/auth/register", 201, json!({"token": "oct_t", "account_id": "a", "server_id": "s"}));

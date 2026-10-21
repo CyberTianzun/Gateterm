@@ -1,6 +1,8 @@
 package ai.eclosion.octoterm.android.push
 
 import android.content.Context
+import android.app.Application
+import ai.eclosion.octoterm.android.BuildConfig
 import android.util.Log
 import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
@@ -31,7 +33,10 @@ object PushRegistrar {
     private val _state = MutableStateFlow(PushRegistration.Idle)
     val state = _state.asStateFlow()
 
-    fun pushAvailable(context: Context): Boolean = FirebaseApp.getApps(context).isNotEmpty()
+    fun pushAvailable(context: Context): Boolean = AliyunPush.configured || FirebaseApp.getApps(context).isNotEmpty()
+
+    fun acceptsMessage(context: Context, provider: String): Boolean = accountFile(context).isFile &&
+        context.getSharedPreferences("push", Context.MODE_PRIVATE).getString("provider", null) == provider
 
     private fun accountFile(context: Context) = File(context.filesDir, "cloud.json")
 
@@ -43,19 +48,43 @@ object PushRegistrar {
             _state.value = PushRegistration.MissingConfiguration
             return@withLock
         }
-        if (GoogleApiAvailabilityLight.getInstance().isGooglePlayServicesAvailable(context) != ConnectionResult.SUCCESS) {
-            _state.value = PushRegistration.MissingPlayServices
-            return@withLock
-        }
         _state.value = PushRegistration.Registering
         try {
-            val token = refreshedToken ?: suspendCancellableCoroutine { cont ->
-                FirebaseMessaging.getInstance().token
-                    .addOnSuccessListener { cont.resume(it) }
-                    .addOnFailureListener { cont.resumeWithException(it) }
+            val config = account.pushConfig()
+            val provider = config.platform
+            val token = when (provider) {
+                "aliyun" -> {
+                    if (!AliyunPush.configured) {
+                        _state.value = PushRegistration.MissingConfiguration
+                        return@withLock
+                    }
+                    if (config.appKey != BuildConfig.ALIYUN_APP_KEY) {
+                        _state.value = PushRegistration.ProviderMismatch
+                        return@withLock
+                    }
+                    AliyunPush.deviceId(context.applicationContext as Application)
+                }
+                "fcm" -> {
+                    if (FirebaseApp.getApps(context).isEmpty()) {
+                        _state.value = PushRegistration.MissingConfiguration
+                        return@withLock
+                    }
+                    if (GoogleApiAvailabilityLight.getInstance().isGooglePlayServicesAvailable(context) != ConnectionResult.SUCCESS) {
+                        _state.value = PushRegistration.MissingPlayServices
+                        return@withLock
+                    }
+                    refreshedToken ?: suspendCancellableCoroutine { cont ->
+                        FirebaseMessaging.getInstance().token
+                            .addOnSuccessListener { cont.resume(it) }
+                            .addOnFailureListener { cont.resumeWithException(it) }
+                    }
+                }
+                "none" -> { _state.value = PushRegistration.Disabled; return@withLock }
+                else -> { _state.value = PushRegistration.UnsupportedProvider; return@withLock }
             }
-            account.registerPushTarget("fcm", token)
-            _state.value = PushRegistration.Registered
+            context.getSharedPreferences("push", Context.MODE_PRIVATE).edit().putString("provider", provider).apply()
+            account.registerPushTarget(provider, token)
+            _state.value = if (provider == "aliyun") PushRegistration.RegisteredAliyun else PushRegistration.Registered
         } catch (e: Exception) {
             _state.value = when (e) {
                 is TimeoutCancellationException -> PushRegistration.TimedOut
