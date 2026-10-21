@@ -13,11 +13,10 @@ import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-class AliyunPushException : Exception("Aliyun push registration failed")
-
 object AliyunPush {
     val configured: Boolean get() = BuildConfig.ALIYUN_APP_KEY.isNotBlank() && BuildConfig.ALIYUN_APP_SECRET.isNotBlank()
     private var initialized = false
+    private var initializationFailure = "NOT_INITIALIZED"
 
     /** Parameter initialization only; called on the Application main thread in every SDK process. */
     fun initialize(app: Application) {
@@ -27,12 +26,16 @@ object AliyunPush {
                 .appKey(BuildConfig.ALIYUN_APP_KEY).appSecret(BuildConfig.ALIYUN_APP_SECRET).build())
             PushServiceFactory.getCloudPushService().setLogLevel(CloudPushService.LOG_OFF)
             initialized = true
-        } catch (_: Exception) { initialized = false }
+        } catch (error: Exception) {
+            initializationFailure = error.javaClass.simpleName
+            initialized = false
+        }
     }
 
     /** Establish the channel only after Cloud has selected Aliyun for the signed-in device. */
     suspend fun deviceId(app: Application): String = withContext(Dispatchers.Main.immediate) {
-        if (!initialized) throw AliyunPushException()
+        if (!initialized) initialize(app)
+        if (!initialized) throw AliyunPushException("initialize", initializationFailure)
         suspendCancellableCoroutine { continuation ->
             val finished = AtomicBoolean(false)
             val service = PushServiceFactory.getCloudPushService()
@@ -40,11 +43,11 @@ object AliyunPush {
                 override fun onSuccess(result: String?) {
                     if (!finished.compareAndSet(false, true)) return
                     val id = service.deviceId
-                    if (id.isNullOrBlank()) continuation.resumeWithException(AliyunPushException())
+                    if (id.isNullOrBlank()) continuation.resumeWithException(AliyunPushException("device-id", "EMPTY_DEVICE_ID"))
                     else continuation.resume(id)
                 }
                 override fun onFailed(code: String?, message: String?) {
-                    if (finished.compareAndSet(false, true)) continuation.resumeWithException(AliyunPushException())
+                    if (finished.compareAndSet(false, true)) continuation.resumeWithException(AliyunPushException("register", code))
                 }
             })
         }

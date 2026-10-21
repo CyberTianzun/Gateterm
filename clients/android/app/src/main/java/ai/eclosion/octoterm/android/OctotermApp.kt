@@ -59,6 +59,7 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
     val cloudViewModel: CloudAccountViewModel = viewModel(factory = CloudAccountViewModel.Factory)
     val cloud by cloudViewModel.state.collectAsStateWithLifecycle()
     val pushRegistration by PushRegistrar.state.collectAsStateWithLifecycle()
+    val pushFailureCode by PushRegistrar.failureCode.collectAsStateWithLifecycle()
     val pushAvailable = remember { PushRegistrar.pushAvailable(context) }
     val permissionPreferences = remember { context.getSharedPreferences("notifications", Context.MODE_PRIVATE) }
     var notificationCheck by remember { mutableIntStateOf(0) }
@@ -166,6 +167,7 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                     pushAvailable = pushAvailable,
                     notificationsEnabled = notificationsEnabled,
                     pushRegistration = pushRegistration,
+                    pushFailureCode = pushFailureCode,
                     onRetryPush = cloudViewModel::retryPushRegistration,
                     onForm = cloudViewModel::updateForm,
                     onAction = cloudViewModel::run,

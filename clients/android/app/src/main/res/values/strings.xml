@@ -248,6 +248,7 @@
     <string name="cloud_push_network_error">无法连接推送服务，请检查网络后重试</string>
     <string name="cloud_push_cloud_error">推送设备登记到 Cloud 失败，请重试</string>
     <string name="cloud_push_failed">推送服务初始化失败，请重试</string>
+    <string name="cloud_push_failed_code">阿里云推送注册失败（%1$s），请重试</string>
     <string name="cloud_push_retry">重试</string>
     <string name="notif_channel_name">Agent 提醒</string>
     <string name="notif_done_title">%1$s 已完成本轮任务</string>

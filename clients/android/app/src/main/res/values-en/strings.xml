@@ -246,6 +246,7 @@
     <string name="cloud_push_network_error">Cannot reach push services. Check your network and retry.</string>
     <string name="cloud_push_cloud_error">Could not register this device with Cloud. Please retry.</string>
     <string name="cloud_push_failed">Could not initialize push. Please retry.</string>
+    <string name="cloud_push_failed_code">Alibaba Cloud push registration failed (%1$s). Please retry.</string>
     <string name="cloud_push_retry">Retry</string>
     <string name="notif_channel_name">Agent alerts</string>
     <string name="notif_done_title">%1$s finished this turn</string>

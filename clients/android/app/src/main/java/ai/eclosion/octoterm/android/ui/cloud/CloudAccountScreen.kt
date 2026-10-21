@@ -56,6 +56,7 @@ fun CloudAccountScreen(
     pushAvailable: Boolean,
     notificationsEnabled: Boolean,
     pushRegistration: PushRegistration,
+    pushFailureCode: String?,
     onRetryPush: () -> Unit,
     onForm: ((CloudForm) -> CloudForm) -> Unit,
     onAction: (CloudAction) -> Unit,
@@ -153,7 +154,9 @@ fun CloudAccountScreen(
                         PushRegistration.Failed -> R.string.cloud_push_failed
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(stringResource(pushText), modifier = Modifier.weight(1f),
+                        val pushStatusText = if (pushRegistration == PushRegistration.Failed && pushFailureCode != null)
+                            stringResource(R.string.cloud_push_failed_code, pushFailureCode) else stringResource(pushText)
+                        Text(pushStatusText, modifier = Modifier.weight(1f),
                             style = MaterialTheme.typography.bodyMedium,
                             color = if (pushRegistration.registered || pushRegistration == PushRegistration.Registering || pushRegistration == PushRegistration.Disabled)
                                 MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)

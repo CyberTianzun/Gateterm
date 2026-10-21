@@ -18,7 +18,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -29,6 +32,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -45,6 +49,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -137,9 +143,23 @@ fun HistoryScreen(
                     IconButton(onClick = { refresh++ }, enabled = !loading) {
                         Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.history_refresh))
                     }
-                    TextButton(onClick = { filtersOpen = true }) {
+                    IconButton(onClick = { filtersOpen = true }) {
                         val count = listOf(query, agent, workspace).count { it.isNotBlank() }
-                        Text(stringResource(if (count == 0) R.string.history_filter else R.string.history_filter_count, count))
+                        BadgedBox(badge = {
+                            if (count > 0) {
+                                Badge(
+                                    modifier = Modifier.clearAndSetSemantics { },
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                                ) { Text(count.toString()) }
+                            }
+                        }) {
+                            Icon(
+                                painterResource(R.drawable.ic_filter),
+                                contentDescription = stringResource(if (count == 0) R.string.history_filter else R.string.history_filter_count, count),
+                                tint = if (count > 0) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                            )
+                        }
                     }
                 },
             )
@@ -308,7 +328,9 @@ private fun HistoryFilterScreen(
                 title = { AppBarTitle(stringResource(R.string.history_filter)) },
                 navigationIcon = { HistoryBackButton(onBack) },
                 actions = {
-                    TextButton(onClick = { onApply(draft) }) { Text(stringResource(R.string.history_filter_apply)) }
+                    IconButton(onClick = { onApply(draft) }) {
+                        Icon(Icons.Filled.Check, contentDescription = stringResource(R.string.history_filter_apply))
+                    }
                 },
             )
         },

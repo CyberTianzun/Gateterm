@@ -32,6 +32,8 @@ object PushRegistrar {
     private val registration = Mutex()
     private val _state = MutableStateFlow(PushRegistration.Idle)
     val state = _state.asStateFlow()
+    private val _failureCode = MutableStateFlow<String?>(null)
+    val failureCode = _failureCode.asStateFlow()
 
     fun pushAvailable(context: Context): Boolean = AliyunPush.configured || FirebaseApp.getApps(context).isNotEmpty()
 
@@ -49,6 +51,7 @@ object PushRegistrar {
             return@withLock
         }
         _state.value = PushRegistration.Registering
+        _failureCode.value = null
         try {
             val config = account.pushConfig()
             val provider = config.platform
@@ -86,6 +89,7 @@ object PushRegistrar {
             account.registerPushTarget(provider, token)
             _state.value = if (provider == "aliyun") PushRegistration.RegisteredAliyun else PushRegistration.Registered
         } catch (e: Exception) {
+            _failureCode.value = (e as? AliyunPushException)?.code
             _state.value = when (e) {
                 is TimeoutCancellationException -> PushRegistration.TimedOut
                 is CancellationException -> PushRegistration.Idle
@@ -124,6 +128,10 @@ object PushRegistrar {
 
     /** 只记异常类型:FFI 的 reason 文本可能带服务器返回的内容,不进 logcat。 */
     fun logFailure(e: Throwable) {
+        if (e is AliyunPushException) {
+            Log.w("Octoterm", "Aliyun push failure: stage=${e.stage}, code=${e.code}")
+            return
+        }
         Log.w("Octoterm", "登记推送 token 失败: ${e::class.simpleName}")
     }
 }
