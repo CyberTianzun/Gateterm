@@ -67,10 +67,38 @@ test("URLs without a token stay unchanged and use the saved credential", () => {
   assert.deepEqual(prompts, []);
 });
 
-test("missing credentials still prompt, and cancellation returns an empty token", () => {
+test("manual credentials are saved and reused without another prompt", () => {
   const { prompts } = browser("https://example.com/");
   assert.equal(readToken("Enter token:"), "manual-token");
+  assert.equal(readToken("Enter token:"), "manual-token");
+  assert.equal(localStorage.getItem("octoterm-token"), "manual-token");
   assert.deepEqual(prompts, ["Enter token:"]);
+});
+
+test("cancellation and whitespace do not save an empty credential", () => {
+  const { storage } = browser("https://example.com/");
   globalThis.prompt = () => null;
   assert.equal(readToken("Enter token:"), "");
+  globalThis.prompt = () => "   ";
+  assert.equal(readToken("Enter token:"), "");
+  assert.equal(storage.has("octoterm-token"), false);
+});
+
+test("blocked storage does not discard a shared or manually entered token", () => {
+  const { prompts } = browser("https://example.com/#token=shared-secret");
+  globalThis.localStorage = {
+    getItem() { throw new Error("blocked"); },
+    setItem() { throw new Error("blocked"); },
+  };
+  assert.equal(readToken("Token:"), "shared-secret");
+  assert.equal(location.hash, "");
+  assert.deepEqual(prompts, []);
+  assert.equal(readToken("Token:"), "manual-token");
+  assert.deepEqual(prompts, ["Token:"]);
+});
+
+test("an empty saved token prompts instead of authenticating with an empty string", () => {
+  const { prompts } = browser("https://example.com/", "");
+  assert.equal(readToken("Token:"), "manual-token");
+  assert.deepEqual(prompts, ["Token:"]);
 });

@@ -119,6 +119,9 @@ const narrowSidebar = window.matchMedia("(max-width: 768px)");
 // 语言先于任何一次渲染定下来:下面 mountSettings / mountNewSessionMenu 在模块
 // 求值时就会铺一批静态文案,那时 t() 必须已经指向对的词条表。
 applyLocale();
+// Resolve once per page. WebSocket, background refreshes and user actions all
+// share this value, including when the user cancels or browser storage is blocked.
+const authToken = readToken(t("app.tokenPrompt"));
 mountHistory($("open-history"), token, (session) => {
   if (!sessions.some((s) => s.id === session.id)) sessions.push(session);
   openTerminal(session.id);
@@ -126,7 +129,7 @@ mountHistory($("open-history"), token, (session) => {
 });
 
 function token(): string {
-  return readToken(t("app.tokenPrompt"));
+  return authToken;
 }
 
 function wsUrl(): string {
@@ -1182,6 +1185,4 @@ syncFont(config.font.family);
 applyStaticText();
 syncSidebarPosition();
 setConn(connKey);
-// 只取一次:token() 在 localStorage 里没有时会 prompt,取两次就要问两遍
-const authToken = token();
 client.connect(wsUrl(), authToken);

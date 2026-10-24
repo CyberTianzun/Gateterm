@@ -63,7 +63,7 @@ export class OctoClient {
       // token 不对)——重试没有意义,停止重连并让上层提示用户。
       if (!this.authOk && this.preHelloError !== null) {
         this.closed = true;
-        localStorage.removeItem("octoterm-token");
+        try { localStorage.removeItem("octoterm-token"); } catch { /* Storage can be disabled. */ }
         this.onFatal(this.preHelloError);
         return;
       }
