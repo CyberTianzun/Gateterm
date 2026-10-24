@@ -2927,14 +2927,14 @@ dependencies = [
 
 [[package]]
 name = "octoterm-client-core"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "alacritty_terminal",
 ]
 
 [[package]]
 name = "octoterm-cloud-client"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "axum",
  "directories",
@@ -2948,7 +2948,7 @@ dependencies = [
 
 [[package]]
 name = "octoterm-cloud-ffi"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "axum",
  "octoterm-client-core",
@@ -2962,7 +2962,7 @@ dependencies = [
 
 [[package]]
 name = "octoterm-desktop"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3000,7 +3000,7 @@ dependencies = [
 
 [[package]]
 name = "octoterm-protocol"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -3009,7 +3009,7 @@ dependencies = [
 
 [[package]]
 name = "octoterm-server"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
