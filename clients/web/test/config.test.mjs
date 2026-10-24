@@ -235,6 +235,21 @@ test("toTerminalOptions 映射到 xterm 选项", () => {
   // 内置字体按需单字体加载校验
 });
 
+test("mouse blocking survives config export/import and disables Alt-click cursor movement", () => {
+  const normal = defaultConfig();
+  assert.equal(normal.terminal.blockMouseEvents, false);
+  assert.equal(toTerminalOptions(normal).altClickMovesCursor, true);
+  normal.terminal.blockMouseEvents = true;
+  const restored = importConfigJson(exportConfigJson(normal)).config;
+  assert.equal(restored.terminal.blockMouseEvents, true);
+  assert.equal(toTerminalOptions(restored).altClickMovesCursor, false);
+});
+
+test("older configs retain mouse support and string booleans do not accidentally block input", () => {
+  assert.equal(sanitizeConfig({ terminal: {} }).terminal.blockMouseEvents, false);
+  assert.equal(sanitizeConfig({ terminal: { blockMouseEvents: "true" } }).terminal.blockMouseEvents, false);
+});
+
 test("内置字体按需加载且内存中最多保留一个自定义字体", async () => {
   const { BUILTIN_FONTS, ensureFontLoaded, getActiveLoadedFontId, matchBuiltinFont } = await import("./.fonts.build.mjs");
   assert.equal(matchBuiltinFont('"JetBrains Mono", monospace')?.id, "jetbrains-mono");

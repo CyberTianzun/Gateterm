@@ -41,6 +41,8 @@ export interface OctoConfig {
     cursorBlink: boolean;
     cursorInactiveStyle: "outline" | "block" | "bar" | "underline" | "none";
     scrollback: number;
+    /** Keep mouse gestures local for selecting/copying text, even when a TUI requests tracking. */
+    blockMouseEvents: boolean;
     customGlyphs: boolean;
     minimumContrastRatio: number;
     drawBoldTextInBrightColors: boolean;
@@ -99,6 +101,7 @@ export function defaultConfig(prefersDark = true): OctoConfig {
       cursorBlink: true,
       cursorInactiveStyle: "outline",
       scrollback: 5000,
+      blockMouseEvents: false,
       customGlyphs: true,
       minimumContrastRatio: 1,
       drawBoldTextInBrightColors: true,
@@ -247,6 +250,7 @@ function sanitizeRest(
       cursorBlink: bool(t.cursorBlink, d.terminal.cursorBlink, "terminal.cursorBlink", warn),
       cursorInactiveStyle: pick(t.cursorInactiveStyle, ["outline", "block", "bar", "underline", "none"] as const, d.terminal.cursorInactiveStyle, "terminal.cursorInactiveStyle", warn),
       scrollback: int(t.scrollback, 0, 200_000, d.terminal.scrollback, "terminal.scrollback", warn),
+      blockMouseEvents: bool(t.blockMouseEvents, d.terminal.blockMouseEvents, "terminal.blockMouseEvents", warn),
       customGlyphs: bool(t.customGlyphs, d.terminal.customGlyphs, "terminal.customGlyphs", warn),
       minimumContrastRatio: num(t.minimumContrastRatio, 1, 21, d.terminal.minimumContrastRatio, "terminal.minimumContrastRatio", warn),
       drawBoldTextInBrightColors: bool(t.drawBoldTextInBrightColors, d.terminal.drawBoldTextInBrightColors, "terminal.drawBoldTextInBrightColors", warn),
@@ -275,6 +279,7 @@ export function toTerminalOptions(cfg: OctoConfig): ITerminalOptions {
     cursorBlink: cfg.terminal.cursorBlink,
     cursorInactiveStyle: cfg.terminal.cursorInactiveStyle,
     scrollback: cfg.terminal.scrollback,
+    altClickMovesCursor: !cfg.terminal.blockMouseEvents,
     customGlyphs: cfg.terminal.customGlyphs,
     minimumContrastRatio: cfg.terminal.minimumContrastRatio,
     drawBoldTextInBrightColors: cfg.terminal.drawBoldTextInBrightColors,

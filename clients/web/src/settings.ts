@@ -343,6 +343,10 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     sb.addEventListener("change", () =>
       patch((c) => ({ ...c, terminal: { ...c.terminal, scrollback: Number(sb.value) } })),
     );
+    const blockMouse = checkbox(cfg.terminal.blockMouseEvents);
+    blockMouse.addEventListener("change", () =>
+      patch((c) => ({ ...c, terminal: { ...c.terminal, blockMouseEvents: blockMouse.checked } })),
+    );
     const glyphs = checkbox(cfg.terminal.customGlyphs);
     glyphs.addEventListener("change", () =>
       patch((c) => ({ ...c, terminal: { ...c.terminal, customGlyphs: glyphs.checked } })),
@@ -364,6 +368,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
       row(t("settings.term.cursorInactive"), cis),
       row(t("settings.term.cursorBlink"), blink),
       row(t("settings.term.scrollback"), sb, t("unit.lines")),
+      row(t("settings.term.blockMouseEvents"), blockMouse, t("settings.term.blockMouseEventsHint")),
       row(t("settings.term.customGlyphs"), glyphs, t("settings.term.customGlyphsHint")),
       row(t("settings.term.contrast"), contrast, t("settings.term.contrastHint")),
       row(t("settings.term.boldBright"), boldBright),
