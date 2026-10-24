@@ -36,6 +36,7 @@ pub fn router(state: AppState) -> Router {
         .route("/ws", any(ws_handler))
         .route("/api/launchers", get(launchers_handler))
         .route("/api/cloud/status", get(cloud_status_handler))
+        .route("/api/update", get(update_status_handler))
         .route("/api/agents", get(crate::agent::routes::list))
         .route("/api/agents/{id}/plan", get(crate::agent::routes::plan))
         .route("/api/agents/{id}/install", post(crate::agent::routes::install))
@@ -56,6 +57,12 @@ pub fn router(state: AppState) -> Router {
         )
         .fallback(crate::assets::static_handler)
         .with_state(state)
+}
+
+/// Cached process-wide result; requesting it does not initiate another GitHub check.
+async fn update_status_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !bearer_ok(&headers, &state.token) { return StatusCode::UNAUTHORIZED.into_response(); }
+    ([(header::CACHE_CONTROL, "no-store")], Json(crate::update::cached_status())).into_response()
 }
 
 /// The account used by this server. Cloud credentials never leave the process.

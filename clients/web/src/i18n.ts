@@ -30,6 +30,7 @@ export const LOCALE_TAGS: Record<Locale, string> = {
 };
 
 const zh = {
+  "update.available": "发现新版本 v{version}，前往 GitHub ↗",
   /* ---------- 主界面 ---------- */
   "app.settings": "设置",
   "app.newSession": "新建会话",
@@ -276,6 +277,7 @@ const zh = {
 export type MsgKey = keyof typeof zh;
 
 const en: Record<MsgKey, string> = {
+  "update.available": "New version v{version} on GitHub ↗",
   "app.settings": "Settings",
   "app.newSession": "New session",
   "app.sessionList": "Sessions",

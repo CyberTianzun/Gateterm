@@ -338,17 +338,17 @@ impl App {
         });
     }
 
-    /// Check once after the tray is ready; show native dialogs on the main thread.
+    /// Start daily checks after the tray is ready; only the startup result opens a dialog.
     fn check_for_updates(&self) {
         let proxy = self.proxy.clone();
         self.rt.spawn(async move {
-            match octoterm_server::update::check_latest(env!("CARGO_PKG_VERSION")).await {
+            octoterm_server::update::start_daily_checks(env!("CARGO_PKG_VERSION"), move |result| match result {
                 Ok(Some(update)) => {
                     proxy.send_event(UserEvent::UpdateAvailable(update)).ok();
                 }
                 Ok(None) => {}
                 Err(e) => tracing::debug!(error = %e, "检查更新失败"),
-            }
+            });
         });
     }
 

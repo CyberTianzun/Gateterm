@@ -67,6 +67,9 @@ body[data-sidebar-position="right"] #sidebar { order: 2; border-right: 0; border
 }
 #cloud-state { margin-top: 6px; overflow-wrap: anywhere; line-height: 1.5; }
 #cloud-state[data-connected="true"] { color: var(--text); }
+#update-status { margin-top: 6px; overflow-wrap: anywhere; line-height: 1.5; }
+.update-link { color: var(--accent); text-decoration: none; }
+.update-link:hover, .update-link:focus-visible { text-decoration: underline; }
 
 .srow {
   position: relative;

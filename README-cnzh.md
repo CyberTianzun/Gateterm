@@ -84,7 +84,7 @@ cargo run -p octoterm-server -- --host 0.0.0.0 --port 9000
 
 对外监听请自行保证网络层安全(Tailscale / 反向代理 + TLS)。
 
-server 每次启动时会在后台检查 GitHub 最新正式 Release。发现更高版本时,在控制台
+server 启动时及每隔 24 小时会在后台检查 GitHub 最新正式 Release。发现更高版本时,在控制台
 打印新版本号和 Release 页面链接;断网或检查失败不影响服务启动。
 
 ## 桌面客户端(Windows / macOS)
@@ -96,9 +96,10 @@ server 每次启动时会在后台检查 GitHub 最新正式 Release。发现更
 cargo run -p octoterm-desktop
 ```
 
-desktop 启动后也会在后台检查最新正式 Release。有更新时弹出系统对话框,
+desktop 启动后及每隔 24 小时也会在后台检查最新正式 Release。启动时发现更新会弹出系统对话框,
 可选择「立刻更新」用默认浏览器打开 Release 页面,或「取消」继续使用。
 程序不会自动下载或安装更新。
+有更新时，Web 侧栏连接状态下方会显示 GitHub Release 链接；没有更新则不显示。
 
 在设置窗口里改监听地址或 token,只会重建 HTTP 层:**运行中的会话不受影响**。
 但已经打开的页面不会跟着迁移——它的 WebSocket 根本没断,会继续在旧地址上工作,
