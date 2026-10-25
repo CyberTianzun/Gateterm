@@ -21,12 +21,14 @@ pub enum Outcome {
     Cancel,
     OpenConfigFile,
     RegenerateToken,
+    RefreshPairing,
     Cloud(CloudAction),
 }
 
 /// 设置窗口的全部可见状态。窗口开着的时候由 app.rs 持有,关窗时一起丢掉。
 pub struct View {
     pub form: Form,
+    pub pairing: crate::settings::pairing::Pairing,
     /// 只读展示,v1 不提供修改。
     pub window_size: String,
     /// (名称, 命令) —— 只读列表。
@@ -130,6 +132,8 @@ pub fn draw(ui: &mut egui::Ui, view: &mut View) -> Outcome {
                     ui.end_row();
                 });
 
+            ui.add_space(8.0);
+            if view.pairing.draw(ui) { outcome = Outcome::RefreshPairing; }
             ui.add_space(8.0);
             ui.separator();
             ui.horizontal(|ui| {

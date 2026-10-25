@@ -115,6 +115,8 @@ offers “Update now” (立刻更新) to open the Release page in your default 
 “Cancel” (取消) to keep working. Updates are never downloaded or installed automatically.
 When an update is available, the web sidebar shows a link to its GitHub Release page below the connection status.
 
+Choose a reachable IP in Desktop settings under “Android 扫码连接”, then use Android’s “Add server → Scan QR code” to fill the address and token before saving.
+
 Changing the listen address or token from the settings window only rebuilds
 the HTTP layer: **your running sessions are not affected**. But a page you
 already have open does not get migrated — its WebSocket was never closed, so

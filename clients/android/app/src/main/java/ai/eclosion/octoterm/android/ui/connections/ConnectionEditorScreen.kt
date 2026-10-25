@@ -26,6 +26,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -43,6 +44,7 @@ fun ConnectionEditorScreen(
     onUrlChange: (String) -> Unit,
     onTokenChange: (String) -> Unit,
     onPasteClipboard: () -> Unit,
+    onScan: () -> Unit,
     onSave: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -63,6 +65,11 @@ fun ConnectionEditorScreen(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(R.string.action_back),
                         )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onScan) {
+                        Icon(painterResource(R.drawable.ic_qr_code_scanner), stringResource(R.string.qr_scan_title))
                     }
                 },
             )

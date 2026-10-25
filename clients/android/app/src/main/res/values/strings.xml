@@ -28,6 +28,15 @@
     <string name="servers_add">添加服务器</string>
     <string name="servers_add_clipboard">从剪贴板添加</string>
     <string name="servers_add_manual">手动添加</string>
+    <string name="servers_add_scan">扫码添加</string>
+    <string name="qr_scan_title">扫描连接二维码</string>
+    <string name="qr_scan_hint">扫描 Desktop 设置中的二维码，自动填入服务器地址和 token。</string>
+    <string name="qr_scan_invalid">这不是可用的服务器连接二维码，请扫描 Desktop 设置中的二维码。</string>
+    <string name="qr_camera_failed">无法打开相机。请检查相机是否被其他应用占用，或手动填写服务器。</string>
+    <string name="qr_camera_permission">允许使用相机后，即可扫描电脑上的连接二维码。</string>
+    <string name="qr_allow_camera">允许使用相机</string>
+    <string name="qr_open_settings">打开应用设置</string>
+    <string name="qr_scan_manual">手动填写服务器</string>
     <string name="servers_add_manual_hint">自己填写 URL 和 token</string>
     <string name="servers_more">更多选项</string>
     <string name="servers_empty_title">还没有服务器</string>

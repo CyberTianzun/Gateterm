@@ -22,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,6 +45,7 @@ import ai.eclosion.octoterm.android.ui.cloud.CloudAccountScreen
 import ai.eclosion.octoterm.android.ui.connections.AppScreen
 import ai.eclosion.octoterm.android.ui.connections.ConnectionEditorScreen
 import ai.eclosion.octoterm.android.ui.connections.ConnectionListScreen
+import ai.eclosion.octoterm.android.ui.connections.QrScannerScreen
 import ai.eclosion.octoterm.android.ui.connections.ConnectionViewModel
 import ai.eclosion.octoterm.android.ui.connections.ServerHomeScreen
 import ai.eclosion.octoterm.android.ui.connections.UserMessage
@@ -56,6 +58,7 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
+    var scanning by rememberSaveable { mutableStateOf(false) }
     var localePref by remember { mutableStateOf(LocaleStore.load(context)) }
     // The ViewModel keeps the native account lazy for users who have never signed in.
     val cloudViewModel: CloudAccountViewModel = viewModel(factory = CloudAccountViewModel.Factory)
@@ -113,7 +116,14 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
 
     // Edge-to-edge needs IME insets so the terminal and its keys stay above the keyboard.
     Box(Modifier.fillMaxSize().imePadding()) {
-        when (val screen = state.screen) {
+        if (scanning) {
+            BackHandler { scanning = false }
+            QrScannerScreen(
+                onScanned = { viewModel.applyScannedConnection(it); scanning = false },
+                onBack = { scanning = false },
+                onManual = { if (state.screen !is AppScreen.Editor) viewModel.addManually(); scanning = false },
+            )
+        } else when (val screen = state.screen) {
             AppScreen.List -> {
                 ConnectionListScreen(
                     state = state,
@@ -121,6 +131,7 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                     onDismissAddSheet = viewModel::dismissAddSheet,
                     onAddFromClipboard = viewModel::addFromClipboard,
                     onAddManually = viewModel::addManually,
+                    onScan = { viewModel.dismissAddSheet(); scanning = true },
                     onConnect = viewModel::connect,
                     onReconnect = viewModel::reconnect,
                     onDisconnect = viewModel::disconnectServer,
@@ -196,6 +207,7 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                     onUrlChange = viewModel::onUrlChange,
                     onTokenChange = viewModel::onTokenChange,
                     onPasteClipboard = viewModel::pasteClipboardIntoEditor,
+                    onScan = { scanning = true },
                     onSave = viewModel::saveEditor,
                     onBack = viewModel::closeEditor,
                 )

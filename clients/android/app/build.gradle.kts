@@ -141,6 +141,7 @@ android {
 }
 
 dependencies {
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     implementation("com.aliyun.ams:alicloud-android-push:4.0.0")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

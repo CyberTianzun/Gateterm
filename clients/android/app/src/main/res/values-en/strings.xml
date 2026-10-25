@@ -28,6 +28,15 @@
     <string name="servers_add">Add server</string>
     <string name="servers_add_clipboard">Add from clipboard</string>
     <string name="servers_add_manual">Add manually</string>
+    <string name="servers_add_scan">Scan QR code</string>
+    <string name="qr_scan_title">Scan connection QR code</string>
+    <string name="qr_scan_hint">Scan the QR code in Desktop settings to fill the server address and token.</string>
+    <string name="qr_scan_invalid">This is not a usable server connection. Scan the QR code in Desktop settings.</string>
+    <string name="qr_camera_failed">Could not open the camera. Check whether another app is using it, or enter the server manually.</string>
+    <string name="qr_camera_permission">Allow camera access to scan the connection QR code on your computer.</string>
+    <string name="qr_allow_camera">Allow camera access</string>
+    <string name="qr_open_settings">Open app settings</string>
+    <string name="qr_scan_manual">Enter server manually</string>
     <string name="servers_add_manual_hint">Enter the URL and token yourself</string>
     <string name="servers_more">More options</string>
     <string name="servers_empty_title">No servers yet</string>

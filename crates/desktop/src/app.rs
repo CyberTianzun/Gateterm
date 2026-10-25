@@ -157,6 +157,7 @@ impl App {
         let banner = self.banner();
         View {
             form,
+            pairing: crate::settings::pairing::Pairing::new(self.sup.listen(), self.sup.token()),
             // WindowSize 只有 Smallest / Largest / Latest 三个单词,和 config.toml
             // 里写的小写形式一一对应。
             window_size: format!("{:?}", self.startup.config.window_size).to_lowercase(),
@@ -281,6 +282,7 @@ impl App {
         if let Some(view) = self.view.as_mut() {
             view.banner = banner;
             view.message = Some(applied.message);
+            view.pairing.refresh(self.sup.listen(), self.sup.token());
         }
     }
 
@@ -605,7 +607,7 @@ impl ApplicationHandler<UserEvent> for App {
                     // 每次开窗都重新读一遍当前生效值,而不是复用上次关窗时的表单:
                     // 期间监听地址可能已经被别处改过了。
                     self.view = Some(self.build_view());
-                    match EguiWindow::open(event_loop, "octoterm 设置", (460, 460)) {
+                    match EguiWindow::open(event_loop, "octoterm 设置", (560, 680)) {
                         Ok(w) => self.settings_window = Some(w),
                         Err(e) => {
                             tracing::error!(error = %format!("{e:#}"), "无法打开设置窗口");
@@ -674,6 +676,11 @@ impl ApplicationHandler<UserEvent> for App {
                         if let Some(view) = self.view.as_mut() {
                             // 和 server 的 resolve_token 用同一种格式(32 位十六进制)
                             view.form.token = uuid::Uuid::new_v4().simple().to_string();
+                        }
+                    }
+                    Outcome::RefreshPairing => {
+                        if let Some(view) = self.view.as_mut() {
+                            view.pairing.refresh(self.sup.listen(), self.sup.token());
                         }
                     }
                     Outcome::Cloud(action) => self.start_cloud(action),

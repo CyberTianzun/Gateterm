@@ -183,6 +183,7 @@ interface ConnectionActions {
     fun dismissAddSheet()
     fun addFromClipboard()
     fun addManually()
+    fun applyScannedConnection(connection: ai.eclosion.octoterm.android.connection.ScannedConnection)
     fun edit(id: String)
     fun closeEditor()
     fun openAppearance()
@@ -322,11 +323,7 @@ class ConnectionController(
 
     override fun openAddSheet() {
         val clip = clipboardUrl()
-        if (clip == null) {
-            startEditor(null, null)
-        } else {
-            _state.update { it.copy(showAddSheet = true, editor = it.editor.copy(clipboardUrl = clip)) }
-        }
+        _state.update { it.copy(showAddSheet = true, editor = it.editor.copy(clipboardUrl = clip)) }
     }
 
     override fun dismissAddSheet() {
@@ -342,6 +339,23 @@ class ConnectionController(
     override fun addManually() {
         _state.update { it.copy(showAddSheet = false) }
         startEditor(null, null)
+    }
+
+    override fun applyScannedConnection(connection: ai.eclosion.octoterm.android.connection.ScannedConnection) {
+        _state.update { current ->
+            val editing = current.screen as? AppScreen.Editor
+            val base = if (editing == null) EditorState() else current.editor
+            current.copy(
+                screen = editing ?: AppScreen.Editor(null),
+                showAddSheet = false,
+                editor = base.copy(
+                    url = connection.url, token = connection.token,
+                    name = base.name.ifBlank { connection.name },
+                    urlError = null, tokenError = null,
+                    loopbackWarning = false, wildcardWarning = false,
+                ),
+            )
+        }
     }
 
     override fun edit(id: String) {

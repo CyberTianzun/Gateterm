@@ -43,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -61,6 +62,7 @@ fun ConnectionListScreen(
     onDismissAddSheet: () -> Unit,
     onAddFromClipboard: () -> Unit,
     onAddManually: () -> Unit,
+    onScan: () -> Unit,
     onConnect: (String) -> Unit,
     onReconnect: (String) -> Unit,
     onDisconnect: (String) -> Unit,
@@ -139,6 +141,12 @@ fun ConnectionListScreen(
                         .clickable(onClick = onAddFromClipboard),
                 )
             }
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.servers_add_scan)) },
+                supportingContent = { Text(stringResource(R.string.qr_scan_hint)) },
+                leadingContent = { Icon(painterResource(R.drawable.ic_qr_code_scanner), contentDescription = null) },
+                modifier = Modifier.fillMaxWidth().clickable(onClick = onScan),
+            )
             ListItem(
                 headlineContent = { Text(stringResource(R.string.servers_add_manual)) },
                 supportingContent = { Text(stringResource(R.string.servers_add_manual_hint)) },
