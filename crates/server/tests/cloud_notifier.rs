@@ -134,6 +134,53 @@ async fn wait_for(seen: &Seen, n: usize) {
     panic!("等了 2 秒仍只收到 {} 条", seen.lock().unwrap().len());
 }
 
+/// Exercise the real hook router, not synthetic AgentEvents: every adapter's
+/// Stop must reach Cloud, and startup/duplicate Stop must not create extra pushes.
+#[tokio::test]
+async fn claude_codex_and_antigravity_hooks_notify_completion_each_turn() {
+    use octoterm_server::agent::store::hook_token;
+    use octoterm_server::app::{AppState, serve};
+
+    let (url, seen) = fake_cloud(202).await;
+    let rig = Rig::new(Some(&url));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let state = AppState {
+        manager: rig.manager.clone(),
+        token: "test".into(),
+        launchers: Arc::new(vec![]),
+        listen_port: addr.port(),
+        agents: Default::default(),
+        agent_sessions: rig.store.clone(),
+        cloud: Default::default(),
+    };
+    let server = tokio::spawn(async move { serve(listener, state).await.unwrap() });
+    let client = reqwest::Client::new();
+    for (index, agent) in ["claude-code", "codex", "antigravity"].into_iter().enumerate() {
+        let body = if agent == "antigravity" {
+            json!({"conversationId": "completion-test"})
+        } else {
+            json!({"session_id": "completion-test", "stop_hook_active": false})
+        };
+        let start_turn = if agent == "antigravity" { "pre-invocation" } else { "user-prompt-submit" };
+        for event in ["session-start", start_turn, "stop", "stop", start_turn, "stop"] {
+            let response = client.post(format!("http://{addr}/hook/{agent}/{event}"))
+                .bearer_auth(hook_token())
+                .header("X-Octoterm-Session", "7")
+                .json(&body).send().await.unwrap();
+            assert!(response.status().is_success());
+        }
+        wait_for(&seen, (index + 1) * 2).await;
+        assert_eq!(rig.store.snapshot(agent, "completion-test").unwrap().state, AgentState::Idle);
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let expected: Vec<Value> = ["claude-code", "codex", "antigravity"].into_iter()
+        .flat_map(|agent| vec![json!({"session": 7, "agent_id": agent, "kind": "done"}); 2])
+        .collect();
+    assert_eq!(*seen.lock().unwrap(), expected);
+    server.abort();
+}
+
 #[tokio::test]
 async fn entering_waiting_notifies_once() {
     let (url, seen) = fake_cloud(202).await;

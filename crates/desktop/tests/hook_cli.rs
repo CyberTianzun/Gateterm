@@ -63,6 +63,11 @@ fn installed_codex_command_forwards_stdin_and_reply_through_desktop() {
     installed_command_forwards_stdin_and_reply_through_desktop("codex");
 }
 
+#[test]
+fn installed_claude_start_command_forwards_stdin_and_reply_through_desktop() {
+    installed_command_forwards_stdin_and_reply_through_desktop("claude-code");
+}
+
 #[cfg(windows)]
 #[test]
 fn installed_antigravity_command_forwards_stdin_and_reply_through_cmd() {
@@ -101,6 +106,8 @@ fn installed_command_forwards_stdin_and_reply_through_desktop(agent: &str) {
     }
     let installed = if agent == "antigravity" {
         &doc["octoterm"]["PreInvocation"][0]["command"]
+    } else if agent == "claude-code" {
+        &doc["hooks"]["SessionStart"][0]["hooks"][0]["command"]
     } else {
         &doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
     }
@@ -124,16 +131,21 @@ fn installed_command_forwards_stdin_and_reply_through_desktop(agent: &str) {
     });
     std::fs::copy(env!("CARGO_BIN_EXE_octoterm-desktop"), &desktop_path).unwrap();
     let desktop = desktop_path.to_str().unwrap();
-    let command_text = if agent == "antigravity" {
+    let command_text = if agent == "antigravity" || agent == "claude-code" {
         // The path is inside an encoded PowerShell command, so generate the same
         // installed command using the copied desktop executable's path.
-        octoterm_server::agent::hook_cli::command_for_executable(agent, port, "PreInvocation", &desktop_path)
+        let event = if agent == "claude-code" { "SessionStart" } else { "PreInvocation" };
+        octoterm_server::agent::hook_cli::command_for_executable(agent, port, event, &desktop_path)
     } else if cfg!(windows) {
         installed.replace(&exe.replace('\'', "''"), &desktop.replace('\'', "''"))
     } else {
         installed.replace(&exe, desktop)
     };
-    let endpoint = if agent == "antigravity" { "antigravity/pre-invocation" } else { "codex/pre-tool-use" };
+    let endpoint = match agent {
+        "antigravity" => "antigravity/pre-invocation",
+        "claude-code" => "claude-code/session-start",
+        _ => "codex/pre-tool-use",
+    };
     let server = std::thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut stream = loop {

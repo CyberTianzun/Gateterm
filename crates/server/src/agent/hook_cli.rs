@@ -1,7 +1,7 @@
 //! `octoterm-server hook <url>` —— 给只支持 `type: "command"` 的 agent 用的 hook 客户端。
 //!
-//! 为什么需要它:Claude Code 支持 `type: "http"`,agent 直接 POST 到 server,中间什么都
-//! 不需要。**Codex 不支持** —— 它的 `HookHandlerConfig` 只有 command / prompt / agent
+//! 为什么需要它:Claude Code 多数事件支持 `type: "http"`,可直接 POST 到 server,
+//! 但 SessionStart 必须用 command。**Codex 不支持 HTTP** —— 它的 `HookHandlerConfig` 只有 command / prompt / agent
 //! 三种(从 codex 二进制里的类型名读出来的),所以必须有一个可执行文件站在中间。
 //!
 //! 那个可执行文件就是 octoterm 自己。不引入 HTTP 客户端依赖:目标永远是 127.0.0.1,
@@ -30,7 +30,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// 写进 agent 配置里的命令串。Windows Codex 使用 PowerShell,带引号的程序路径
 /// 必须通过 `&` 调用;单引号同时避免路径里的 `$` / 反引号被展开。
-/// Antigravity 的 Windows cmd.exe 转义另行处理;Grok 及其他平台保留原来的 shell 语法。
+/// Antigravity 和 Claude 使用编码的 PowerShell 包装,兼容各自选择的 shell;
+/// Grok 及其他平台保留原来的 shell 语法。
 ///
 /// 二进制路径用 `current_exe()`,跟着安装位置走 —— 换了地方放二进制就得重装,
 /// 自检会把它报成 `Outdated`(见 `edit::is_current`)。
@@ -44,8 +45,8 @@ pub fn command_for(agent: &str, port: u16, event: &str) -> String {
 pub fn command_for_executable(agent: &str, port: u16, event: &str, exe: &std::path::Path) -> String {
     let exe = exe.to_string_lossy();
     let url = format!("http://127.0.0.1:{port}/hook/{agent}/{}", super::edit::slug_of_event(event));
-    if cfg!(windows) && agent == "antigravity" {
-        windows_antigravity_command(&exe, &url)
+    if cfg!(windows) && matches!(agent, "antigravity" | "claude-code") {
+        windows_encoded_command(&exe, &url)
     } else if cfg!(windows) && agent == "codex" {
         format!("& '{}' hook {url}", exe.replace('\'', "''"))
     } else {
@@ -56,11 +57,12 @@ pub fn command_for_executable(agent: &str, port: u16, event: &str, exe: &std::pa
 const WINDOWS_COMMAND_PREFIX: &str =
     "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ";
 
-fn windows_antigravity_command(exe: &str, url: &str) -> String {
+fn windows_encoded_command(exe: &str, url: &str) -> String {
     use base64::Engine;
     // agy uses Go's exec.Command("cmd.exe", "/C", command). Quotes inside that
     // single argument become literal \" on Windows. Keep the outer command free
     // of shell punctuation and quote the installed path inside the encoded script.
+    // This also works in either shell Claude selects (Git Bash or PowerShell).
     // Copy stdin as bytes: PowerShell's native pipeline would re-encode JSON and
     // add a newline. Antigravity requires {} even when telemetry is unavailable.
     let script = format!(

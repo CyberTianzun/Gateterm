@@ -1,8 +1,7 @@
 //! Claude Code adapter。
 //!
-//! 装的全部是 `type: "http"` hook —— octoterm-server 自己就是那个 HTTP 端点,
-//! 不需要随包携带任何脚本或 node 运行时。这和「单静态二进制」的定位是一回事,
-//! 也是相对参考实现(必须打包 node + 一堆 hook js)的结构性优势。
+//! SessionStart 不支持 HTTP hook,经自身的 hook 子命令转发;其余事件直接 POST
+//! 到 octoterm-server。不需要随包携带任何脚本或 node 运行时。
 //!
 //! 鉴权与会话关联走同一个机制:hook 的 `headers` 支持 `$VAR` 插值,插值发生在
 //! hook 触发那一刻、取自 Claude 进程的环境,而那份环境是 octoterm spawn 这个会话
@@ -21,7 +20,7 @@ use octoterm_protocol::AgentState;
 
 pub struct ClaudeCode;
 
-/// 遥测类:只用来推进会话状态,不参与决策。`async: true` + 短超时,绝不拖住 Claude。
+/// 遥测类:只用来推进会话状态,不参与决策。短超时限制服务不可用时的等待。
 const TELEMETRY: &[&str] = &[
     "SessionStart",
     "SessionEnd",
@@ -46,6 +45,15 @@ fn settings_path(home: &std::path::Path) -> PathBuf {
 }
 
 fn hook_spec(port: u16, event: &str, blocking: bool) -> Value {
+    // Claude skips HTTP SessionStart hooks. Keep this synchronous so startup
+    // cannot arrive after UserPromptSubmit and overwrite Thinking with Idle.
+    if event == "SessionStart" {
+        return json!({
+            "type": "command",
+            "command": super::hook_cli::command_for("claude-code", port, event),
+            "timeout": TELEMETRY_TIMEOUT_SECS,
+        });
+    }
     let url = format!("http://127.0.0.1:{port}/hook/claude-code/{}", slug_of_event(event));
     let mut spec = json!({
         "type": "http",
@@ -61,8 +69,8 @@ fn hook_spec(port: u16, event: &str, blocking: bool) -> Value {
         obj.insert("timeout".into(), json!(BLOCKING_TIMEOUT_SECS));
     } else {
         obj.insert("timeout".into(), json!(TELEMETRY_TIMEOUT_SECS));
-        // 遥测的输出会被忽略,不该占住 Claude 的主循环
-        obj.insert("async".into(), json!(true));
+        // async is supported only for command hooks. HTTP telemetry returns
+        // immediately from our route, without waiting for Cloud delivery.
     }
     spec
 }
@@ -284,11 +292,13 @@ fn str_field(body: &Value, key: &str) -> Option<String> {
 
 /// 我方形状但端口对不上 —— 用来识别「改过监听端口之后的残留」。
 fn is_our_shape(hook: &Value) -> bool {
-    hook.get("type").and_then(Value::as_str) == Some("http")
-        && hook
-            .get("url")
-            .and_then(Value::as_str)
-            .is_some_and(|u| u.starts_with("http://127.0.0.1:") && u.contains("/hook/claude-code/"))
+    let url = match hook.get("type").and_then(Value::as_str) {
+        Some("http") => hook.get("url").and_then(Value::as_str).map(str::to_string),
+        Some("command") => hook.get("command").and_then(Value::as_str)
+            .and_then(super::edit::url_in_command),
+        _ => None,
+    };
+    url.is_some_and(|u| u.starts_with("http://127.0.0.1:") && u.contains("/hook/claude-code/"))
 }
 
 fn hooks_of<'a>(doc: &'a Value, event: &str) -> impl Iterator<Item = &'a Value> {

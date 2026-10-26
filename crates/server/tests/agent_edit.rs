@@ -52,11 +52,25 @@ fn install_creates_permission_hook() {
 }
 
 #[test]
-fn telemetry_hooks_are_async_and_short() {
+fn telemetry_uses_supported_transports_and_short_timeouts() {
     let doc = installed(json!({}));
-    let hook = &doc["hooks"]["Stop"][0]["hooks"][0];
-    assert_eq!(hook["async"], true, "遥测不能拖住 Claude");
-    assert_eq!(hook["timeout"], 5);
+    for event in ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "Notification"] {
+        let hook = &doc["hooks"][event][0]["hooks"][0];
+        assert_eq!(hook["type"], if event == "SessionStart" { "command" } else { "http" });
+        assert!(hook.get("async").is_none(), "{event} must complete delivery before advancing");
+        assert_eq!(hook["timeout"], 5);
+        assert!(is_ours(hook, PORT));
+    }
+}
+
+#[test]
+fn reinstall_migrates_legacy_http_start_and_async_stop_without_duplicates() {
+    let mut legacy = installed(json!({}));
+    legacy["hooks"]["SessionStart"][0]["hooks"][0] = json!({
+        "type": "http", "url": format!("http://127.0.0.1:{PORT}/hook/claude-code/session-start"), "async": true
+    });
+    legacy["hooks"]["Stop"][0]["hooks"][0]["async"] = json!(true);
+    assert_eq!(installed(legacy), installed(json!({})));
 }
 
 #[test]
