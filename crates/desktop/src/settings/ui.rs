@@ -1,6 +1,6 @@
 //! 设置窗口的绘制。只画界面、只返回用户意图,不碰文件、不碰 supervisor ——
 //! 副作用全部由 app.rs 执行(保存流程本身在 [`crate::settings::save`] 里),
-//! UI 层因此保持无状态、无 IO,不需要测。
+//! UI 层不执行 IO;布局和语言切换可用无窗口的 egui 渲染测试验证。
 //!
 //! **[`draw`] 同一帧里可能被调用多次**:调用方 `EguiWindow::redraw_ui` 收的是
 //! `FnMut`,而界面里用到的 `egui::Grid` 每次开窗第一帧必然 `request_discard`、
@@ -9,6 +9,8 @@
 
 use crate::settings::cloud::{CloudAction, CloudForm, CloudStatus, RelayRegion};
 use crate::settings::state::Form;
+use crate::i18n::{LanguagePref, Locale};
+use crate::tr;
 
 pub use crate::settings::state::Message;
 
@@ -48,10 +50,11 @@ pub struct View {
 const OK_COLOR: egui::Color32 = egui::Color32::from_rgb(60, 140, 60);
 const ERR_COLOR: egui::Color32 = egui::Color32::from_rgb(180, 60, 60);
 
-pub fn draw(ui: &mut egui::Ui, view: &mut View) -> Outcome {
+pub fn draw(ui: &mut egui::Ui, view: &mut View, locale: Locale) -> Outcome {
     let mut outcome = Outcome::None;
 
     egui::CentralPanel::default().show(ui, |ui| {
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
         // 整个窗口内容包一层竖直滚动:配置解析失败 + 监听失败叠加时,`banner`
         // 能长到 9 行左右(toml::de::Error 的 Display 自带 6 行位置指示片段),
         // 460×460 的窗口现在勉强装得下,但设置窗口正是「起不来时唯一的出路」——
@@ -79,9 +82,20 @@ pub fn draw(ui: &mut egui::Ui, view: &mut View) -> Outcome {
 
             egui::Grid::new("settings")
                 .num_columns(2)
+                .max_col_width((ui.available_width() - 150.0).max(240.0))
                 .spacing([12.0, 10.0])
                 .show(ui, |ui| {
-                    ui.label("监听地址");
+                    ui.label(locale.text("界面语言", "Language"));
+                    egui::ComboBox::from_id_salt("desktop-language")
+                        .selected_text(view.form.language.label(locale))
+                        .show_ui(ui, |ui| {
+                            for language in LanguagePref::ALL {
+                                edited |= ui.selectable_value(&mut view.form.language, language, language.label(locale)).changed();
+                            }
+                        });
+                    ui.end_row();
+
+                    ui.label(locale.text("监听地址", "Listen address"));
                     ui.horizontal(|ui| {
                         edited |= ui
                             .add(
@@ -98,7 +112,7 @@ pub fn draw(ui: &mut egui::Ui, view: &mut View) -> Outcome {
                     });
                     ui.end_row();
 
-                    ui.label("访问 token");
+                    ui.label(locale.text("访问 token", "Access token"));
                     ui.horizontal(|ui| {
                         edited |= ui
                             .add(
@@ -106,39 +120,40 @@ pub fn draw(ui: &mut egui::Ui, view: &mut View) -> Outcome {
                                     .desired_width(180.0),
                             )
                             .changed();
-                        if ui.button("重新生成").clicked() {
+                        if ui.button(locale.text("重新生成", "Regenerate")).clicked() {
                             outcome = Outcome::RegenerateToken;
                         }
                     });
                     ui.end_row();
 
                     ui.label("");
-                    ui.small(
+                    ui.small(locale.text(
                         "框里显示的是当前生效的 token;直接保存会把它固定进 config.toml。\n\
                      留空表示不固定:不写进 config.toml,每次启动随机生成 —— 本次运行\n\
                      沿用当前 token;若服务未在监听,保存时当场生成一个新的。",
-                    );
+                        "This is the active token. Save to keep it in config.toml.\nLeave it blank to generate a new token at each startup. The current token stays active until restart; if the server is stopped, saving generates one now.",
+                    ));
                     ui.end_row();
 
-                    ui.label("会话尺寸策略");
+                    ui.label(locale.text("会话尺寸策略", "Session sizing"));
                     ui.horizontal(|ui| {
                         ui.label(view.window_size.as_str());
-                        ui.small("(在 config.toml 中修改)");
+                        ui.small(locale.text("(在 config.toml 中修改)", "(edit in config.toml)"));
                     });
                     ui.end_row();
 
-                    ui.label("开机自启");
+                    ui.label(locale.text("开机自启", "Start at login"));
                     edited |= ui.checkbox(&mut view.form.autostart, "").changed();
                     ui.end_row();
                 });
 
             ui.add_space(8.0);
-            if view.pairing.draw(ui) { outcome = Outcome::RefreshPairing; }
+            if view.pairing.draw(ui, locale) { outcome = Outcome::RefreshPairing; }
             ui.add_space(8.0);
             ui.separator();
             ui.horizontal(|ui| {
-                ui.label("启动项");
-                if ui.button("打开 config.toml").clicked() {
+                ui.label(locale.text("启动项", "Launchers"));
+                if ui.button(locale.text("打开 config.toml", "Open config.toml")).clicked() {
                     outcome = Outcome::OpenConfigFile;
                 }
             });
@@ -146,7 +161,7 @@ pub fn draw(ui: &mut egui::Ui, view: &mut View) -> Outcome {
                 .max_height(110.0)
                 .show(ui, |ui| {
                     if view.launchers.is_empty() {
-                        ui.small("(只有内置项)");
+                        ui.small(locale.text("(只有内置项)", "(built-in launchers only)"));
                     }
                     for (name, command) in &view.launchers {
                         ui.horizontal(|ui| {
@@ -158,7 +173,7 @@ pub fn draw(ui: &mut egui::Ui, view: &mut View) -> Outcome {
 
             ui.add_space(8.0);
             ui.separator();
-            if let Some(a) = draw_cloud(ui, view) {
+            if let Some(a) = draw_cloud(ui, view, locale) {
                 outcome = Outcome::Cloud(a);
             }
 
@@ -177,10 +192,10 @@ pub fn draw(ui: &mut egui::Ui, view: &mut View) -> Outcome {
 
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.button("取消").clicked() {
+                if ui.button(locale.text("取消", "Cancel")).clicked() {
                     outcome = Outcome::Cancel;
                 }
-                if ui.button("保存并应用").clicked() {
+                if ui.button(locale.text("保存并应用", "Save and apply")).clicked() {
                     outcome = Outcome::Save;
                 }
             });
@@ -191,12 +206,12 @@ pub fn draw(ui: &mut egui::Ui, view: &mut View) -> Outcome {
 }
 
 /// 「Cloud 账号」区。和 `draw` 一样同一帧可能跑两趟:只改表单文本、只返回意图。
-fn draw_cloud(ui: &mut egui::Ui, view: &mut View) -> Option<CloudAction> {
+fn draw_cloud(ui: &mut egui::Ui, view: &mut View, locale: Locale) -> Option<CloudAction> {
     let mut action = None;
     let status = view.cloud_status.clone();
     ui.horizontal(|ui| {
-        ui.label("Cloud 账号");
-        ui.small("(可选,用于把 agent 的等待提醒推送到手机)");
+        ui.label(locale.text("Cloud 账号", "Cloud account"));
+        ui.small(locale.text("(可选,用于把 agent 的等待提醒推送到手机)", "(optional, for agent notifications on your phone)"));
         if view.cloud_busy {
             ui.spinner();
         }
@@ -204,57 +219,57 @@ fn draw_cloud(ui: &mut egui::Ui, view: &mut View) -> Option<CloudAction> {
     ui.add_enabled_ui(!view.cloud_busy, |ui| match &status {
         CloudStatus::LoggedIn { email, url } => {
             ui.horizontal(|ui| {
-                ui.label(format!("已登录:{email}"));
+                ui.label(tr!(locale, "已登录:{email}", "Signed in: {email}"));
                 ui.small(url.as_str());
             });
-            if ui.button("退出登录").clicked() {
+            if ui.button(locale.text("退出登录", "Sign out")).clicked() {
                 action = Some(CloudAction::Logout);
             }
-            ui.collapsing("删除账号", |ui| {
-                ui.small("永久删除 Cloud 账号及其全部数据,需要密码和发到邮箱的确认码。");
+            ui.collapsing(locale.text("删除账号", "Delete account"), |ui| {
+                ui.small(locale.text("永久删除 Cloud 账号及其全部数据,需要密码和发到邮箱的确认码。", "Permanently delete your Cloud account and all its data. Requires your password and an email confirmation code."));
                 egui::Grid::new("cloud-delete").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-                    ui.label("密码");
+                    ui.label(locale.text("密码", "Password"));
                     ui.add(egui::TextEdit::singleline(&mut view.cloud.password).password(true).desired_width(180.0));
                     ui.end_row();
-                    ui.label("确认码");
+                    ui.label(locale.text("确认码", "Confirmation code"));
                     ui.horizontal(|ui| {
                         ui.add(egui::TextEdit::singleline(&mut view.cloud.code).desired_width(80.0));
-                        if ui.button("发送确认码").clicked() {
+                        if ui.button(locale.text("发送确认码", "Send code")).clicked() {
                             action = Some(CloudAction::SendDeleteCode);
                         }
                     });
                     ui.end_row();
                 });
-                ui.checkbox(&mut view.cloud.confirm_delete, "我明白删除后无法恢复");
-                if ui.button("永久删除账号").clicked() {
+                ui.checkbox(&mut view.cloud.confirm_delete, locale.text("我明白删除后无法恢复", "I understand this cannot be undone"));
+                if ui.button(locale.text("永久删除账号", "Permanently delete account")).clicked() {
                     action = Some(CloudAction::DeleteAccount);
                 }
             });
         }
         CloudStatus::LoggedOut => {
             ui.horizontal(|ui| {
-                ui.label("中继地区");
+                ui.label(locale.text("中继地区", "Relay region"));
                 egui::ComboBox::from_id_salt("cloud-region")
-                    .selected_text(view.cloud.region.label())
+                    .selected_text(view.cloud.region.label(locale))
                     .show_ui(ui, |ui| {
                         for region in RelayRegion::ALL {
-                            ui.selectable_value(&mut view.cloud.region, region, region.label());
+                            ui.selectable_value(&mut view.cloud.region, region, region.label(locale));
                         }
                     });
             });
             if view.cloud.region != RelayRegion::China {
-                ui.small("该地区暂未部署，稍后开放。");
+                ui.small(locale.text("该地区暂未部署，稍后开放。", "This region is not available yet."));
             }
-            ui.small("在浏览器中登录或创建账号，完成后自动返回客户端。");
-            if ui.button("通过浏览器登录").clicked() {
+            ui.small(locale.text("在浏览器中登录或创建账号，完成后自动返回客户端。", "Sign in or create an account in your browser, then return here automatically."));
+            if ui.button(locale.text("通过浏览器登录", "Sign in with browser")).clicked() {
                 action = Some(CloudAction::Login);
             }
         }
     });
     if view.cloud_busy && matches!(status, CloudStatus::LoggedOut) {
         ui.horizontal(|ui| {
-            ui.label("等待浏览器完成登录…");
-            if ui.button("取消登录").clicked() {
+            ui.label(locale.text("等待浏览器完成登录…", "Waiting for browser sign-in…"));
+            if ui.button(locale.text("取消登录", "Cancel sign-in")).clicked() {
                 action = Some(CloudAction::CancelLogin);
             }
         });

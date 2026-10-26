@@ -74,7 +74,7 @@ impl EguiWindow {
         let window = Arc::new(event_loop.create_window(attrs).context("无法创建窗口")?);
 
         let egui_ctx = egui::Context::default();
-        // 必须赶在第一帧之前:egui 默认字体一个汉字都没有,界面文案全是中文。
+        // 必须赶在第一帧之前:egui 默认字体没有汉字,语言选择器也要显示「简体中文」。
         crate::fonts::install(&egui_ctx);
         let egui_state = egui_winit::State::new(
             egui_ctx.clone(),
@@ -122,6 +122,10 @@ impl EguiWindow {
 
     pub fn request_redraw(&self) {
         self.window.request_redraw();
+    }
+
+    pub fn set_title(&self, title: &str) {
+        self.window.set_title(title);
     }
 
     /// 界面是否通过 `ctx.send_viewport_cmd(ViewportCommand::Close)` 要求关窗。

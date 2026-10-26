@@ -27,6 +27,8 @@ use anyhow::Result;
 
 use crate::configfile::Editable;
 use crate::settings::state::{needs_rebind, Form, Message};
+use crate::i18n::Locale;
+use crate::tr;
 
 /// 保存要做的全部 IO。真实实现在 app.rs(改开机自启、找配置路径、写文件、
 /// 重启 HTTP 层、生成新 token),测试里换成记账用的假实现。
@@ -74,8 +76,8 @@ impl Applied {
     }
 }
 
-pub fn apply(form: &Form, current: &Current, fx: &mut impl Effects) -> Applied {
-    let next = match form.validate() {
+pub fn apply(form: &Form, current: &Current, fx: &mut impl Effects, locale: Locale) -> Applied {
+    let next = match form.validate(locale) {
         Ok(v) => v,
         Err(e) => return Applied::err(e.to_string()),
     };
@@ -84,7 +86,7 @@ pub fn apply(form: &Form, current: &Current, fx: &mut impl Effects) -> Applied {
     // 后面再报「已保存」就是在撒谎。反过来它**成功**之后就不再回滚了 —— 后面
     // 任何一步失败,这一项都已经改掉了。
     if let Err(e) = fx.set_autostart(form.autostart) {
-        return Applied::err(format!("开机自启设置失败:{e:#}"));
+        return Applied::err(tr!(locale, "开机自启设置失败:{e:#}", "Could not change startup settings: {e:#}"));
     }
 
     let path = match fx.config_path() {
@@ -109,7 +111,7 @@ pub fn apply(form: &Form, current: &Current, fx: &mut impl Effects) -> Applied {
     if !rebind {
         // 只改了 token 的固定与否 / 只改了自启:写文件就完事
         return match fx.save_config(&path, &next) {
-            Ok(()) => Applied { message: Message::Ok("已保存".into()), restarted: false },
+            Ok(()) => Applied { message: Message::Ok(locale.text("已保存", "Saved").into()), restarted: false },
             Err(e) => Applied::err(format!("{e:#}")),
         };
     }
@@ -138,13 +140,15 @@ pub fn apply(form: &Form, current: &Current, fx: &mut impl Effects) -> Applied {
     match fx.restart(next.listen, token) {
         Ok(actual) => {
             let message = match fx.save_config(&path, &next) {
-                Ok(()) => Message::Ok(format!(
+                Ok(()) => Message::Ok(tr!(locale,
                     "已生效 · {actual} · {} 个会话未受影响",
+                    "Applied · {actual} · {} sessions preserved",
                     current.sessions
                 )),
                 // 已经在新地址上跑起来了,但配置没落盘 —— 必须说清楚
-                Err(e) => Message::Err(format!(
-                    "已在 {actual} 生效,但写入配置失败:{e:#}(重启后会回到旧配置)"
+                Err(e) => Message::Err(tr!(locale,
+                    "已在 {actual} 生效,但写入配置失败:{e:#}(重启后会回到旧配置)",
+                    "Active at {actual}, but could not save settings: {e:#} (previous settings will return after restart)"
                 )),
             };
             Applied { message, restarted: true }
@@ -154,10 +158,10 @@ pub fn apply(form: &Form, current: &Current, fx: &mut impl Effects) -> Applied {
         // 不出服务到底还在不在的。
         Err(e) => Applied::err(match current.listen {
             // 地址有变化:supervisor 先 bind 新的、成功了才关旧的,旧的还在跑
-            Some(old) if old != next.listen => format!("{e:#}(原服务仍在 {old} 上运行)"),
+            Some(old) if old != next.listen => tr!(locale, "{e:#}(原服务仍在 {old} 上运行)", "{e:#} (the previous server is still running at {old})"),
             // 地址没变(只换 token):supervisor 已经先停了旧的,再失败就没有
             // HTTP 层了;current.listen 为 None 时本来就没在监听
-            _ => format!("{e:#}(服务当前未监听)"),
+            _ => tr!(locale, "{e:#}(服务当前未监听)", "{e:#} (the server is not listening)"),
         }),
     }
 }

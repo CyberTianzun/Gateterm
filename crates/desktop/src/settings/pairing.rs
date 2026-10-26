@@ -1,6 +1,7 @@
 //! QR links describe the live listener, never uncommitted settings. Changing the
 //! advertised interface does not rebind HTTP or detach existing terminals.
 use std::net::{IpAddr, SocketAddr};
+use crate::i18n::Locale;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Address {
@@ -17,7 +18,7 @@ pub struct Pairing {
     token: String,
     addresses: Vec<Address>,
     selected: Option<IpAddr>,
-    error: Option<String>,
+    interface_error: bool,
     texture: Option<(String, egui::TextureHandle)>,
 }
 
@@ -25,7 +26,7 @@ impl Pairing {
     pub fn new(listen: Option<SocketAddr>, token: Option<&str>) -> Self {
         let mut pairing = Self {
             listen, token: token.unwrap_or_default().into(), addresses: vec![],
-            selected: None, error: None, texture: None,
+            selected: None, interface_error: false, texture: None,
         };
         pairing.refresh(listen, token);
         pairing
@@ -39,33 +40,33 @@ impl Pairing {
         let interfaces = if_addrs::get_if_addrs().map(|interfaces| interfaces.into_iter()
             .filter(|iface| iface.is_oper_up())
             .map(|iface| Address { ip: iface.ip(), interface: iface.name }).collect::<Vec<_>>());
-        self.error = interfaces.as_ref().err().map(|_| "无法读取本机网卡，请重试。".into());
+        self.interface_error = interfaces.is_err();
         self.addresses = candidates(listen, interfaces.unwrap_or_default());
         self.selected = self.selected.filter(|ip| self.addresses.iter().any(|a| a.ip == *ip))
             .or_else(|| self.addresses.first().map(|a| a.ip));
         self.texture = None;
     }
 
-    pub fn draw(&mut self, ui: &mut egui::Ui) -> bool {
+    pub fn draw(&mut self, ui: &mut egui::Ui, locale: Locale) -> bool {
         let mut refresh = false;
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                ui.strong("Android 扫码连接");
-                if ui.small_button("刷新地址").clicked() { refresh = true; }
+                ui.strong(locale.text("Android 扫码连接", "Connect Android with a QR code"));
+                if ui.small_button(locale.text("刷新地址", "Refresh addresses")).clicked() { refresh = true; }
             });
             let Some(listen) = self.listen.filter(|_| !self.token.is_empty()) else {
-                ui.small("服务尚未启动，保存并应用后可生成连接二维码。");
+                ui.small(locale.text("服务尚未启动，保存并应用后可生成连接二维码。", "The server is not running. Save and apply to generate a connection QR code."));
                 return;
             };
-            if let Some(error) = &self.error { ui.small(error); }
+            if self.interface_error { ui.small(locale.text("无法读取本机网卡，请重试。", "Cannot read network interfaces. Please retry.")); }
             if self.addresses.is_empty() {
                 ui.small(if listen.ip().is_loopback() {
-                    "当前仅监听本机。将监听地址改为 0.0.0.0 并保存，手机才能连接。"
-                } else { "未找到可供手机连接的网卡地址。连接网络后点击刷新地址。" });
+                    locale.text("当前仅监听本机。将监听地址改为 0.0.0.0 并保存，手机才能连接。", "Listening on localhost only. Set the listen address to 0.0.0.0 and save to allow phone connections.")
+                } else { locale.text("未找到可供手机连接的网卡地址。连接网络后点击刷新地址。", "No reachable network addresses found. Connect to a network and refresh.") });
                 return;
             }
             ui.horizontal(|ui| {
-                ui.label("连接 IP");
+                ui.label(locale.text("连接 IP", "Connection IP"));
                 let selected = self.addresses.iter().find(|a| Some(a.ip) == self.selected)
                     .map(Address::label).unwrap_or_default();
                 egui::ComboBox::from_id_salt("pairing-address")
@@ -90,15 +91,15 @@ impl Pairing {
                     }
                     if let Some((_, texture)) = &self.texture {
                         ui.image((texture.id(), egui::vec2(192.0, 192.0)));
-                    } else { ui.small("连接信息过长，无法生成二维码。请手动添加服务器。"); }
+                    } else { ui.small(locale.text("连接信息过长，无法生成二维码。请手动添加服务器。", "Connection details are too long for a QR code. Add the server manually.")); }
                 });
                 ui.vertical(|ui| {
                     ui.monospace(format!("http://{}", SocketAddr::new(ip, listen.port())));
-                    if ui.button("复制连接链接").clicked() { ui.ctx().copy_text(url); }
+                    if ui.button(locale.text("复制连接链接", "Copy connection link")).clicked() { ui.ctx().copy_text(url); }
                     ui.add_space(8.0);
-                    ui.small("Android 添加服务器 → 扫码，自动填入地址和 token。");
-                    ui.small("请选择手机能访问的局域网或 VPN 地址。");
-                    ui.small("修改监听地址、端口或 token 后，请先保存并应用。");
+                    ui.small(locale.text("Android 添加服务器 → 扫码，自动填入地址和 token。", "On Android, choose Add server → Scan QR code to fill in the address and token."));
+                    ui.small(locale.text("请选择手机能访问的局域网或 VPN 地址。", "Select a LAN or VPN address your phone can reach."));
+                    ui.small(locale.text("修改监听地址、端口或 token 后，请先保存并应用。", "After changing the address, port or token, save and apply first."));
                 });
             });
         });
@@ -142,6 +143,35 @@ fn qr_image(url: &str) -> Result<egui::ColorImage, qrcode::types::QrError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn translated_qr_instructions_fit_beside_the_code() {
+        let ctx = egui::Context::default();
+        crate::fonts::install(&ctx);
+        let mut pairing = Pairing {
+            listen: Some("0.0.0.0:7683".parse().unwrap()), token: "test-token".into(),
+            addresses: vec![Address { ip: "192.168.1.2".parse().unwrap(), interface: "Ethernet".into() }],
+            selected: Some("192.168.1.2".parse().unwrap()), interface_error: false, texture: None,
+        };
+        for locale in [Locale::En, Locale::ZhCn] {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(560.0, 680.0))),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                pairing.draw(ui, locale);
+            });
+            output.textures_delta.clear();
+            assert!(pairing.texture.is_some());
+            for shape in &output.shapes {
+                if let egui::Shape::Text(text) = &shape.shape {
+                    assert!(text.pos.x + text.galley.size().x <= 560.5, "{}", text.galley.text());
+                }
+            }
+        }
+    }
+
     fn addresses() -> Vec<Address> {
         ["127.0.0.1", "127.4.3.2", "0.0.0.0", "192.168.1.2", "192.168.1.2", "100.64.0.2",
             "169.254.2.1", "224.0.0.1", "255.255.255.255", "::", "::1", "fe80::1", "ff02::1", "fd00::2"]

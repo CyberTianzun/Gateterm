@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use toml_edit::{value, DocumentMut};
+use crate::i18n::LanguagePref;
 
 /// desktop 允许改的字段。其余键(window_size、[[launcher]] 等)原样保留。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +17,7 @@ pub struct Editable {
     pub listen: SocketAddr,
     /// `None` 表示不固定 token —— 移除该键,server 下次启动随机生成。
     pub token: Option<String>,
+    pub language: LanguagePref,
 }
 
 /// 与 server 用同一个平台配置目录(`octoterm_server::config` 里的私有 `default_path`
@@ -24,6 +26,19 @@ pub fn default_path() -> Result<PathBuf> {
     let dirs = directories::ProjectDirs::from("", "", "octoterm")
         .context("无法确定配置目录")?;
     Ok(dirs.config_dir().join("config.toml"))
+}
+
+/// Missing, unreadable or unsupported preferences follow the OS. Config parse
+/// errors are reported separately by the existing startup error banner.
+pub fn load_language(path: &Path) -> LanguagePref {
+    std::fs::read_to_string(path).ok()
+        .and_then(|text| text.parse::<DocumentMut>().ok())
+        .and_then(|doc| doc.get("desktop")?.get("language")?.as_str().map(LanguagePref::from_config))
+        .unwrap_or_default()
+}
+
+pub fn language() -> LanguagePref {
+    default_path().map(|path| load_language(&path)).unwrap_or_default()
 }
 
 /// 就地写回。文件不存在时连同父目录一起创建。
@@ -47,6 +62,10 @@ pub fn save(path: &Path, edit: &Editable) -> Result<()> {
             doc.remove("token");
         }
     }
+
+    let desktop = doc.entry("desktop").or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+    let desktop = desktop.as_table_like_mut().context("[desktop] must be a table")?;
+    desktop.insert("language", value(edit.language.code()));
 
     write_atomic(path, doc.to_string().as_bytes())
 }

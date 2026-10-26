@@ -3,6 +3,8 @@
 use std::net::{IpAddr, SocketAddr};
 
 use crate::configfile::Editable;
+use crate::i18n::{LanguagePref, Locale};
+use crate::tr;
 
 /// 表单里存字符串而不是强类型:用户打字的过程中,绝大多数时刻内容都是非法的。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,6 +14,7 @@ pub struct Form {
     /// 空白表示「不固定」。
     pub token: String,
     pub autostart: bool,
+    pub language: LanguagePref,
 }
 
 /// 保存之后给用户看的一句话。定义在这里而不是 ui.rs:保存流程
@@ -46,28 +49,30 @@ impl Form {
             // 所以留空由调用方在构造后显式赋值 —— 见 app.rs 的 `App::build_view`。
             token: String::new(),
             autostart,
+            language: LanguagePref::Auto,
         }
     }
 
-    pub fn validate(&self) -> Result<Editable, FieldError> {
+    pub fn validate(&self, locale: Locale) -> Result<Editable, FieldError> {
         let ip: IpAddr = self
             .host
             .trim()
             .parse()
-            .map_err(|_| FieldError::Host(format!("不是合法的 IP 地址:{}", self.host.trim())))?;
+            .map_err(|_| FieldError::Host(tr!(locale, "不是合法的 IP 地址:{}", "Invalid IP address: {}", self.host.trim())))?;
         let port: u16 = self
             .port
             .trim()
             .parse()
-            .map_err(|_| FieldError::Port(format!("端口必须是 1-65535 的整数:{}", self.port.trim())))?;
+            .map_err(|_| FieldError::Port(tr!(locale, "端口必须是 1-65535 的整数:{}", "Port must be an integer from 1 to 65535: {}", self.port.trim())))?;
         if port == 0 {
             // 0 会让系统随机分配端口,对一个要被访问的服务没有意义
-            return Err(FieldError::Port("端口不能是 0".into()));
+            return Err(FieldError::Port(locale.text("端口不能是 0", "Port cannot be 0").into()));
         }
         let token = self.token.trim();
         Ok(Editable {
             listen: SocketAddr::new(ip, port),
             token: (!token.is_empty()).then(|| token.to_string()),
+            language: self.language,
         })
     }
 }

@@ -5,11 +5,9 @@ use anyhow::{Context, Result};
 use octoterm_desktop::app::{App, Startup, UserEvent};
 use octoterm_desktop::supervisor::Supervisor;
 use octoterm_desktop::{configfile, dialog, logs, single_instance};
+use octoterm_desktop::i18n::Locale;
 use octoterm_server::config::Config;
 use winit::event_loop::EventLoop;
-
-/// 启动期弹框的统一标题。
-const FAILED_TO_START: &str = "octoterm 无法启动";
 
 /// 致命失败:先弹框把原因摆到用户面前,再把错误原样交回去。
 ///
@@ -38,13 +36,16 @@ fn main() -> Result<()> {
         std::process::exit(code);
     }
 
-    let log_path = or_report(FAILED_TO_START, "日志初始化失败。", logs::init())?;
+    let language = configfile::language();
+    let locale = language.resolve(Locale::system());
+    let failed_to_start = locale.text("octoterm 无法启动", "octoterm could not start");
+    let log_path = or_report(failed_to_start, locale.text("日志初始化失败。", "Could not initialize logging."), logs::init())?;
 
     let config_path =
-        or_report(FAILED_TO_START, "无法确定配置目录。", configfile::default_path())?;
+        or_report(failed_to_start, locale.text("无法确定配置目录。", "Cannot locate the configuration directory."), configfile::default_path())?;
     let lock_path = config_path.with_file_name("octoterm.lock");
     let lock = single_instance::acquire(&lock_path);
-    let _guard = match or_report(FAILED_TO_START, "无法获取单实例锁。", lock)? {
+    let _guard = match or_report(failed_to_start, locale.text("无法获取单实例锁。", "Could not acquire the application lock."), lock)? {
         Some(g) => g,
         None => {
             // 这不是错误,是正常分支 —— 但必须吭一声。托盘常驻应用被重复启动是家常
@@ -53,10 +54,11 @@ fn main() -> Result<()> {
             // 在溢出区里,「它已经在跑了」这件事用户未必看得见。
             tracing::warn!("已有 octoterm-desktop 实例在运行,退出");
             dialog::notice(
-                "octoterm 已在运行",
-                "octoterm 已经在后台运行了。\n\n\
+                locale.text("octoterm 已在运行", "octoterm is already running"),
+                locale.text("octoterm 已经在后台运行了。\n\n\
                  可以在系统托盘(macOS 是右上角菜单栏)里找到它的图标,\
                  从那里打开 Web 客户端或设置。",
+                    "octoterm is already running in the background.\n\nFind its icon in the system tray (the menu bar on macOS) to open the web client or settings."),
             );
             return Ok(());
         }
@@ -83,8 +85,8 @@ fn main() -> Result<()> {
     );
 
     let rt = or_report(
-        FAILED_TO_START,
-        "无法创建 tokio runtime。",
+        failed_to_start,
+        locale.text("无法创建 tokio runtime。", "Could not start the background runtime."),
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -135,14 +137,14 @@ fn main() -> Result<()> {
         builder.with_activate_ignoring_other_apps(false);
     }
     let event_loop =
-        or_report(FAILED_TO_START, "无法创建事件循环。", builder.build().context("无法创建事件循环"))?;
+        or_report(failed_to_start, locale.text("无法创建事件循环。", "Could not create the event loop."), builder.build().context("Could not create the event loop"))?;
     let proxy = event_loop.create_proxy();
     // config 在 Supervisor::new 里只是被借用,这里把整份连同两条启动失败原因
     // 一起交给 App:配置做只读展示,错误做横幅 + 状态行。
-    let startup = Startup { config, config_error, listen_error };
+    let startup = Startup { language, config, config_error, listen_error };
     let mut app = App::new(rt, sup, proxy, log_path, startup);
     // 事件循环异常退出时托盘也跟着没了,同样得说一声 —— 否则用户看到的是图标凭空消失。
     let ran = event_loop.run_app(&mut app).map_err(Into::into);
-    or_report("octoterm 已退出", "事件循环异常退出。", ran)?;
+    or_report(locale.text("octoterm 已退出", "octoterm has exited"), locale.text("事件循环异常退出。", "The event loop stopped unexpectedly."), ran)?;
     Ok(())
 }

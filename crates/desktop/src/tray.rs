@@ -10,10 +10,20 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 use winit::event_loop::EventLoopProxy;
 
 use crate::app::{MenuAction, UserEvent};
+use crate::i18n::Locale;
 
 pub struct Tray {
     icon: TrayIcon,
     status: MenuItem,
+    items: [MenuItem; 5],
+}
+
+fn labels(locale: Locale) -> [&'static str; 5] {
+    [locale.text("打开 Web 客户端", "Open web client"),
+     locale.text("复制访问链接", "Copy access link"),
+     locale.text("设置…", "Settings…"),
+     locale.text("查看日志…", "View logs…"),
+     locale.text("退出", "Quit")]
 }
 
 fn decode_png_icon(bytes: &[u8]) -> Result<Icon> {
@@ -44,13 +54,9 @@ fn decode_icon() -> Result<Icon> {
 }
 
 impl Tray {
-    pub fn new(proxy: EventLoopProxy<UserEvent>) -> Result<Self> {
-        let status = MenuItem::new("octoterm — 启动中…", false, None);
-        let open_web = MenuItem::new("打开 Web 客户端", true, None);
-        let copy_url = MenuItem::new("复制访问链接", true, None);
-        let settings = MenuItem::new("设置…", true, None);
-        let view_logs = MenuItem::new("查看日志…", true, None);
-        let quit = MenuItem::new("退出", true, None);
+    pub fn new(proxy: EventLoopProxy<UserEvent>, locale: Locale) -> Result<Self> {
+        let status = MenuItem::new(locale.text("octoterm — 启动中…", "octoterm — Starting…"), false, None);
+        let [open_web, copy_url, settings, view_logs, quit] = labels(locale).map(|text| MenuItem::new(text, true, None));
 
         let ids: Vec<(MenuId, MenuAction)> = vec![
             (open_web.id().clone(), MenuAction::OpenWeb),
@@ -91,7 +97,13 @@ impl Tray {
             }
         }));
 
-        Ok(Self { icon, status })
+        Ok(Self { icon, status, items: [open_web, copy_url, settings, view_logs, quit] })
+    }
+
+    pub fn set_language(&mut self, locale: Locale) {
+        for (item, text) in self.items.iter().zip(labels(locale)) {
+            item.set_text(text);
+        }
     }
 
     /// 状态行 + tooltip 用同一段文字。tooltip 只是设个字符串,比每次会话变化都

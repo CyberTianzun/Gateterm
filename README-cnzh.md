@@ -98,6 +98,10 @@ server 启动时及每隔 24 小时会在后台检查 GitHub 最新正式 Releas
 cargo run -p octoterm-desktop
 ```
 
+桌面界面支持简体中文和 English。首次启动跟随操作系统显示语言：`zh` 语言使用中文，其他语言回退英文。
+可在「设置 → 界面语言」中选择语言或恢复「跟随系统」，保存后窗口和托盘立即切换。
+偏好保存在 `config.toml` 的 `[desktop].language`，可选值为 `auto`、`en`、`zh-CN`。
+
 desktop 启动后及每隔 24 小时也会在后台检查最新正式 Release。启动时发现更新会弹出系统对话框,
 可选择「立刻更新」用默认浏览器打开 Release 页面,或「取消」继续使用。
 程序不会自动下载或安装更新。

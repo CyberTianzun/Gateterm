@@ -1,6 +1,7 @@
 //! Cloud account form and relay presets, independent of egui.
 
 use octoterm_cloud_client::Credentials;
+use crate::i18n::Locale;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RelayRegion {
@@ -13,11 +14,11 @@ pub enum RelayRegion {
 impl RelayRegion {
     pub const ALL: [Self; 3] = [Self::China, Self::NorthAmerica, Self::Global];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self, locale: Locale) -> &'static str {
         match self {
-            Self::China => "中国大陆地区",
-            Self::NorthAmerica => "北美地区",
-            Self::Global => "其它全球",
+            Self::China => locale.text("中国大陆地区", "Mainland China"),
+            Self::NorthAmerica => locale.text("北美地区", "North America"),
+            Self::Global => locale.text("其它全球", "Global"),
         }
     }
 
@@ -88,33 +89,34 @@ pub fn prepare(
     form: &CloudForm,
     status: &CloudStatus,
     action: CloudAction,
+    locale: Locale,
 ) -> Result<CloudJob, String> {
     use CloudAction::*;
     let logged_in = matches!(status, CloudStatus::LoggedIn { .. });
     if matches!(action, Login | CancelLogin) == logged_in {
         return Err(if logged_in {
-            "已登录，请先退出登录".into()
+            locale.text("已登录，请先退出登录", "Already signed in. Sign out first.").into()
         } else {
-            "当前未登录".into()
+            locale.text("当前未登录", "Not signed in").into()
         });
     }
     Ok(match action {
         Login => CloudJob::BrowserLogin {
             url: form.region.url().into(),
         },
-        CancelLogin => return Err("没有正在进行的登录".into()),
+        CancelLogin => return Err(locale.text("没有正在进行的登录", "No sign-in is in progress").into()),
         Logout => CloudJob::Logout,
         SendDeleteCode => CloudJob::RequestDeleteCode,
         DeleteAccount => {
             if !form.confirm_delete {
-                return Err("请先勾选「我明白删除后无法恢复」".into());
+                return Err(locale.text("请先勾选「我明白删除后无法恢复」", "Confirm that you understand deletion cannot be undone.").into());
             }
             if form.password.is_empty() {
-                return Err("请填写密码".into());
+                return Err(locale.text("请填写密码", "Enter your password").into());
             }
             let code = form.code.trim();
             if code.len() != 6 || !code.bytes().all(|c| c.is_ascii_digit()) {
-                return Err("请填写邮件里的 6 位验证码".into());
+                return Err(locale.text("请填写邮件里的 6 位验证码", "Enter the six-digit code from your email").into());
             }
             CloudJob::DeleteAccount {
                 password: form.password.clone(),
@@ -135,7 +137,7 @@ mod tests {
         for region in RelayRegion::ALL {
             form.region = region;
             assert_eq!(
-                prepare(&form, &CloudStatus::LoggedOut, CloudAction::Login),
+                prepare(&form, &CloudStatus::LoggedOut, CloudAction::Login, Locale::En),
                 Ok(CloudJob::BrowserLogin {
                     url: region.url().into()
                 })
@@ -154,12 +156,12 @@ mod tests {
             email: "a@example.com".into(),
             url: RelayRegion::China.url().into(),
         };
-        assert!(prepare(&form, &status, CloudAction::Login).is_err());
-        assert!(prepare(&form, &CloudStatus::LoggedOut, CloudAction::Logout).is_err());
+        assert!(prepare(&form, &status, CloudAction::Login, Locale::En).is_err());
+        assert!(prepare(&form, &CloudStatus::LoggedOut, CloudAction::Logout, Locale::En).is_err());
         assert_eq!(
-            prepare(&form, &status, CloudAction::Logout),
+            prepare(&form, &status, CloudAction::Logout, Locale::En),
             Ok(CloudJob::Logout)
         );
-        assert!(prepare(&form, &status, CloudAction::DeleteAccount).is_err());
+        assert!(prepare(&form, &status, CloudAction::DeleteAccount, Locale::En).is_err());
     }
 }

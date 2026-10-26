@@ -18,6 +18,8 @@ use winit::window::WindowId;
 use crate::supervisor::Supervisor;
 use crate::tray::Tray;
 use crate::window::EguiWindow;
+use crate::i18n::{LanguagePref, Locale};
+use crate::tr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
@@ -70,6 +72,7 @@ pub fn tray_retry_delay(failures: u32) -> Option<Duration> {
 /// 设置窗口是用户唯一能看到原因、并且动手修的地方。
 #[derive(Debug, Clone)]
 pub struct Startup {
+    pub language: LanguagePref,
     pub config: Config,
     /// `Config::load` 失败的原因;此时 `config` 是默认值。
     pub config_error: Option<String>,
@@ -78,6 +81,7 @@ pub struct Startup {
 }
 
 pub struct App {
+    locale: Locale,
     cloud_task: Option<tokio::task::JoinHandle<()>>,
     cloud_generation: u64,
     rt: Runtime,
@@ -111,6 +115,7 @@ impl App {
         startup: Startup,
     ) -> Self {
         Self {
+            locale: startup.language.resolve(Locale::system()),
             cloud_task: None,
             cloud_generation: 0,
             rt,
@@ -131,9 +136,9 @@ impl App {
     /// 这次保存结果如何」——后者随编辑清除,前者一直挂到状况被修好为止。
     fn banner(&self) -> Option<String> {
         match (&self.startup.config_error, &self.startup.listen_error) {
-            (Some(c), Some(l)) => Some(format!("配置文件有错:{c}\n监听失败:{l}")),
-            (Some(c), None) => Some(format!("配置文件有错(当前使用默认值):{c}")),
-            (None, Some(l)) => Some(format!("当前未监听:{l}")),
+            (Some(c), Some(l)) => Some(tr!(self.locale, "配置文件有错:{c}\n监听失败:{l}", "Invalid configuration: {c}\nCould not start listener: {l}")),
+            (Some(c), None) => Some(tr!(self.locale, "配置文件有错(当前使用默认值):{c}", "Invalid configuration (using defaults): {c}")),
+            (None, Some(l)) => Some(tr!(self.locale, "当前未监听:{l}", "Not listening: {l}")),
             (None, None) => None,
         }
     }
@@ -147,6 +152,7 @@ impl App {
         // 读不出来就当没开:这一项读失败不该阻止用户打开设置窗口
         let autostart = crate::autostart::is_enabled().unwrap_or(false);
         let mut form = Form::from_current(listen, autostart);
+        form.language = self.startup.language;
         // token 回填当前生效值:用户多半是来看它、复制它的,展示为空反而费解。
         // 没在监听时压根没有「当前生效的 token」,框里就是空的(= 不固定)——
         // 保存时 save.rs 会现场生成一个,不会拿空串去跑。
@@ -200,13 +206,13 @@ impl App {
             }
             view.cloud_busy = false;
             view.cloud_status = crate::settings::cloud::status_from(Self::cloud_creds());
-            view.cloud_message = Some(Message::Ok("已取消登录".into()));
+            view.cloud_message = Some(Message::Ok(self.locale.text("已取消登录", "Sign-in canceled").into()));
             return;
         }
         if self.cloud_task.is_some() {
             return;
         }
-        let job = match crate::settings::cloud::prepare(&view.cloud, &view.cloud_status, action) {
+        let job = match crate::settings::cloud::prepare(&view.cloud, &view.cloud_status, action, self.locale) {
             Ok(job) => job,
             Err(m) => {
                 view.cloud_message = Some(Message::Err(m));
@@ -214,7 +220,7 @@ impl App {
             }
         };
         let Some(path) = octoterm_cloud_client::credentials::default_path() else {
-            view.cloud_message = Some(Message::Err("无法确定配置目录".into()));
+            view.cloud_message = Some(Message::Err(self.locale.text("无法确定配置目录", "Cannot locate the configuration directory").into()));
             return;
         };
         view.cloud_busy = true;
@@ -222,8 +228,9 @@ impl App {
         let proxy = self.proxy.clone();
         self.cloud_generation += 1;
         let generation = self.cloud_generation;
+        let locale = self.locale;
         self.cloud_task = Some(self.rt.spawn(async move {
-            let result = crate::cloud_ops::run(job, path, octoterm_cloud_client::default_label()).await;
+            let result = crate::cloud_ops::run(job, path, octoterm_cloud_client::default_label(), locale).await;
             let _ = proxy.send_event(UserEvent::CloudDone(generation, action, result));
         }));
     }
@@ -245,7 +252,19 @@ impl App {
         };
 
         let mut fx = AppEffects { rt: &self.rt, sup: &mut self.sup };
-        let applied = apply(&form, &current, &mut fx);
+        let locale = form.language.resolve(Locale::system());
+        let applied = apply(&form, &current, &mut fx, locale);
+        // Language changes only become active after the preference was saved.
+        // Updating labels in place preserves the tray, window and PTY sessions.
+        if matches!(&applied.message, crate::settings::ui::Message::Ok(_)) {
+            self.startup.language = form.language;
+            self.locale = locale;
+            if let Some(tray) = self.tray.as_mut() { tray.set_language(locale); }
+            if let Some(window) = &self.settings_window {
+                window.set_title(locale.text("octoterm 设置", "octoterm Settings"));
+            }
+            if let Some(view) = self.view.as_mut() { view.cloud_message = None; }
+        }
 
         // 重新监听成功了,启动时那条「未监听」就此作废。不清掉的话托盘状态行和
         // 横幅会一直挂着一条已经不成立的错误(用户明明已经把端口改好了)。
@@ -307,13 +326,13 @@ impl App {
         match self.sup.listen() {
             Some(addr) => {
                 let n = self.sup.manager().list().len();
-                format!("octoterm · {}:{} · {n} 个会话", display_host(addr.ip()), addr.port())
+                tr!(self.locale, "octoterm · {}:{} · {n} 个会话", "octoterm · {}:{} · {n} sessions", display_host(addr.ip()), addr.port())
             }
             // 带上原因:托盘状态行是用户第一眼看到的东西,只说「未监听」等于
             // 让他去翻日志。
             None => match &self.startup.listen_error {
-                Some(e) => format!("octoterm · 未监听({e})"),
-                None => "octoterm · 未监听".to_string(),
+                Some(e) => tr!(self.locale, "octoterm · 未监听({e})", "octoterm · Not listening ({e})"),
+                None => self.locale.text("octoterm · 未监听", "octoterm · Not listening").to_string(),
             },
         }
     }
@@ -362,7 +381,7 @@ impl App {
     /// 占着端口、单实例锁挡着用户重开,只能去任务管理器杀进程。所以这里的出口只有
     /// 两个:托盘起来了,或者进程退出了。
     fn init_tray(&mut self, event_loop: &ActiveEventLoop) {
-        match Tray::new(self.proxy.clone()) {
+        match Tray::new(self.proxy.clone(), self.locale) {
             Ok(tray) => {
                 tracing::info!(attempts = self.tray_failures + 1, "托盘已就绪");
                 self.tray = Some(tray);
@@ -409,11 +428,12 @@ impl App {
                         shutdown(&mut self.sup);
                         event_loop.exit();
                         crate::dialog::fatal(
-                            "octoterm 无法启动",
-                            &format!(
+                            self.locale.text("octoterm 无法启动", "octoterm could not start"),
+                            &tr!(self.locale,
                                 "无法创建托盘图标,重试 {} 次仍未成功。\n\n{reason}\n\n\
                                  octoterm 只有托盘这一个界面,没有它就没法操作,现在退出。\
                                  稍后可以再启动一次。",
+                                "Could not create the tray icon after {} attempts.\n\n{reason}\n\noctoterm needs the tray menu to operate and will now exit. Please try starting it again later.",
                                 self.tray_failures
                             ),
                         );
@@ -470,10 +490,7 @@ pub fn shutdown(sup: &mut Supervisor) {
 /// **同一份**:两处各写一遍字面量的话,以后改按钮文案很容易只改一处、忘了改
 /// 比较那一处 —— macOS 上没有 `Ok` 兜底(见下方判断逻辑),那样会静默变成
 /// 「有会话时永远退不出去」,而且不会有任何编译错误或测试失败提醒你。
-const QUIT_LABEL: &str = "退出";
-/// 同上,「取消」按钮的文案,和 `QUIT_LABEL` 共用同一处定义原因。
-const CANCEL_LABEL: &str = "取消";
-
+///
 /// 有活跃会话时确认;没有会话就别打扰用户。返回 true 表示「确认退出」。
 ///
 /// 用系统原生对话框而不是再开一个 egui 窗口:退出确认必须能在设置窗口没开的
@@ -481,19 +498,21 @@ const CANCEL_LABEL: &str = "取消";
 ///
 /// 平台差异(rfd 0.15.4 实测,与 brief 的写法有出入):
 /// * macOS 无父窗口时走 `CFUserNotificationDisplayAlert`,自定义按钮文案生效,
-///   点第一个按钮返回 `Custom(QUIT_LABEL)`;
+///   点第一个按钮返回 `Custom(quit_label)`;
 /// * Windows 启用 `common-controls-v6`,并由 build.rs 嵌入激活清单,支持自定义
 ///   按钮文案。保留 `Ok` 判断以兼容未使用该特性的 rfd 后端。
-fn confirm_quit(sessions: usize) -> bool {
+fn confirm_quit(sessions: usize, locale: Locale) -> bool {
+    let quit_label = locale.text("退出", "Quit");
     let result = rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Warning)
-        .set_title("退出 octoterm")
-        .set_description(format!(
-            "还有 {sessions} 个会话正在运行。退出会终止它们,里面跑的程序都会被杀掉。"
+        .set_title(locale.text("退出 octoterm", "Quit octoterm"))
+        .set_description(tr!(locale,
+            "还有 {sessions} 个会话正在运行。退出会终止它们,里面跑的程序都会被杀掉。",
+            "There are {sessions} active sessions. Quitting will terminate them and all programs running inside them."
         ))
-        .set_buttons(rfd::MessageButtons::OkCancelCustom(QUIT_LABEL.into(), CANCEL_LABEL.into()))
+        .set_buttons(rfd::MessageButtons::OkCancelCustom(quit_label.into(), locale.text("取消", "Cancel").into()))
         .show();
-    matches!(result, rfd::MessageDialogResult::Custom(ref s) if s == QUIT_LABEL)
+    matches!(result, rfd::MessageDialogResult::Custom(ref s) if s == quit_label)
         || result == rfd::MessageDialogResult::Ok
 }
 
@@ -570,13 +589,13 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             UserEvent::UpdateAvailable(update) => {
-                if crate::dialog::confirm_update(env!("CARGO_PKG_VERSION"), &update)
+                if crate::dialog::confirm_update(env!("CARGO_PKG_VERSION"), &update, self.locale)
                     && let Err(e) = open::that_detached(&update.url)
                 {
                     tracing::error!(error = %e, "打开 Release 页面失败");
                     crate::dialog::notice(
-                        "无法打开 Release 页面",
-                        &format!("请在浏览器中打开以下链接:\n\n{}\n\n{e}", update.url),
+                        self.locale.text("无法打开 Release 页面", "Could not open the release page"),
+                        &tr!(self.locale, "请在浏览器中打开以下链接:\n\n{}\n\n{e}", "Open this link in your browser:\n\n{}\n\n{e}", update.url),
                     );
                 }
             }
@@ -607,7 +626,7 @@ impl ApplicationHandler<UserEvent> for App {
                     // 每次开窗都重新读一遍当前生效值,而不是复用上次关窗时的表单:
                     // 期间监听地址可能已经被别处改过了。
                     self.view = Some(self.build_view());
-                    match EguiWindow::open(event_loop, "octoterm 设置", (560, 680)) {
+                    match EguiWindow::open(event_loop, self.locale.text("octoterm 设置", "octoterm Settings"), (560, 680)) {
                         Ok(w) => self.settings_window = Some(w),
                         Err(e) => {
                             tracing::error!(error = %format!("{e:#}"), "无法打开设置窗口");
@@ -628,7 +647,7 @@ impl ApplicationHandler<UserEvent> for App {
                 // 对话框是同步模态的,弹着的时候事件循环整个卡住:这是原生模态的
                 // 正常行为,退出确认本来也不该让用户还能去点别的菜单。
                 let n = self.sup.manager().list().len();
-                if n > 0 && !confirm_quit(n) {
+                if n > 0 && !confirm_quit(n, self.locale) {
                     return;
                 }
                 shutdown(&mut self.sup);
@@ -657,7 +676,7 @@ impl ApplicationHandler<UserEvent> for App {
                 // 全部挪到闭包外做一次。
                 let mut outcome = Outcome::None;
                 if let Some(view) = self.view.as_mut() {
-                    w.redraw_ui(|ui| outcome = draw(ui, view));
+                    w.redraw_ui(|ui| outcome = draw(ui, view, self.locale));
                 }
                 let closed = w.close_requested();
                 match outcome {

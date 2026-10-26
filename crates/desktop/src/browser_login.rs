@@ -15,6 +15,8 @@ use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 use url::Url;
+use crate::i18n::Locale;
+use crate::tr;
 
 pub const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -27,6 +29,7 @@ struct CallbackState {
 }
 
 pub struct BrowserLogin {
+    locale: Locale,
     listener: TcpListener,
     cloud_url: String,
     browser_url: Url,
@@ -36,10 +39,10 @@ pub struct BrowserLogin {
 }
 
 impl BrowserLogin {
-    pub async fn bind(cloud_url: &str, label: &str) -> Result<Self, String> {
+    pub async fn bind(cloud_url: &str, label: &str, locale: Locale) -> Result<Self, String> {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
-            .map_err(|e| format!("无法启动本机登录回调：{e}"))?;
+            .map_err(|e| tr!(locale, "无法启动本机登录回调：{e}", "Could not start the local sign-in callback: {e}"))?;
         let address = listener.local_addr().map_err(|e| e.to_string())?;
         let redirect_uri = format!("http://{address}/auth/callback");
         // Independent OS-random UUIDv4 values form a 64-character PKCE verifier.
@@ -50,7 +53,7 @@ impl BrowserLogin {
         );
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
         let state = uuid::Uuid::new_v4().simple().to_string();
-        let mut browser_url = Url::parse(cloud_url).map_err(|_| "中继地址无效")?;
+        let mut browser_url = Url::parse(cloud_url).map_err(|_| locale.text("中继地址无效", "Invalid relay address"))?;
         browser_url.set_path("/auth/desktop");
         browser_url.set_query(None);
         browser_url
@@ -61,6 +64,7 @@ impl BrowserLogin {
             .append_pair("code_challenge_method", "S256")
             .append_pair("label", label);
         Ok(Self {
+            locale,
             listener,
             cloud_url: cloud_url.into(),
             browser_url,
@@ -83,6 +87,7 @@ impl BrowserLogin {
         path: &Path,
         timeout: Duration,
     ) -> Result<Credentials, String> {
+        let locale = self.locale;
         let (sender, mut receiver) = mpsc::channel(1);
         let host = self
             .listener
@@ -106,13 +111,13 @@ impl BrowserLogin {
             })
             .into_future();
         let work = async {
-            let (code, reply) = receiver.recv().await.ok_or("登录回调已关闭")?;
+            let (code, reply) = receiver.recv().await.ok_or(locale.text("登录回调已关闭", "The sign-in callback has closed"))?;
             let result = async {
                 let client = CloudClient::new(&self.cloud_url);
                 let auth = client
                     .exchange_desktop_code(&code, &self.verifier, &self.redirect_uri)
                     .await
-                    .map_err(|e| e.user_message())?;
+                    .map_err(|e| locale.cloud_error(&e))?;
                 let creds = Credentials {
                     url: self.cloud_url,
                     email: auth.email,
@@ -121,7 +126,7 @@ impl BrowserLogin {
                 };
                 if let Err(e) = credentials::save(path, &creds) {
                     let _ = client.logout(&creds.token).await;
-                    return Err(format!("无法保存登录状态：{e}"));
+                    return Err(tr!(locale, "无法保存登录状态：{e}", "Could not save sign-in details: {e}"));
                 }
                 Ok(creds)
             }
@@ -131,8 +136,8 @@ impl BrowserLogin {
         };
         tokio::pin!(server);
         let result = tokio::select! {
-            result = tokio::time::timeout(timeout, work) => result.unwrap_or_else(|_| Err("登录已超时，请重新登录".into())),
-            result = &mut server => return Err(format!("本机登录回调已停止：{result:?}")),
+            result = tokio::time::timeout(timeout, work) => result.unwrap_or_else(|_| Err(locale.text("登录已超时，请重新登录", "Sign-in timed out. Please sign in again.").into())),
+            result = &mut server => return Err(tr!(locale, "本机登录回调已停止：{result:?}", "The local sign-in callback stopped: {result:?}")),
         };
         let _ = shutdown.send(());
         // Finish the callback response before releasing the listener.
@@ -297,7 +302,7 @@ mod tests {
     async fn callback_validates_state_and_host_then_exchanges_proof_and_saves_credentials() {
         let cloud = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let cloud_url = format!("http://{}", cloud.local_addr().unwrap());
-        let login = BrowserLogin::bind(&cloud_url, "Test Desktop")
+        let login = BrowserLogin::bind(&cloud_url, "Test Desktop", Locale::ZhCn)
             .await
             .unwrap();
         let params: std::collections::HashMap<_, _> =
@@ -360,7 +365,7 @@ mod tests {
     async fn timeout_and_cancellation_release_the_listener_without_saving() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cloud.json");
-        let login = BrowserLogin::bind("https://octoterm.signal.top/", "Desktop")
+        let login = BrowserLogin::bind("https://octoterm.signal.top/", "Desktop", Locale::ZhCn)
             .await
             .unwrap();
         let address = login.listener.local_addr().unwrap();
@@ -371,7 +376,7 @@ mod tests {
         assert!(!path.exists());
         assert!(tokio::net::TcpStream::connect(address).await.is_err());
 
-        let login = BrowserLogin::bind("https://octoterm.signal.top/", "Desktop")
+        let login = BrowserLogin::bind("https://octoterm.signal.top/", "Desktop", Locale::ZhCn)
             .await
             .unwrap();
         let address = login.listener.local_addr().unwrap();

@@ -5,6 +5,7 @@ pub mod cloud_ops;
 pub mod configfile;
 pub mod dialog;
 pub mod fonts;
+pub mod i18n;
 pub mod logs;
 pub mod settings;
 pub mod single_instance;

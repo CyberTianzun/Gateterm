@@ -112,12 +112,17 @@ still live in the browser.
 cargo run -p octoterm-desktop
 ```
 
+The desktop interface supports English and Simplified Chinese. On first launch it follows the
+OS display language (Chinese for `zh` locales, English otherwise). Choose **Settings → Language**
+and save to override it or return to **Follow system**. This updates the window and tray immediately
+and saves the preference as `[desktop].language` (`auto`, `en`, or `zh-CN`) in `config.toml`.
+
 The desktop app also checks for a newer stable Release at startup and every 24 hours. At startup, a native dialog
-offers “Update now” (立刻更新) to open the Release page in your default browser, or
-“Cancel” (取消) to keep working. Updates are never downloaded or installed automatically.
+offers “Update now” to open the Release page in your default browser, or
+“Cancel” to keep working. Updates are never downloaded or installed automatically.
 When an update is available, the web sidebar shows a link to its GitHub Release page below the connection status.
 
-Choose a reachable IP in Desktop settings under “Android 扫码连接”, then use Android’s “Add server → Scan QR code” to fill the address and token before saving.
+Choose a reachable IP in Desktop settings under “Connect Android with a QR code”, then use Android’s “Add server → Scan QR code” to fill the address and token before saving.
 
 Changing the listen address or token from the settings window only rebuilds
 the HTTP layer: **your running sessions are not affected**. But a page you

@@ -1,7 +1,49 @@
 use octoterm_desktop::configfile::{save, Editable};
+use octoterm_desktop::configfile::load_language;
+use octoterm_desktop::i18n::LanguagePref;
 
 fn edit(listen: &str, token: Option<&str>) -> Editable {
-    Editable { listen: listen.parse().unwrap(), token: token.map(String::from) }
+    Editable { listen: listen.parse().unwrap(), token: token.map(String::from), language: Default::default() }
+}
+
+#[test]
+fn language_round_trips_without_losing_other_desktop_preferences() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "# keep this\n[desktop]\n# keep this too\nfuture_option = true\n").unwrap();
+    for language in LanguagePref::ALL {
+        let mut next = edit("127.0.0.1:7683", Some("fixed"));
+        next.language = language;
+        save(&path, &next).unwrap();
+        assert_eq!(load_language(&path), language);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# keep this too"));
+        assert!(text.contains("future_option = true"));
+        // The shared server configuration must still load with desktop settings.
+        let config = octoterm_server::config::Config::load(Some(path.clone())).unwrap();
+        assert_eq!(config.token.as_deref(), Some("fixed"));
+    }
+}
+
+#[test]
+fn absent_invalid_or_unknown_language_follows_system() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    assert_eq!(load_language(&path), LanguagePref::Auto);
+    for text in ["", "listen = '127.0.0.1:7683'", "invalid = =", "[desktop]\nlanguage = 'unknown'", "[desktop]\nlanguage = 3"] {
+        std::fs::write(&path, text).unwrap();
+        assert_eq!(load_language(&path), LanguagePref::Auto);
+    }
+}
+
+#[test]
+fn invalid_desktop_section_is_not_overwritten() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let original = "desktop = 'custom'\n";
+    std::fs::write(&path, original).unwrap();
+    assert!(save(&path, &edit("127.0.0.1:7683", None)).is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
 }
 
 #[test]
