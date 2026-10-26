@@ -31,6 +31,20 @@ use winit::window::{Window, WindowId};
 /// 只有一个窗口,所以整个进程共用 `ViewportId::ROOT` 这一个视口。
 const VIEWPORT: egui::ViewportId = egui::ViewportId::ROOT;
 
+fn load_window_icon() -> Option<winit::window::Icon> {
+    let bytes = include_bytes!("../assets/icon.png");
+    let decoder = png::Decoder::new(std::io::Cursor::new(&bytes[..]));
+    let mut reader = decoder.read_info().ok()?;
+    let size = reader.output_buffer_size()?;
+    let mut buf = vec![0; size];
+    let info = reader.next_frame(&mut buf).ok()?;
+    if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
+        return None;
+    }
+    buf.truncate(info.buffer_size());
+    winit::window::Icon::from_rgba(buf, info.width, info.height).ok()
+}
+
 pub struct EguiWindow {
     // 字段顺序即析构顺序,别调:`painter` 里的 `wgpu::Surface` 自己持有一份
     // `Arc<Window>`,得先让 painter 落地把 surface 还回去,`window` 最后一个 drop
@@ -55,6 +69,7 @@ impl EguiWindow {
         let attrs = Window::default_attributes()
             .with_title(title)
             .with_inner_size(winit::dpi::LogicalSize::new(size.0, size.1))
+            .with_window_icon(load_window_icon())
             .with_resizable(true);
         let window = Arc::new(event_loop.create_window(attrs).context("无法创建窗口")?);
 

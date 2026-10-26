@@ -22,6 +22,7 @@ VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$ROOT/crates/desktop/Cargo.tom
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/octoterm-desktop"
+cp "$ROOT/crates/desktop/assets/icon.icns" "$APP/Contents/Resources/icon.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -36,6 +37,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <string>com.octoterm.desktop</string>
     <key>CFBundleExecutable</key>
     <string>octoterm-desktop</string>
+    <key>CFBundleIconFile</key>
+    <string>icon.icns</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

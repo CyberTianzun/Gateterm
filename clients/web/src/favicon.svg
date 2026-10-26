@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0866F2"/>
+      <stop offset="55%" stop-color="#30A2FF"/>
+      <stop offset="100%" stop-color="#FFC0B0"/>
+    </linearGradient>
+    <radialGradient id="sun" cx="18%" cy="40%" r="50%">
+      <stop offset="0%" stop-color="#FFB292" stop-opacity="0.65"/>
+      <stop offset="100%" stop-color="#FFB292" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#048AFC"/>
+      <stop offset="100%" stop-color="#023EB6"/>
+    </linearGradient>
+    <linearGradient id="tower" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FF5A30"/>
+      <stop offset="70%" stop-color="#EA3022"/>
+      <stop offset="100%" stop-color="#B01A18"/>
+    </linearGradient>
+    <linearGradient id="h1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FF802A"/>
+      <stop offset="100%" stop-color="#FF581A"/>
+    </linearGradient>
+    <linearGradient id="h2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FF561E"/>
+      <stop offset="100%" stop-color="#E82232"/>
+    </linearGradient>
+    <linearGradient id="h3" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#E82238"/>
+      <stop offset="100%" stop-color="#B8105C"/>
+    </linearGradient>
+    <linearGradient id="h4" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#B01264"/>
+      <stop offset="100%" stop-color="#620E7C"/>
+    </linearGradient>
+    <clipPath id="squircle">
+      <rect x="2" y="2" width="96" height="96" rx="22" ry="22"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#squircle)">
+    <rect x="0" y="0" width="100" height="53" fill="url(#sky)"/>
+    <rect x="0" y="0" width="100" height="53" fill="url(#sun)"/>
+    <path d="M0,43 C18,39 35,45 52,39 C70,34 84,39 100,42 L100,54 L0,54 Z" fill="#D8B8F2" opacity="0.50"/>
+    <rect x="0" y="52.5" width="100" height="47.5" fill="url(#sea)"/>
+    <!-- Far Tower -->
+    <g fill="#FF684C" opacity="0.82">
+      <rect x="76.0" y="39.2" width="1.2" height="15.0"/>
+      <rect x="79.5" y="39.2" width="1.2" height="15.0"/>
+      <rect x="75.7" y="40.8" width="5.3" height="1.0"/>
+      <rect x="75.7" y="44.0" width="5.3" height="0.9"/>
+      <rect x="75.7" y="47.2" width="5.3" height="0.9"/>
+    </g>
+    <!-- Clean Airy Suspender Cables -->
+    <g stroke="#EB5046" stroke-width="0.48" opacity="0.68">
+      <line x1="20" y1="30" x2="20" y2="57"/>
+      <line x1="43" y1="26" x2="43" y2="55"/>
+      <line x1="49" y1="34" x2="49" y2="54"/>
+      <line x1="55" y1="40" x2="55" y2="53"/>
+      <line x1="61" y1="43.5" x2="61" y2="52"/>
+      <line x1="67" y1="45" x2="67" y2="51"/>
+    </g>
+    <!-- Main Catenary Suspension Cable -->
+    <path d="M5,42 Q19,29 32,16.8 Q49,44.5 64.5,44.8 Q72,44.5 78.5,39.6 Q83,43.5 88,46.8" fill="none" stroke="#FF5A30" stroke-width="1.6" stroke-linecap="round"/>
+    <!-- Bridge Deck -->
+    <path d="M16,57.8 L86,48.0 L86,49.3 L16,60.2 Z" fill="url(#tower)"/>
+    <!-- Main Golden Gate Tower -->
+    <g fill="url(#tower)">
+      <rect x="26.5" y="14.5" width="1.5" height="2.4" rx="0.4"/>
+      <rect x="36.0" y="14.5" width="1.5" height="2.4" rx="0.4"/>
+      <polygon points="25.8,16.5 28.8,16.5 29.4,66 25.2,66"/>
+      <polygon points="35.2,16.5 38.2,16.5 38.8,66 34.6,66"/>
+      <rect x="25.7" y="18.8" width="12.6" height="3.0"/>
+      <rect x="25.7" y="29.2" width="12.6" height="2.6"/>
+      <rect x="25.7" y="39.8" width="12.6" height="2.6"/>
+      <rect x="25.5" y="50.5" width="13.0" height="3.0"/>
+    </g>
+    <!-- Subtle Turquoise Coastal Glow -->
+    <path d="M32,56 C48,62 68,74 92,98 L100,100 L84,100 C64,80 46,66 32,60 Z" fill="#26D6FF" opacity="0.32"/>
+    <!-- 5 Smooth Flowing Sunset Hills -->
+    <path d="M0,43.2 C16,49 32,59 50,66 C66,72 80,84 96,100 L0,100 Z" fill="url(#h1)"/>
+    <path d="M0,50.2 C15,56 30,66 47,73 C62,79 75,90 88,100 L0,100 Z" fill="url(#h2)"/>
+    <path d="M0,58.5 C14,64 28,73 43,80 C57,86 68,94 78,100 L0,100 Z" fill="url(#h3)"/>
+    <path d="M0,68.0 C13,73 26,81 39,88 C50,94 60,97 67,100 L0,100 Z" fill="url(#h4)"/>
+    <path d="M0,78.2 C13,82 25,90 37,96 C44,99 50,100 54,100 L0,100 Z" fill="#160E58"/>
+  </g>
+</svg>

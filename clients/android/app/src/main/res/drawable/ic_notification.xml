@@ -1,5 +1,18 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
-    <path android:fillColor="#FFFFFFFF"
-        android:pathData="M3,4h18a1,1 0,0 1,1 1v14a1,1 0,0 1,-1 1H3a1,1 0,0 1,-1 -1V5a1,1 0,0 1,1 -1zM6.5,9.5l3,2.5 -3,2.5 1,1.2 4.4,-3.7 -4.4,-3.7zM12,15h6v1.5h-6z" />
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Status Bar Notification Icon: Clean Minimalist Golden Gate Bridge Silhouette -->
+    <!-- Art-Deco H-Tower Pillars, 3 Portal Cross-Beams, and Roadway Deck -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M6.4,2.8h2.1v17.4H6.4z M15.5,2.8h2.1v17.4h-2.1z M6.4,4.8h11.2v1.7H6.4z M6.4,8.8h11.2v1.5H6.4z M6.4,12.8h11.2v1.5H6.4z M1.5,16.8h21v1.9H1.5z" />
+    <!-- Sweeping Side Catenary Suspension Cables -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.6"
+        android:strokeLineCap="round"
+        android:pathData="M7.2,3.8 Q5.2,11.5 2.0,17.2 M16.8,3.8 Q18.8,11.5 22.0,17.2" />
 </vector>

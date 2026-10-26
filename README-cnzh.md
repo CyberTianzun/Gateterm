@@ -1,5 +1,7 @@
 # Octoterm
 
+![Octoterm Banner](docs/assets/banner.png)
+
 [English](README.md) | 中文
 
 极致轻量、省内存的 terminal server:守护进程托管 pty 会话,断线后会话继续存活,

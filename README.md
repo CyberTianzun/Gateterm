@@ -1,5 +1,7 @@
 # Octoterm
 
+![Octoterm Banner](docs/assets/banner.png)
+
 English | [中文](README-cnzh.md)
 
 A tiny, memory-frugal terminal server: a daemon hosts pty sessions that survive

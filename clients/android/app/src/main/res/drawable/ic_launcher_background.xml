@@ -1,10 +1,62 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+
+    <!-- Sky to Sunset Horizon Gradient -->
+    <path android:pathData="M0,0h108v60H0z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="54"
+                android:startY="4"
+                android:endX="54"
+                android:endY="58"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FF0660EE" />
+                <item android:offset="0.52" android:color="#FF2A9BFF" />
+                <item android:offset="1.0" android:color="#FFFFBAAB" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Warm Radial Sunset Glow behind Golden Gate Bridge -->
+    <path android:pathData="M0,0h108v62H0z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:centerX="26"
+                android:centerY="46"
+                android:gradientRadius="52"
+                android:type="radial">
+                <item android:offset="0.0" android:color="#A6FFB091" />
+                <item android:offset="0.65" android:color="#40FFB091" />
+                <item android:offset="1.0" android:color="#00FFB091" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Distant Misty Marin Headlands -->
     <path
-        android:fillColor="#1A1B26"
-        android:pathData="M0,0h108v108H0z" />
+        android:fillColor="#8CD6B4F0"
+        android:pathData="M0,48 C18,44 36,50 54,44 C72,38 88,43 108,46 L108,60 L0,60 Z" />
+    <path
+        android:fillColor="#80A58EDE"
+        android:pathData="M0,51 C22,49 42,45 64,49 C82,52 95,48 108,50 L108,60 L0,60 Z" />
+
+    <!-- Pacific Bay Deep Cobalt Ocean -->
+    <path android:pathData="M0,57.5h108v50.5H0z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="54"
+                android:startY="57.5"
+                android:endX="54"
+                android:endY="108"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FF0084F8" />
+                <item android:offset="1.0" android:color="#FF0334A2" />
+            </gradient>
+        </aapt:attr>
+    </path>
 </vector>

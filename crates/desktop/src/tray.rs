@@ -16,11 +16,9 @@ pub struct Tray {
     status: MenuItem,
 }
 
-fn decode_icon() -> Result<Icon> {
-    // 图标嵌进二进制,和 server 用 rust-embed 嵌前端是同一个思路:分发只有一个文件
-    let bytes = include_bytes!("../assets/icon.png");
+fn decode_png_icon(bytes: &[u8]) -> Result<Icon> {
     // png 0.18 的 Decoder 要 BufRead + Seek,&[u8] 只满足前者,套一层 Cursor
-    let decoder = png::Decoder::new(std::io::Cursor::new(&bytes[..]));
+    let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     let mut reader = decoder.read_info().context("托盘图标不是合法 PNG")?;
     // 0.18 起 output_buffer_size 返回 Option:尺寸大到 usize 装不下时是 None
     let size = reader.output_buffer_size().context("托盘图标尺寸过大")?;
@@ -32,6 +30,17 @@ fn decode_icon() -> Result<Icon> {
     );
     buf.truncate(info.buffer_size());
     Icon::from_rgba(buf, info.width, info.height).context("托盘图标构造失败")
+}
+
+fn decode_icon() -> Result<Icon> {
+    // 图标嵌进二进制,和 server 用 rust-embed 嵌前端是同一个思路:分发只有一个文件。
+    // macOS 状态栏使用纯黑 + alpha 的模板图(随亮/暗色菜单栏自动反转);
+    // Windows / Linux 使用透明背景的彩色剪影图标。
+    #[cfg(target_os = "macos")]
+    let bytes = include_bytes!("../assets/tray-macos-template.png");
+    #[cfg(not(target_os = "macos"))]
+    let bytes = include_bytes!("../assets/icon.png");
+    decode_png_icon(bytes)
 }
 
 impl Tray {
