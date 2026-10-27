@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result};
 
-pub const LABEL: &str = "com.octoterm.desktop";
+pub const LABEL: &str = "com.gateterm.desktop";
 
 #[cfg(any(target_os = "macos", windows))]
 fn exe_path() -> Result<String> {
@@ -124,11 +124,11 @@ mod imp {
         fn parses_the_first_program_argument() {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join(format!("{LABEL}.plist"));
-            std::fs::write(&path, plist_xml("/Applications/octoterm.app/Contents/MacOS/octoterm"))
+            std::fs::write(&path, plist_xml("/Applications/gateterm.app/Contents/MacOS/gateterm"))
                 .unwrap();
             assert_eq!(
                 registered_target_at(&path).unwrap().as_deref(),
-                Some("/Applications/octoterm.app/Contents/MacOS/octoterm")
+                Some("/Applications/gateterm.app/Contents/MacOS/gateterm")
             );
         }
 
@@ -150,7 +150,7 @@ mod imp {
     use winreg::RegKey;
 
     const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-    const VALUE: &str = "octoterm";
+    const VALUE: &str = "gateterm";
 
     /// 去掉字符串两端各一个双引号(如果都在的话)。写入 Run 键时给路径加了引号
     /// (见 `set`),读出来比较之前要先去掉,不然永远匹配不上。
@@ -231,7 +231,7 @@ mod imp {
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
-compile_error!("octoterm-desktop 只支持 Windows 与 macOS");
+compile_error!("gateterm-desktop 只支持 Windows 与 macOS");
 
 /// `is_enabled` 的语义见其定义处(`imp` 模块内,macOS / Windows 各一份,内容相同)。
 #[cfg(any(target_os = "macos", windows))]

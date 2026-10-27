@@ -1,8 +1,8 @@
 mod common;
 
-use octoterm_server::agent::claude_transcript::parse;
-use octoterm_server::agent::store::hook_token;
-use octoterm_server::agent::transcript::{read_older_window, read_window, Block, Message, Role, MAX_MESSAGES, MAX_RESPONSE_BYTES};
+use gateterm_server::agent::claude_transcript::parse;
+use gateterm_server::agent::store::hook_token;
+use gateterm_server::agent::transcript::{read_older_window, read_window, Block, Message, Role, MAX_MESSAGES, MAX_RESPONSE_BYTES};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::io::Write;
@@ -124,7 +124,7 @@ async fn messages_endpoint_pages_to_the_first_prompt_and_rejects_mixed_direction
     let addr = common::start_test_server_at("tok", 1 << 16, Default::default(), vec![]).await;
     let client = reqwest::Client::new();
     client.post(format!("http://{addr}/hook/claude-code/session-start"))
-        .bearer_auth(hook_token()).header("X-Octoterm-Session", "1")
+        .bearer_auth(hook_token()).header("X-Gateterm-Session", "1")
         .json(&json!({"session_id":"s1", "transcript_path":path})).send().await.unwrap();
     let url = format!("http://{addr}/api/agents/messages?agent_id=claude-code&agent_session_id=s1");
     let mut page: Value = client.get(&url).bearer_auth("tok").send().await.unwrap().json().await.unwrap();

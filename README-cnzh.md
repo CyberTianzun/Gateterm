@@ -1,6 +1,16 @@
-# Octoterm
+# Gateterm
 
-![Octoterm Banner](docs/assets/banner.png)
+当前 Android 应用标识为 `ai.eclosion.gateterm.android`，桌面端和服务端配置位于各平台的
+`gateterm` 配置目录。这些标识对应独立的应用数据。切换前请导出外观设置，并复制需要保留的
+服务端配置、Cloud 登录凭据和 hook token，随后重新安装 agent hook。
+
+默认 Cloud 地址为 `https://gateterm.signal.top/`。该域名需要有效 HTTPS 证书，Cloud 服务的
+手机登录回调白名单需要支持 `ai.eclosion.gateterm.android://cloud/auth/callback`。
+Firebase/EMAS 配置必须登记上述新包名；包名不匹配的可选配置会在构建时提示并跳过。
+Android 签名配置使用仓库同级的 `GatetermSecrets/gateterm-release.signing.properties`。
+发布及自动更新链接指向 `CyberTianzun/Gateterm`，发布前需要同步 GitHub 仓库名称。
+
+![Gateterm Banner](docs/assets/banner.png)
 
 [English](README.md) | 中文
 
@@ -15,7 +25,7 @@ tmux 的内核(进程 + IO + 屏幕状态托管)单独拿出来,把窗口管理�
 但它和 Jupyter 深度绑定。缺的是一个**极其轻量、极其省内存的独立 terminal
 server**。
 
-这就是 octoterm 的全部定位。与 tmux 不同,它的 GUI 不是纯终端界面:会话通过
+这就是 gateterm 的全部定位。与 tmux 不同,它的 GUI 不是纯终端界面:会话通过
 客户端中立的通讯协议暴露,可以在浏览器或 Android 原生客户端中操作。
 
 ## 哲学
@@ -31,16 +41,16 @@ server**。
 
 ```sh
 # 需要 Node/npm:server 的 build.rs 会自动构建 clients/web
-# (设置 OCTOTERM_SKIP_WEB_BUILD=1 可跳过)
-cargo run -p octoterm-server
+# (设置 GATETERM_SKIP_WEB_BUILD=1 可跳过)
+cargo run -p gateterm-server
 # 启动日志会打印完整访问 URL(Jupyter 式,token 每次启动随机生成),直接点开即可:
 #     http://127.0.0.1:7683/#token=<本次随机 token>
 ```
 
 要固定 token(重启后旧页面免重新登录),用 `--token <值>`,或在配置文件里写
 `token = "<值>"`。配置文件不会由 server 自动生成;需要时自行创建
-`~/Library/Application Support/octoterm/config.toml`(Linux 为
-`~/.config/octoterm/config.toml`),或用 `--config <路径>` 指定,字段均可省略:
+`~/Library/Application Support/gateterm/config.toml`(Linux 为
+`~/.config/gateterm/config.toml`),或用 `--config <路径>` 指定,字段均可省略:
 
 ```toml
 listen = "127.0.0.1:7683"
@@ -78,7 +88,7 @@ cwd = "~/work"                # 可选
 默认只监听 127.0.0.1。要在其他设备访问,用命令行参数覆盖(优先于配置文件):
 
 ```sh
-cargo run -p octoterm-server -- --host 0.0.0.0 --port 9000
+cargo run -p gateterm-server -- --host 0.0.0.0 --port 9000
 ```
 
 使用 `--host 0.0.0.0` 时,启动日志会列出回环地址及所有已连接网卡的 IPv4 访问链接
@@ -91,11 +101,11 @@ server 启动时及每隔 24 小时会在后台检查 GitHub 最新正式 Releas
 
 ## 桌面客户端(Windows / macOS)
 
-`octoterm-desktop` 把同一套 server 内嵌进一个托盘常驻进程,配一个小巧的原生
+`gateterm-desktop` 把同一套 server 内嵌进一个托盘常驻进程,配一个小巧的原生
 设置窗口。它不是终端客户端——终端仍然长在浏览器里。
 
 ```sh
-cargo run -p octoterm-desktop
+cargo run -p gateterm-desktop
 ```
 
 桌面界面支持简体中文和 English。首次启动跟随操作系统显示语言：`zh` 语言使用中文，其他语言回退英文。
@@ -118,7 +128,7 @@ desktop 启动后及每隔 24 小时也会在后台检查最新正式 Release。
 结构化的消息流,而不是一块 VT 画面。它读的是 agent 自己写的对话记录,**只读、不缓存、
 不落盘**,并且由 `agents.transcript_enabled` 单独门控(默认开,可在 `[agents]` 里设为 `false` 关掉)。
 
-之所以和装 hook 分成两个开关:装 hook 让 octoterm 看到「它在干什么」,这个开关让它看到
+之所以和装 hook 分成两个开关:装 hook 让 gateterm 看到「它在干什么」,这个开关让它看到
 「它说了什么」—— 后者是代码、路径、命令、模型的思考过程,暴露面高一个数量级,不该靠
 前者顺带同意。**尤其要和下面这条一起看**:desktop 默认监听全网卡,而这两个开关默认都开着,
 等于局域网里拿到 token 的人能读到你的整段对话 —— 在不信任的网络上请关掉它,或把监听改回 127.0.0.1。
@@ -126,10 +136,10 @@ desktop 启动后及每隔 24 小时也会在后台检查最新正式 Release。
 **hook 自检与清理**:每次启动(desktop 每次改端口重启服务时也一样)都会检查已装的 hook 是否和
 当前服务一致(端口、事件、程序路径),对不上就在控制台 / 日志里打警告 —— 只报不改,修复仍在
 「设置 → AI 集成」里点「重新安装」。异常残留可以在同一页点「清空」,或运行
-`octoterm-server purge-hooks`:删掉 agent 配置里**所有** octoterm 写过的 hook(不论端口、不论事件),
+`gateterm-server purge-hooks`:删掉 agent 配置里**所有** gateterm 写过的 hook(不论端口、不论事件),
 你自己的 hook 不受影响,改前备份。
 
-**默认监听 `0.0.0.0:7683`(全网卡),与 `octoterm-server` 不同。** desktop 的存在理由
+**默认监听 `0.0.0.0:7683`(全网卡),与 `gateterm-server` 不同。** desktop 的存在理由
 就是「从手机/平板连回自己这台机器」,只回环等于开箱即不可用。敢这么定的前提是两条硬
 边界都在:空 token 进不到监听层(release 构建也拦),`/hook/*` 无条件只认回环。剩下的
 残余风险是实打实的 —— 同一局域网里拿到 token 的人就能用你的终端,所以在不可信网络里
@@ -173,11 +183,11 @@ Windows 使用 `gradlew.bat`。安装后添加服务端地址和 token,也可以
 ## Agent 会话历史
 
 Web 侧栏的历史按钮、Android 服务端页面的「Agent 会话历史」可浏览宿主机已有的
-Claude Code、Codex、pi、Grok 和 Antigravity CLI 记录,包括在 Octoterm 之外开始的对话。
+Claude Code、Codex、pi、Grok 和 Antigravity CLI 记录,包括在 Gateterm 之外开始的对话。
 支持按 Agent、标题、原工作目录和会话 ID 搜索,并预览最近的对话。
 
-已关联到运行中 Octoterm 终端的记录可直接进入终端;其他记录在原工作目录中启动一个
-新的 Octoterm 终端并恢复。需要服务端 PATH 中有对应 CLI、原目录仍存在且记录包含恢复
+已关联到运行中 Gateterm 终端的记录可直接进入终端;其他记录在原工作目录中启动一个
+新的 Gateterm 终端并恢复。需要服务端 PATH 中有对应 CLI、原目录仍存在且记录包含恢复
 所需信息。pi 使用原会话文件恢复。恢复请求在服务端合并,多端同时点击也不会重复启动。
 
 历史读取沿用 `[agents].transcript_enabled` 和服务端 bearer token。服务端启动时异步
@@ -186,21 +196,21 @@ Claude Code、Codex、pi、Grok 和 Antigravity CLI 记录,包括在 Octoterm �
 时界面会提示。当前读取
 各 Agent 的默认用户目录,不扫描 WSL、其他用户目录或自定义存储位置。
 
-## Octoterm Cloud(可选)
+## Gateterm Cloud(可选)
 
 登录 Cloud 之后，agent 进入「等你」状态时会通过 Cloud 推送到手机（Android 构建需要配置推送）。不登录不影响任何功能。
 
 - Cloud 不转发终端数据,拿不到本机的访问 token;推送只包含会话编号、agent 名称与工具名。
 - 登录态保存在配置目录的 `cloud.json`,在 Unix 上权限仅属主可读写(0600)。
-- 同一台机器上的 desktop 应用和独立运行的 octoterm-server 共用这份 cloud.json,其中一边登录或退出,另一边也会同步生效。
+- 同一台机器上的 desktop 应用和独立运行的 gateterm-server 共用这份 cloud.json,其中一边登录或退出,另一边也会同步生效。
 
 ```bash
-octoterm-server cloud register        # 注册并登录(邮件验证码)
-octoterm-server cloud login
-octoterm-server cloud status
-octoterm-server cloud logout
-octoterm-server cloud reset-password
-octoterm-server cloud delete-account  # 永久删除账号及全部数据
+gateterm-server cloud register        # 注册并登录(邮件验证码)
+gateterm-server cloud login
+gateterm-server cloud status
+gateterm-server cloud logout
+gateterm-server cloud reset-password
+gateterm-server cloud delete-account  # 永久删除账号及全部数据
 ```
 
 Cloud 地址可写进 `config.toml`:
@@ -215,9 +225,9 @@ Desktop 用户在「设置…」窗口底部的「Cloud 账号」区选择中继
 
 | 中继地区 | 地址 |
 |---|---|
-| 中国大陆地区（默认） | `https://octoterm.signal.top/` |
-| 北美地区（暂未部署） | `https://octoterm.eclosion.ai/` |
-| 其它全球（暂未部署） | `https://global.octoterm.eclosion.ai/` |
+| 中国大陆地区（默认） | `https://gateterm.signal.top/` |
+| 北美地区（暂未部署） | `https://gateterm.eclosion.ai/` |
+| 其它全球（暂未部署） | `https://global.gateterm.eclosion.ai/` |
 
 网页登录需要 Cloud 部署包含 `/auth/desktop` 与 `/v1/auth/desktop/*` 的版本。
 Android 同样使用三个中继地区预设，并在浏览器中完成登录、注册和找回密码。
@@ -236,7 +246,7 @@ Android 同样使用三个中继地区预设，并在浏览器中完成登录、
 
 通信协议规范:[`docs/protocol.md`](docs/protocol.md) —— 线上格式的规范性定义,
 以及任何协议改动都要过的评审清单。设计背景与取舍:
-`docs/superpowers/specs/2026-08-16-octoterm-design.md`。
+`docs/superpowers/specs/2026-08-16-gateterm-design.md`。
 
 - `crates/protocol` — 帧与消息定义(协议唯一事实来源)
 - `crates/server` — daemon:pty、服务端 grid、WebSocket
@@ -247,18 +257,18 @@ Android 同样使用三个中继地区预设，并在浏览器中完成登录、
 
 ## 路线图
 
-octoterm 目前是**实验性 demo**,已提供浏览器端和 Android 原生客户端。
+gateterm 目前是**实验性 demo**,已提供浏览器端和 Android 原生客户端。
 
 1. **更多终端能力、更多客户端**:深化核心终端功能,继续完善 Android 客户端,
    并把同一套协议带到 iOS 等平台;
 2. **Agent 集成**:让被托管的会话可以在任何设备上接管 AI 的提示、回答它的选择、
    查看它的状态。**Claude Code 已可用**(装 hook、会话状态、远程授权、聊天视图);
    Codex 也已支持(状态、授权、聊天视图;hook 要在 Codex 里用 `/hooks` 审核一次);
-   **pi** 通过生成的扩展 `~/.pi/agent/extensions/octoterm.ts` 支持(状态与聊天视图;
+   **pi** 通过生成的扩展 `~/.pi/agent/extensions/gateterm.ts` 支持(状态与聊天视图;
    pi 本身没有授权审批,所以没有远程授权可做);**Grok**(xAI 的 `grok`)通过
-   `~/.grok/hooks/octoterm.json` 支持(状态与聊天视图;它同样没有授权审批事件);
+   `~/.grok/hooks/gateterm.json` 支持(状态与聊天视图;它同样没有授权审批事件);
    **Antigravity CLI**(Google 的 `agy`)通过共用的 `~/.gemini/config/hooks.json` 里的
-   `octoterm` 条目支持(状态与聊天视图;不接管它的授权确认);
+   `gateterm` 条目支持(状态与聊天视图;不接管它的授权确认);
    该适配针对独立的 Antigravity CLI，与 Gemini CLI 和 Antigravity IDE 分开处理。
    从旧 Windows 版本升级后，需要在设置中重新安装 Antigravity 集成，再重启正在运行的
    `agy`，替换旧 hook 命令。聊天视图读取 Antigravity 的步骤日志，包含新版 CLI 的思考内容。

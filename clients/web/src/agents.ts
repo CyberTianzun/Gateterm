@@ -20,7 +20,7 @@ export type AgentState = "idle" | "thinking" | "working" | "waiting" | "done" | 
 export interface AgentSession {
   agent_id: string;
   agent_session_id: string;
-  /** 关联到的 octoterm 托管会话 id */
+  /** 关联到的 gateterm 托管会话 id */
   session: number | null;
   state: AgentState;
   detail: string | null;
@@ -282,7 +282,7 @@ export async function setAgentIntegration(
 }
 
 /**
- * 清空:删掉这家配置里**所有** octoterm 写过的 hook —— 不论端口、不论事件。
+ * 清空:删掉这家配置里**所有** gateterm 写过的 hook —— 不论端口、不论事件。
  *
  * 卸载只认当前版本托管的那些事件;旧端口、旧版本、异常中断留下的残留只有这个
  * 清得掉。服务端不对它做 `install_enabled` 门控(只删我们自己的东西),改前照样备份。

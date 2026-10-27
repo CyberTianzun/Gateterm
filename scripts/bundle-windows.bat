@@ -5,11 +5,11 @@ setlocal
 set TARGET=%1
 if "%TARGET%"=="" set TARGET=x86_64-pc-windows-msvc
 set ROOT=%~dp0..
-set BIN=%ROOT%\target\%TARGET%\release\octoterm-desktop.exe
+set BIN=%ROOT%\target\%TARGET%\release\gateterm-desktop.exe
 if not exist "%BIN%" (
-  echo 找不到 %BIN%,先跑 cargo build --release --target %TARGET% -p octoterm-desktop 1>&2
+  echo 找不到 %BIN%,先跑 cargo build --release --target %TARGET% -p gateterm-desktop 1>&2
   exit /b 1
 )
 if not exist "%ROOT%\target\bundle" mkdir "%ROOT%\target\bundle"
-copy /Y "%BIN%" "%ROOT%\target\bundle\octoterm-desktop.exe" >nul
-echo %ROOT%\target\bundle\octoterm-desktop.exe
+copy /Y "%BIN%" "%ROOT%\target\bundle\gateterm-desktop.exe" >nul
+echo %ROOT%\target\bundle\gateterm-desktop.exe

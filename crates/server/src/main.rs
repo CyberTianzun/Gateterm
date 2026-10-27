@@ -1,7 +1,7 @@
 use clap::Parser;
-use octoterm_server::app::{serve, AppState};
-use octoterm_server::config::{Config, WindowSize};
-use octoterm_server::session::manager::SessionManager;
+use gateterm_server::app::{serve, AppState};
+use gateterm_server::config::{Config, WindowSize};
+use gateterm_server::session::manager::SessionManager;
 
 mod connection_urls;
 
@@ -15,19 +15,19 @@ enum Cmd {
         /// `http://127.0.0.1:<port>/hook/<agent>/<event>`
         url: String,
     },
-    /// 清空本机所有 agent 配置里 octoterm 写过的 hook(不论端口、不论事件),改前备份。
+    /// 清空本机所有 agent 配置里 gateterm 写过的 hook(不论端口、不论事件),改前备份。
     ///
     /// 给异常残留兜底用:server 起不来、端口早就换过好几轮、设置页打不开的时候也能清。
     PurgeHooks,
-    /// Octoterm Cloud 账号(可选,用于手机推送通知)
+    /// Gateterm Cloud 账号(可选,用于手机推送通知)
     Cloud {
         #[command(subcommand)]
-        cmd: octoterm_server::cloud::cli::CloudCmd,
+        cmd: gateterm_server::cloud::cli::CloudCmd,
     },
 }
 
 #[derive(Parser)]
-#[command(name = "octoterm-server", about = "octoterm terminal session daemon")]
+#[command(name = "gateterm-server", about = "gateterm terminal session daemon")]
 struct Args {
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -53,7 +53,7 @@ fn main() -> anyhow::Result<()> {
     // 必须安静。初始化日志、读配置、起 runtime 对它都是纯负担,而任何一行多余的
     // stdout 输出都会被 agent 当成决策读走。
     if let Some(Cmd::Hook { url }) = Args::parse().cmd {
-        std::process::exit(octoterm_server::agent::hook_cli::run(&url));
+        std::process::exit(gateterm_server::agent::hook_cli::run(&url));
     }
     if let Some(Cmd::PurgeHooks) = Args::parse().cmd {
         std::process::exit(purge_hooks());
@@ -62,7 +62,7 @@ fn main() -> anyhow::Result<()> {
     // `#[tokio::main]` 已经起好的 runtime 里面 —— 嵌套 block_on 会 panic。所以
     // main 本身不再是 async,真正 serve 的部分挪到下面手动起的 runtime 里。
     if let Some(Cmd::Cloud { cmd }) = Args::parse().cmd {
-        std::process::exit(octoterm_server::cloud::cli::run(cmd, Args::parse().config));
+        std::process::exit(gateterm_server::cloud::cli::run(cmd, Args::parse().config));
     }
     tokio::runtime::Runtime::new()?.block_on(run_server())
 }
@@ -78,20 +78,20 @@ async fn run_server() -> anyhow::Result<()> {
     let args = Args::parse();
     let config = Config::load(args.config)?;
     // 无头服务端的默认是只回环;desktop 有它自己的默认(见 config::desktop_default_listen)
-    let base = config.listen.unwrap_or_else(octoterm_server::config::default_listen);
-    let listen = octoterm_server::config::effective_listen(base, args.host, args.port);
-    let (token, generated) = octoterm_server::config::resolve_token(args.token, config.token);
+    let base = config.listen.unwrap_or_else(gateterm_server::config::default_listen);
+    let listen = gateterm_server::config::effective_listen(base, args.host, args.port);
+    let (token, generated) = gateterm_server::config::resolve_token(args.token, config.token);
     // 必须在任何会话 spawn 之前:密钥要跨重启不变,见 `store::hook_token`
-    octoterm_server::agent::store::init_hook_token(
-        octoterm_server::agent::store::default_hook_token_path().as_deref(),
+    gateterm_server::agent::store::init_hook_token(
+        gateterm_server::agent::store::default_hook_token_path().as_deref(),
     );
     let manager = SessionManager::new(1 << 20, args.window_size.unwrap_or(config.window_size));
-    let launchers = std::sync::Arc::new(octoterm_server::launcher::providers(&config.launchers));
+    let launchers = std::sync::Arc::new(gateterm_server::launcher::providers(&config.launchers));
     let listener = tokio::net::TcpListener::bind(listen).await?;
     let listen = listener.local_addr()?;
 
     // Jupyter 式:每次启动打印可直接点开的访问 URL;IPv4 全网卡监听时列出各网卡地址。
-    eprintln!("octoterm-server listening on {listen}");
+    eprintln!("gateterm-server listening on {listen}");
     for url in connection_urls::connection_urls(listen, &token) {
         eprintln!("    {url}");
     }
@@ -100,23 +100,23 @@ async fn run_server() -> anyhow::Result<()> {
     }
     let listen_port = listen.port();
     // 端口一变,已装的 hook 就打不通了,而 agent 对此毫无症状 —— 只能在这里喊一声。
-    let home = octoterm_server::agent::detect::DetectEnv::current();
-    for w in tokio::task::spawn_blocking(move || octoterm_server::agent::startup_warnings(&home, listen_port))
+    let home = gateterm_server::agent::detect::DetectEnv::current();
+    for w in tokio::task::spawn_blocking(move || gateterm_server::agent::startup_warnings(&home, listen_port))
         .await
         .unwrap_or_default()
     {
         eprintln!("warning: {w}");
     }
     let agents = config.agents;
-    let agent_sessions = std::sync::Arc::new(octoterm_server::agent::store::AgentSessionStore::new());
-    let cloud = octoterm_server::cloud::creds::SharedCreds::new(octoterm_cloud_client::credentials::default_path());
+    let agent_sessions = std::sync::Arc::new(gateterm_server::agent::store::AgentSessionStore::new());
+    let cloud = gateterm_server::cloud::creds::SharedCreds::new(gateterm_cloud_client::credentials::default_path());
     let state = AppState { manager, token, launchers, listen_port, agents, agent_sessions, cloud };
-    octoterm_server::cloud::notifier::spawn(state.manager.clone(), state.agent_sessions.clone(), state.cloud.clone());
-    octoterm_server::agent::history::start_index(&state, false);
-    octoterm_server::update::start_daily_checks(env!("CARGO_PKG_VERSION"), |result| {
+    gateterm_server::cloud::notifier::spawn(state.manager.clone(), state.agent_sessions.clone(), state.cloud.clone());
+    gateterm_server::agent::history::start_index(&state, false);
+    gateterm_server::update::start_daily_checks(env!("CARGO_PKG_VERSION"), |result| {
         match result {
             Ok(Some(update)) => eprintln!(
-                "octoterm 有新版本 {} (当前版本 {}),可前往 Release 页面更新:\n    {}",
+                "gateterm 有新版本 {} (当前版本 {}),可前往 Release 页面更新:\n    {}",
                 update.version,
                 env!("CARGO_PKG_VERSION"),
                 update.url
@@ -130,7 +130,7 @@ async fn run_server() -> anyhow::Result<()> {
 
 /// `purge-hooks` 子命令。逐家清,一家失败不影响其他家(局部失败原则),有失败则退出码 1。
 fn purge_hooks() -> i32 {
-    use octoterm_server::agent::{self, apply, detect::DetectEnv, edit::InstallCtx};
+    use gateterm_server::agent::{self, apply, detect::DetectEnv, edit::InstallCtx};
     let Some(backup_dir) = apply::default_backup_dir() else {
         eprintln!("无法确定备份目录,放弃清空");
         return 1;
@@ -148,7 +148,7 @@ fn purge_hooks() -> i32 {
             Ok(outcomes) => {
                 for o in outcomes {
                     match (o.changed, o.backup) {
-                        (false, _) => println!("{}: {} 里没有 octoterm 的 hook", a.name(), o.path.display()),
+                        (false, _) => println!("{}: {} 里没有 gateterm 的 hook", a.name(), o.path.display()),
                         (true, Some(b)) => println!("{}: 已清空 {}(备份 {})", a.name(), o.path.display(), b.display()),
                         (true, None) => println!("{}: 已清空 {}", a.name(), o.path.display()),
                     }

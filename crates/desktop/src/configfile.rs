@@ -1,6 +1,6 @@
 //! config.toml 的写入侧。
 //!
-//! server 自己永远不写这个文件(见 `octoterm_server::config::Config::load`),
+//! server 自己永远不写这个文件(见 `gateterm_server::config::Config::load`),
 //! 写是 desktop 的职责。用 toml_edit 而不是 serde 序列化整个 Config:配置文件
 //! 是鼓励用户手写的,把注释、顺序、空行碾掉换不来任何好处。
 
@@ -20,10 +20,10 @@ pub struct Editable {
     pub language: LanguagePref,
 }
 
-/// 与 server 用同一个平台配置目录(`octoterm_server::config` 里的私有 `default_path`
+/// 与 server 用同一个平台配置目录(`gateterm_server::config` 里的私有 `default_path`
 /// 的等价实现),两边必须指向同一个文件。
 pub fn default_path() -> Result<PathBuf> {
-    let dirs = directories::ProjectDirs::from("", "", "octoterm")
+    let dirs = directories::ProjectDirs::from("", "", "gateterm")
         .context("无法确定配置目录")?;
     Ok(dirs.config_dir().join("config.toml"))
 }

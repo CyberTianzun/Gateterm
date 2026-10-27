@@ -122,7 +122,7 @@ export async function ensureFontLoaded(stack: string): Promise<boolean> {
     activeFontId = preset.id;
     return true;
   } catch (err) {
-    console.warn(`octoterm: 内置字体 ${preset.family} 加载失败,回退系统等宽字体`, err);
+    console.warn(`gateterm: 内置字体 ${preset.family} 加载失败,回退系统等宽字体`, err);
     return false;
   }
 }

@@ -11,15 +11,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use octoterm_protocol::{AgentState, ServerMsg};
+use gateterm_protocol::{AgentState, ServerMsg};
 use serde::Serialize;
 
 /// hook 密钥。
 ///
-/// 写进 `settings.json` 的是字面量 `$OCTOTERM_HOOK_TOKEN`,插值发生在 hook 触发的那一刻,
-/// 取自 agent 进程的环境,而那份环境是 octoterm 在 spawn 这个会话时给的。
+/// 写进 `settings.json` 的是字面量 `$GATETERM_HOOK_TOKEN`,插值发生在 hook 触发的那一刻,
+/// 取自 agent 进程的环境,而那份环境是 gateterm 在 spawn 这个会话时给的。
 ///
-/// 顺带一个恰好正确的副作用:**环境变量就是能力本身**。在 octoterm 之外启动的
+/// 顺带一个恰好正确的副作用:**环境变量就是能力本身**。在 gateterm 之外启动的
 /// agent 拿不到这个变量,hook 照样触发,但没有 `Authorization` 头 —— 安静收下、什么都不做。
 /// 「只管托管会话」这条边界由机制保证,不需要额外的判别逻辑。
 ///
@@ -37,7 +37,7 @@ pub fn hook_token() -> &'static str {
 
 static HOOK_TOKEN: OnceLock<String> = OnceLock::new();
 
-/// 入口(`octoterm-server` / desktop)启动时调一次,让密钥跨重启保持不变。
+/// 入口(`gateterm-server` / desktop)启动时调一次,让密钥跨重启保持不变。
 ///
 /// 必须在第一次 spawn 会话之前调;之后再调不改变已经定下的值。读写失败就退回进程内
 /// 随机值并打一条警告 —— 密钥只关乎 hook,不能因为它让整个服务起不来。
@@ -57,13 +57,13 @@ pub fn init_hook_token(path: Option<&std::path::Path>) -> &'static str {
     })
 }
 
-/// 和备份放在一起:octoterm 自己的配置目录。
+/// 和备份放在一起:gateterm 自己的配置目录。
 pub fn default_hook_token_path() -> Option<std::path::PathBuf> {
-    directories::ProjectDirs::from("", "", "octoterm").map(|d| d.config_dir().join("hook-token"))
+    directories::ProjectDirs::from("", "", "gateterm").map(|d| d.config_dir().join("hook-token"))
 }
 
 fn env_hook_token() -> Option<String> {
-    std::env::var("OCTOTERM_HOOK_TOKEN")
+    std::env::var("GATETERM_HOOK_TOKEN")
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())

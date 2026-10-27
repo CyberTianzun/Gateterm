@@ -1,6 +1,6 @@
 //! Render the real settings panel without creating a window or GPU context.
-use octoterm_desktop::i18n::Locale;
-use octoterm_desktop::settings::{
+use gateterm_desktop::i18n::Locale;
+use gateterm_desktop::settings::{
     cloud::{CloudForm, CloudStatus},
     pairing::Pairing,
     state::Form,
@@ -25,7 +25,7 @@ fn collect_text(shape: &egui::Shape, texts: &mut Vec<String>) {
 #[test]
 fn settings_switch_language_in_place_and_fit_the_window() {
     let ctx = egui::Context::default();
-    octoterm_desktop::fonts::install(&ctx);
+    gateterm_desktop::fonts::install(&ctx);
     let mut view = View {
         form: Form::from_current("127.0.0.1:7683".parse().unwrap(), false),
         pairing: Pairing::new(None, None),

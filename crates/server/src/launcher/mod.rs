@@ -4,17 +4,17 @@
 //! 名字。它们由若干 **provider** 提供,provider 是这里唯一的扩展点:
 //!
 //! - `builtin` —— 系统默认 shell,永远存在,永远排第一;
-//! - `config`  —— 用户在 octoterm 自己的 config.toml 里写的 `[[launcher]]`;
+//! - `config`  —— 用户在 gateterm 自己的 config.toml 里写的 `[[launcher]]`;
 //! - `iterm2` / `windows-terminal` —— **只读**扫描系统上已装终端的配置,把它们
 //!   已经配好的 profile 直接拿来用。
 //!
-//! **发现只读是硬约束**:launcher 从不写别人的配置文件,也不要求用户在 octoterm 里
+//! **发现只读是硬约束**:launcher 从不写别人的配置文件,也不要求用户在 gateterm 里
 //! 把配置再抄一遍。这样"配置"这件事的成本是零,而扩展新来源只需要再实现一个
 //! [`LauncherProvider`]。
 //!
 //! 这条约束的作用域是**发现**。集成(`crate::agent`)是另一回事:在用户显式动作下,
 //! 它会写 agent 的配置文件去装 hook,受开关门控、写前备份、卸载能还原。两者的边界
-//! 见 `docs/superpowers/specs/2026-08-18-octoterm-agent-integration-design.md`。
+//! 见 `docs/superpowers/specs/2026-08-18-gateterm-agent-integration-design.md`。
 //!
 //! provider 的失败是**局部的**:任何一个 provider 抛错(配置文件损坏、权限不足、
 //! 格式变了)只会让它自己的条目消失并留下一条日志,不影响其他 provider —— 新建
@@ -107,7 +107,7 @@ pub fn providers(specs: &[LauncherSpec]) -> Vec<Box<dyn LauncherProvider>> {
 ///
 /// 每次调用都真的去读一次文件,不做缓存:这个动作只在用户打开"新建"菜单时发生
 /// (量级是几毫秒的几次文件读),而缓存会让"刚在 iTerm2 里加了个 profile"要等到
-/// 重启 octoterm 才生效 —— 对一个随手用的工具来说,这个代价换不来什么。
+/// 重启 gateterm 才生效 —— 对一个随手用的工具来说,这个代价换不来什么。
 pub fn discover_all(providers: &[Box<dyn LauncherProvider>]) -> Vec<Launcher> {
     let mut out: Vec<Launcher> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();

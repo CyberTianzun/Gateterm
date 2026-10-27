@@ -10,7 +10,7 @@
 import type { ITheme } from "@xterm/xterm";
 import { createModal } from "./modal";
 import {
-  type OctoConfig,
+  type GateConfig,
   systemDefaultConfig,
   exportConfigJson,
   importConfigJson,
@@ -31,9 +31,9 @@ import {
 } from "./agents";
 
 export interface SettingsHost {
-  get(): OctoConfig;
+  get(): GateConfig;
   /** 应用并持久化。 */
-  set(cfg: OctoConfig): void;
+  set(cfg: GateConfig): void;
   /** 打 `/api/` 时用的 bearer。AI 集成页要拉清单、要装卸 hook。 */
   token(): string;
 }
@@ -148,7 +148,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
   ];
 
   /** 改一格配置:浅合并进当前配置并立即应用。 */
-  const patch = (fn: (c: OctoConfig) => OctoConfig) => host.set(fn(host.get()));
+  const patch = (fn: (c: GateConfig) => GateConfig) => host.set(fn(host.get()));
 
   function renderTabs() {
     tabsBar.innerHTML = "";
@@ -451,7 +451,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
       const blob = new Blob([exportConfigJson(host.get())], { type: "application/json" });
       const a = el("a");
       a.href = URL.createObjectURL(blob);
-      a.download = "octoterm-config.json";
+      a.download = "gateterm-config.json";
       a.click();
       // 立刻 revoke 会让部分浏览器来不及发起下载,挂到下一帧之后
       setTimeout(() => URL.revokeObjectURL(a.href), 10_000);

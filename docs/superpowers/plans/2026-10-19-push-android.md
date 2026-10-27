@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Android App 能登录 Octoterm Cloud(设备身份)、登记 FCM token、收到 agent 等待推送时显示系统通知(别处处理后撤回、待授权到期消失),点通知连上对应 server 并打开该会话的终端。
+**Goal:** Android App 能登录 Gateterm Cloud(设备身份)、登记 FCM token、收到 agent 等待推送时显示系统通知(别处处理后撤回、待授权到期消失),点通知连上对应 server 并打开该会话的终端。
 
-**Architecture:** Rust `cloud-ffi` 由 Gradle 任务调用 `scripts/build-android-ffi.sh` 编出 arm64 `.so` 与 Kotlin 绑定(生成到 `build/`,不入库)。账号界面是独立的 `CloudAccountViewModel` + `CloudAccountScreen`(通过 `AppScreen.CloudAccount` 进入)。推送由 `OctoMessagingService` 接收,纯函数 `AgentPush` 解析与生成文案,`AgentNotifications` 负责显示/撤回。连接记录 `cloudServerId`(来自 `HelloOk`),点通知时据此找回连接。
+**Architecture:** Rust `cloud-ffi` 由 Gradle 任务调用 `scripts/build-android-ffi.sh` 编出 arm64 `.so` 与 Kotlin 绑定(生成到 `build/`,不入库)。账号界面是独立的 `CloudAccountViewModel` + `CloudAccountScreen`(通过 `AppScreen.CloudAccount` 进入)。推送由 `GateMessagingService` 接收,纯函数 `AgentPush` 解析与生成文案,`AgentNotifications` 负责显示/撤回。连接记录 `cloudServerId`(来自 `HelloOk`),点通知时据此找回连接。
 
 **Tech Stack:** Kotlin 2.1.21、AGP 8.13.2、Jetpack Compose、org.json、JUnit4、Firebase Messaging(BoM 35.0.2)、JNA 5.17.0(aar)、UniFFI Kotlin 绑定。
 
@@ -31,7 +31,7 @@
 - 工作区有未跟踪的 `clients/ios/`,**永远不要提交**;只按具体路径 `git add`。
 - 提交流程:分支 `feat/push-android`,每 Task 一次提交,完成后 `--ff-only` 合回 dev,不推送。commit 结尾 `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`。
 
-## File Structure(相对 `clients/android/app/src/main/java/ai/eclosion/octoterm/android/`)
+## File Structure(相对 `clients/android/app/src/main/java/ai/eclosion/gateterm/android/`)
 
 ```
 clients/android/gradle/libs.versions.toml        jna、firebase、google-services、coroutines
@@ -47,11 +47,11 @@ cloud/CloudAccountViewModel.kt(新)
 ui/cloud/CloudAccountScreen.kt(新)
 push/AgentPush.kt(新)                            解析 data、tag、文案选择(纯逻辑)
 push/AgentNotifications.kt(新)                   渠道、显示、撤回
-push/OctoMessagingService.kt(新)
+push/GateMessagingService.kt(新)
 push/PushRegistrar.kt(新)                        取 FCM token 并登记
 ui/connections/ConnectionViewModel.kt            AppScreen.CloudAccount、记录 cloudServerId、openFromNotification
 ui/connections/ConnectionListScreen.kt           账号入口图标
-OctotermApp.kt、MainActivity.kt、OctotermApplication.kt
+GatetermApp.kt、MainActivity.kt、GatetermApplication.kt
 res/drawable/ic_notification.xml(新)、res/values*/strings.xml、AndroidManifest.xml
 test: connection/CloudLinkTest.kt、wire/FrameAndControlTest.kt、cloud/CloudFormTest.kt、cloud/CloudFailureTest.kt、push/AgentPushTest.kt
 ```
@@ -65,12 +65,12 @@ test: connection/CloudLinkTest.kt、wire/FrameAndControlTest.kt、cloud/CloudFor
 - Local only(不入库): `clients/android/app/google-services.json`
 
 **Interfaces:**
-- Produces: 编译期可用的 Kotlin 包 `uniffi.octoterm_cloud_ffi`(`CloudAccount`、`CloudStatus`、`Purpose`、`CloudFfiException`);`com.google.firebase.messaging.*`;APK 内含 `lib/arm64-v8a/liboctoterm_cloud_ffi.so`。
+- Produces: 编译期可用的 Kotlin 包 `uniffi.gateterm_cloud_ffi`(`CloudAccount`、`CloudStatus`、`Purpose`、`CloudFfiException`);`com.google.firebase.messaging.*`;APK 内含 `lib/arm64-v8a/libgateterm_cloud_ffi.so`。
 
 - [ ] **Step 1: 建分支、前置检查**
 
 ```bash
-cd ~/online/eclosion/Octoterm && git checkout -b feat/push-android
+cd ~/online/eclosion/Gateterm && git checkout -b feat/push-android
 command -v cargo-ndk && echo "${ANDROID_NDK_HOME:?未设置}" && ls crates/cloud-ffi scripts/build-android-ffi.sh
 ```
 
@@ -163,7 +163,7 @@ tasks.named("preBuild") { dependsOn(buildCloudFfi) }
 
 ```bash
 cp ~/online/google-services.json clients/android/app/google-services.json
-git -C ~/online/eclosion/Octoterm check-ignore clients/android/app/google-services.json
+git -C ~/online/eclosion/Gateterm check-ignore clients/android/app/google-services.json
 ```
 
 Expected: 打印该路径(已忽略)。
@@ -173,11 +173,11 @@ Expected: 打印该路径(已忽略)。
 在 `clients/android/` 下用「首次拉新依赖」命令跑 `assembleDebug`(见 Global Constraints)。
 
 ```bash
-unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -E "liboctoterm_cloud_ffi.so|libjnidispatch.so"
-ls app/build/generated/ffi/kotlin/uniffi/octoterm_cloud_ffi/
+unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -E "libgateterm_cloud_ffi.so|libjnidispatch.so"
+ls app/build/generated/ffi/kotlin/uniffi/gateterm_cloud_ffi/
 ```
 
-Expected: APK 内有 `lib/arm64-v8a/liboctoterm_cloud_ffi.so` 与 JNA 的 `lib/arm64-v8a/libjnidispatch.so`;绑定文件存在。再跑一次 `$G assembleDebug testDebugUnitTest --offline -q` 确认离线可用、现有单测全绿。
+Expected: APK 内有 `lib/arm64-v8a/libgateterm_cloud_ffi.so` 与 JNA 的 `lib/arm64-v8a/libjnidispatch.so`;绑定文件存在。再跑一次 `$G assembleDebug testDebugUnitTest --offline -q` 确认离线可用、现有单测全绿。
 
 再验证「无 google-services.json 也能构建」:临时 `mv app/google-services.json /tmp/gs.json`,`$G assembleDebug --offline -q` 成功后 `mv /tmp/gs.json app/google-services.json` 放回。
 
@@ -195,7 +195,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ### Task 2: 连接记录 `cloudServerId`
 
 **Files:**
-- Create: `connection/CloudLink.kt`, `app/src/test/java/ai/eclosion/octoterm/android/connection/CloudLinkTest.kt`
+- Create: `connection/CloudLink.kt`, `app/src/test/java/ai/eclosion/gateterm/android/connection/CloudLinkTest.kt`
 - Modify: `wire/Messages.kt`, `wire/ControlJson.kt`, `connection/ServerConnection.kt`, `connection/ConnectionStore.kt`, `ui/connections/ConnectionViewModel.kt`, `app/src/test/.../wire/FrameAndControlTest.kt`
 
 **Interfaces:**
@@ -221,7 +221,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 新建 `CloudLinkTest.kt`:
 
 ```kotlin
-package ai.eclosion.octoterm.android.connection
+package ai.eclosion.gateterm.android.connection
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -268,14 +268,14 @@ Expected: 编译失败。
         )
 ```
 
-`ServerConnection.kt`:构造参数末尾加 `val cloudServerId: String? = null,`(注释:server 登录 Octoterm Cloud 后在握手里回带的 id;推送靠它找回这条连接)。
+`ServerConnection.kt`:构造参数末尾加 `val cloudServerId: String? = null,`(注释:server 登录 Gateterm Cloud 后在握手里回带的 id;推送靠它找回这条连接)。
 
 `ConnectionStore.kt`:`load()` 构造时加 `cloudServerId = obj.optString("cloudServerId").takeUnless { it.isEmpty() || it == "null" },`;`save()` 链上加 `.put("cloudServerId", item.cloudServerId ?: JSONObject.NULL)`。
 
 `connection/CloudLink.kt`:
 
 ```kotlin
-package ai.eclosion.octoterm.android.connection
+package ai.eclosion.gateterm.android.connection
 
 /** 推送里的 server_id ↔ 本地连接。纯函数,便于单测。 */
 object CloudLink {
@@ -328,10 +328,10 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 **Files:**
 - Create: `cloud/CloudForm.kt`, `cloud/CloudFailure.kt`, `cloud/CloudAccountViewModel.kt`, `ui/cloud/CloudAccountScreen.kt`, `push/PushRegistrar.kt`, tests `cloud/CloudFormTest.kt`, `cloud/CloudFailureTest.kt`
-- Modify: `ui/connections/ConnectionViewModel.kt`(`AppScreen.CloudAccount`、open/close)、`ui/connections/ConnectionListScreen.kt`(入口图标)、`OctotermApp.kt`、`MainActivity.kt`(第二个 ViewModel)、`res/values/strings.xml`、`res/values-en/strings.xml`
+- Modify: `ui/connections/ConnectionViewModel.kt`(`AppScreen.CloudAccount`、open/close)、`ui/connections/ConnectionListScreen.kt`(入口图标)、`GatetermApp.kt`、`MainActivity.kt`(第二个 ViewModel)、`res/values/strings.xml`、`res/values-en/strings.xml`
 
 **Interfaces:**
-- Consumes: `uniffi.octoterm_cloud_ffi.{CloudAccount, CloudStatus, Purpose, CloudFfiException}`
+- Consumes: `uniffi.gateterm_cloud_ffi.{CloudAccount, CloudStatus, Purpose, CloudFfiException}`
 - Produces:
   - `enum class CloudAction { SendRegisterCode, Register, Login, SendResetCode, ResetPassword, Logout, SendDeleteCode, DeleteAccount }`(`keepsSecrets`:三个 Send* 为 true)
   - `data class CloudForm(url, email, password, code, confirmDelete)`;`sealed interface CloudJob`;`fun prepare(form, loggedIn: Boolean, action): Result<CloudJob>`,失败为 `CloudFormError(@StringRes msg)`
@@ -344,26 +344,26 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 `cloud/CloudFormTest.kt`(规则与 desktop `crates/desktop/src/settings/cloud.rs` 一致):
 
 ```kotlin
-package ai.eclosion.octoterm.android.cloud
+package ai.eclosion.gateterm.android.cloud
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CloudFormTest {
-    private val form = CloudForm(url = " https://octoterm.signal.top ", email = " A@Example.com ", password = "pw-pw-pw", code = " 012345 ")
+    private val form = CloudForm(url = " https://gateterm.signal.top ", email = " A@Example.com ", password = "pw-pw-pw", code = " 012345 ")
 
     @Test
     fun registerJobIsNormalized() {
         assertEquals(
-            CloudJob.Register("https://octoterm.signal.top", "a@example.com", "012345", "pw-pw-pw"),
+            CloudJob.Register("https://gateterm.signal.top", "a@example.com", "012345", "pw-pw-pw"),
             prepare(form, loggedIn = false, CloudAction.Register).getOrThrow(),
         )
     }
 
     @Test
     fun validationErrors() {
-        assertTrue(prepare(form.copy(url = "octoterm.signal.top"), false, CloudAction.Login).isFailure)
+        assertTrue(prepare(form.copy(url = "gateterm.signal.top"), false, CloudAction.Login).isFailure)
         assertTrue(prepare(form.copy(code = "12a456"), false, CloudAction.Register).isFailure)
         assertTrue(prepare(form.copy(password = "short"), false, CloudAction.ResetPassword).isFailure)
         assertTrue(prepare(form.copy(email = "nope"), false, CloudAction.SendRegisterCode).isFailure)
@@ -396,9 +396,9 @@ class CloudFormTest {
 `cloud/CloudFailureTest.kt`:
 
 ```kotlin
-package ai.eclosion.octoterm.android.cloud
+package ai.eclosion.gateterm.android.cloud
 
-import ai.eclosion.octoterm.android.R
+import ai.eclosion.gateterm.android.R
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -431,9 +431,9 @@ Run: `$G testDebugUnitTest --offline -q` → 编译失败。
 `cloud/CloudForm.kt`:
 
 ```kotlin
-package ai.eclosion.octoterm.android.cloud
+package ai.eclosion.gateterm.android.cloud
 
-import ai.eclosion.octoterm.android.R
+import ai.eclosion.gateterm.android.R
 import androidx.annotation.StringRes
 
 enum class CloudAction {
@@ -502,11 +502,11 @@ fun prepare(form: CloudForm, loggedIn: Boolean, action: CloudAction): Result<Clo
 `cloud/CloudFailure.kt`:
 
 ```kotlin
-package ai.eclosion.octoterm.android.cloud
+package ai.eclosion.gateterm.android.cloud
 
-import ai.eclosion.octoterm.android.R
+import ai.eclosion.gateterm.android.R
 import androidx.annotation.StringRes
-import uniffi.octoterm_cloud_ffi.CloudFfiException
+import uniffi.gateterm_cloud_ffi.CloudFfiException
 
 /** 与 FFI 解耦的错误分类:单测不必加载 native 库。 */
 sealed interface CloudFailure {
@@ -670,7 +670,7 @@ Run: `$G testDebugUnitTest --offline -q` → CloudForm/CloudFailure 测试 PASS�
 - [ ] **Step 4: `push/PushRegistrar.kt`**
 
 ```kotlin
-package ai.eclosion.octoterm.android.push
+package ai.eclosion.gateterm.android.push
 
 import android.content.Context
 import android.util.Log
@@ -681,7 +681,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
-import uniffi.octoterm_cloud_ffi.CloudAccount
+import uniffi.gateterm_cloud_ffi.CloudAccount
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -711,7 +711,7 @@ object PushRegistrar {
             val account = account(app)
             if (account.status() == null) return@launch
             runCatching { account.registerPushTarget("fcm", token) }
-                .onFailure { Log.w("Octoterm", "登记推送 token 失败", it) }
+                .onFailure { Log.w("Gateterm", "登记推送 token 失败", it) }
         }
     }
 
@@ -722,7 +722,7 @@ object PushRegistrar {
             val account = account(app)
             if (account.status() == null) return@launch
             runCatching { registerCurrentToken(app, account) }
-                .onFailure { Log.w("Octoterm", "登记推送 token 失败", it) }
+                .onFailure { Log.w("Gateterm", "登记推送 token 失败", it) }
         }
     }
 }
@@ -731,10 +731,10 @@ object PushRegistrar {
 - [ ] **Step 5: `cloud/CloudAccountViewModel.kt`**
 
 ```kotlin
-package ai.eclosion.octoterm.android.cloud
+package ai.eclosion.gateterm.android.cloud
 
-import ai.eclosion.octoterm.android.R
-import ai.eclosion.octoterm.android.push.PushRegistrar
+import ai.eclosion.gateterm.android.R
+import ai.eclosion.gateterm.android.push.PushRegistrar
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -749,11 +749,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import uniffi.octoterm_cloud_ffi.CloudFfiException
-import uniffi.octoterm_cloud_ffi.CloudStatus
-import uniffi.octoterm_cloud_ffi.Purpose
+import uniffi.gateterm_cloud_ffi.CloudFfiException
+import uniffi.gateterm_cloud_ffi.CloudStatus
+import uniffi.gateterm_cloud_ffi.Purpose
 
-const val DEFAULT_CLOUD_URL = "https://octoterm.signal.top"
+const val DEFAULT_CLOUD_URL = "https://gateterm.signal.top"
 
 /** 一条给用户看的结果:成功文案或失败文案(资源 id + 可选参数)。 */
 data class CloudMessage(val ok: Boolean, val res: Int, val arg: String? = null)
@@ -855,8 +855,8 @@ class CloudAccountViewModel(private val app: Application) : AndroidViewModel(app
 
 - `ConnectionViewModel.kt`:`sealed class AppScreen` 加 `data object CloudAccount : AppScreen()`;加 `fun openCloudAccount()` / `fun closeCloudAccount()`(照 `openAppearance`/`closeAppearance`)。
 - `ConnectionListScreen.kt`:参数加 `onCloudAccount: () -> Unit`;`TopAppBar.actions` 在设置图标前加 `IconButton(onClick = onCloudAccount) { Icon(Icons.Filled.AccountCircle, contentDescription = stringResource(R.string.cloud_title)) }`。
-- `MainActivity.kt`:加 `private val cloudViewModel: CloudAccountViewModel by viewModels { CloudAccountViewModel.Factory }`,把它传给 `OctotermApp(connectionViewModel, cloudViewModel)`。
-- `OctotermApp.kt`:签名加 `cloudViewModel: CloudAccountViewModel`;`AppScreen.List` 分支传 `onCloudAccount = viewModel::openCloudAccount`;新增分支:
+- `MainActivity.kt`:加 `private val cloudViewModel: CloudAccountViewModel by viewModels { CloudAccountViewModel.Factory }`,把它传给 `GatetermApp(connectionViewModel, cloudViewModel)`。
+- `GatetermApp.kt`:签名加 `cloudViewModel: CloudAccountViewModel`;`AppScreen.List` 分支传 `onCloudAccount = viewModel::openCloudAccount`;新增分支:
 
 ```kotlin
             AppScreen.CloudAccount -> {
@@ -907,8 +907,8 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ### Task 4: 接收推送并显示/撤回通知
 
 **Files:**
-- Create: `push/AgentPush.kt`, `push/AgentNotifications.kt`, `push/OctoMessagingService.kt`, `res/drawable/ic_notification.xml`, test `push/AgentPushTest.kt`
-- Modify: `OctotermApplication.kt`, `AndroidManifest.xml`, 两份 `strings.xml`
+- Create: `push/AgentPush.kt`, `push/AgentNotifications.kt`, `push/GateMessagingService.kt`, `res/drawable/ic_notification.xml`, test `push/AgentPushTest.kt`
+- Modify: `GatetermApplication.kt`, `AndroidManifest.xml`, 两份 `strings.xml`
 
 **Interfaces:**
 - Produces:
@@ -919,7 +919,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - [ ] **Step 1: 失败测试 `push/AgentPushTest.kt`**
 
 ```kotlin
-package ai.eclosion.octoterm.android.push
+package ai.eclosion.gateterm.android.push
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -969,7 +969,7 @@ Run → 编译失败。
 - [ ] **Step 2: `push/AgentPush.kt`**
 
 ```kotlin
-package ai.eclosion.octoterm.android.push
+package ai.eclosion.gateterm.android.push
 
 /** FCM 数据消息 → 结构化推送。只有路由所需的最小信息;文案在本地生成。 */
 data class AgentPush(
@@ -1048,10 +1048,10 @@ strings(两份):
 `push/AgentNotifications.kt`:
 
 ```kotlin
-package ai.eclosion.octoterm.android.push
+package ai.eclosion.gateterm.android.push
 
-import ai.eclosion.octoterm.android.MainActivity
-import ai.eclosion.octoterm.android.R
+import ai.eclosion.gateterm.android.MainActivity
+import ai.eclosion.gateterm.android.R
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -1066,8 +1066,8 @@ import androidx.core.content.ContextCompat
 
 object AgentNotifications {
     const val CHANNEL = "agent_waiting"
-    const val EXTRA_SERVER_ID = "octoterm.server_id"
-    const val EXTRA_SESSION = "octoterm.session"
+    const val EXTRA_SERVER_ID = "gateterm.server_id"
+    const val EXTRA_SESSION = "gateterm.session"
 
     fun ensureChannel(context: Context) {
         if (Build.VERSION.SDK_INT < 26) return
@@ -1116,15 +1116,15 @@ object AgentNotifications {
 }
 ```
 
-`push/OctoMessagingService.kt`:
+`push/GateMessagingService.kt`:
 
 ```kotlin
-package ai.eclosion.octoterm.android.push
+package ai.eclosion.gateterm.android.push
 
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 
-class OctoMessagingService : FirebaseMessagingService() {
+class GateMessagingService : FirebaseMessagingService() {
     override fun onNewToken(token: String) = PushRegistrar.onNewToken(applicationContext, token)
 
     override fun onMessageReceived(message: RemoteMessage) {
@@ -1134,7 +1134,7 @@ class OctoMessagingService : FirebaseMessagingService() {
 }
 ```
 
-`OctotermApplication.onCreate()` 末尾加:
+`GatetermApplication.onCreate()` 末尾加:
 
 ```kotlin
         AgentNotifications.ensureChannel(this)
@@ -1145,7 +1145,7 @@ class OctoMessagingService : FirebaseMessagingService() {
 
 ```xml
         <service
-            android:name=".push.OctoMessagingService"
+            android:name=".push.GateMessagingService"
             android:exported="false">
             <intent-filter>
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
@@ -1169,7 +1169,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ### Task 5: 点通知进入对应会话
 
 **Files:**
-- Modify: `MainActivity.kt`, `AndroidManifest.xml`, `ui/connections/ConnectionViewModel.kt`, `OctotermApp.kt`(消息文案), 两份 `strings.xml`
+- Modify: `MainActivity.kt`, `AndroidManifest.xml`, `ui/connections/ConnectionViewModel.kt`, `GatetermApp.kt`(消息文案), 两份 `strings.xml`
 
 **Interfaces:**
 - Consumes: `CloudLink.find`、`AgentNotifications.EXTRA_*`
@@ -1198,7 +1198,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 - [ ] **Step 2: ViewModel**
 
-`UserMessage` 加 `data object ConnectServerFirst : UserMessage()`、`data object SessionGone : UserMessage()`;`OctotermApp.kt` 的 `messageText` 补两个分支,strings:
+`UserMessage` 加 `data object ConnectServerFirst : UserMessage()`、`data object SessionGone : UserMessage()`;`GatetermApp.kt` 的 `messageText` 补两个分支,strings:
 
 ```xml
     <!-- values/ -->
@@ -1277,7 +1277,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 cd clients/android && $G assembleDebug --offline -q && ls -la app/build/outputs/apk/debug/app-debug.apk
 ```
 
-- [ ] **Step 2: 交给 hiro 的真机清单**(前提:Cloud 已部署到 `https://octoterm.signal.top` 且配置了 FCM;本机 octoterm-server/desktop 已用同一账号登录 Cloud)
+- [ ] **Step 2: 交给 hiro 的真机清单**(前提:Cloud 已部署到 `https://gateterm.signal.top` 且配置了 FCM;本机 gateterm-server/desktop 已用同一账号登录 Cloud)
 
 1. 安装 APK;连接一次自己的 server(使 `cloudServerId` 被记录)。
 2. 首页右上角账号图标 → 登录(或注册)→ 允许通知权限。

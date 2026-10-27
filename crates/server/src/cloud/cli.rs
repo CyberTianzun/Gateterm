@@ -1,11 +1,11 @@
-//! `octoterm-server cloud <子命令>`:在没有 GUI 的机器上登录 Cloud。
-//! 逻辑都在 `octoterm_cloud_client::ops`,这里只管问答与输出。
+//! `gateterm-server cloud <子命令>`:在没有 GUI 的机器上登录 Cloud。
+//! 逻辑都在 `gateterm_cloud_client::ops`,这里只管问答与输出。
 
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
-use octoterm_cloud_client::ops::{self, OpsError};
-use octoterm_cloud_client::{ClientKind, CloudClient, CloudError, CodePurpose, credentials, default_label};
+use gateterm_cloud_client::ops::{self, OpsError};
+use gateterm_cloud_client::{ClientKind, CloudClient, CloudError, CodePurpose, credentials, default_label};
 
 #[derive(clap::Subcommand, Debug, Clone, Copy)]
 pub enum CloudCmd {
@@ -99,7 +99,7 @@ async fn dispatch(cmd: CloudCmd, path: &Path, default_url: Option<String>) -> Re
     match cmd {
         CloudCmd::Register => {
             if let Ok(c) = ops::current(path) {
-                return Err(format!("本机已登录为 {};请先 `octoterm-server cloud logout`", c.email));
+                return Err(format!("本机已登录为 {};请先 `gateterm-server cloud logout`", c.email));
             }
             let url = ask_url(default_url)?;
             let email = ops::normalize_email(&ask("邮箱:")?);
@@ -115,7 +115,7 @@ async fn dispatch(cmd: CloudCmd, path: &Path, default_url: Option<String>) -> Re
         }
         CloudCmd::Login => {
             if let Ok(c) = ops::current(path) {
-                return Err(format!("本机已登录为 {};请先 `octoterm-server cloud logout`", c.email));
+                return Err(format!("本机已登录为 {};请先 `gateterm-server cloud logout`", c.email));
             }
             let url = ask_url(default_url)?;
             let email = ask("邮箱:")?;

@@ -16,7 +16,7 @@ export async function fetchUpdateStatus(token: string, signal?: AbortSignal): Pr
       typeof update.url !== "string") throw new Error("Invalid update status");
   const url = new URL(update.url);
   if (url.protocol !== "https:" || url.hostname !== "github.com" || url.port || url.username || url.password ||
-      !url.pathname.startsWith("/CyberTianzun/Octoterm/releases/")) throw new Error("Invalid Release URL");
+      !url.pathname.startsWith("/CyberTianzun/Gateterm/releases/")) throw new Error("Invalid Release URL");
   return { version: update.version, url: url.href };
 }
 

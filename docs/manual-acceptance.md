@@ -1,6 +1,6 @@
-# octoterm 手动验收清单
+# gateterm 手动验收清单
 
-前置:`cargo run -p octoterm-server`(build.rs 会自动构建前端),记下打印的 token,
+前置:`cargo run -p gateterm-server`(build.rs 会自动构建前端),记下打印的 token,
 浏览器打开 `http://127.0.0.1:7683/#token=<token>`。
 
 ## 桌面浏览器
@@ -18,7 +18,7 @@ iTerm2 / Windows Terminal 的 profile),见 protocol.md §2.2。
 - [ ] 选一条带工作目录的 profile → 新会话的 `pwd` 就是那个目录
 - [ ] 选一条工作目录**在本机不存在**的 profile(比如 iTerm2 里写了 Windows 路径)
       → 仍能建会话,落在 `$HOME`,服务端日志有一条 WARN
-- [ ] 在 iTerm2 里新加一个带自定义命令的 profile,**不重启 octoterm** → 重开菜单就能看到
+- [ ] 在 iTerm2 里新加一个带自定义命令的 profile,**不重启 gateterm** → 重开菜单就能看到
 - [ ] 在 config.toml 里加 `[[launcher]]`(重启服务端)→ 出现在「自定义」分组
 - [ ] 停掉服务端再点 + → 菜单里仍有一条「默认 shell」兜底,不是空菜单
 - [ ] `curl http://127.0.0.1:7683/api/launchers` 不带 token → 401
@@ -70,7 +70,7 @@ iTerm2 / Windows Terminal 的 profile),见 protocol.md §2.2。
       `Cannot read properties of undefined`(见 main.ts 顶部注释)
 
 ## 配置导入 / 导出
-- [ ] 「导出为文件」下载 octoterm-config.json,内容与面板里那段 JSON 一致
+- [ ] 「导出为文件」下载 gateterm-config.json,内容与面板里那段 JSON 一致
 - [ ] 改主题后重新导出 → theme.colors 跟着变(导出自带全部颜色,不只是主题名)
 - [ ] 把导出的文件在另一个浏览器「从文件导入」→ 外观完全一致
 - [ ] 手工把 JSON 改成 `{"theme":{"name":"Dracula"}}`(只给名字不给颜色)→ 应用后
@@ -99,16 +99,16 @@ iTerm2 / Windows Terminal 的 profile),见 protocol.md §2.2。
 
 ## Agent 会话历史（Web / Android）
 
-- [ ] Web 侧栏、Android 服务端页面可打开历史;宿主机上在 Octoterm 外开始的对话也能出现。
+- [ ] Web 侧栏、Android 服务端页面可打开历史;宿主机上在 Gateterm 外开始的对话也能出现。
 - [ ] 可按 Agent / 工作目录筛选,搜索标题、描述、模型、目录和会话 ID,分页加载;快速改搜索词不会被旧请求覆盖。
 - [ ] 列表显示可读标题、最近对话摘要、Agent、时间及模型;ID 单独以灰色小字显示。未命名会话
       不用 ID 充当标题;Codex 的初始化上下文不应成为标题,超过 32 KiB 的初始化指令也不应挡住真实请求。
 - [ ] Web 历史弹窗滚动到底仍能看到标题与关闭按钮;查看对话使用整个内容区,返回列表保留滚动位置。
-- [ ] 设置中的「清理 Octoterm hooks」在面板内确认或取消;完成后明确显示已清理、无需清理或失败。
-      第三方 PermissionRequest hook 保留,其冲突提示不会因为清理 Octoterm hook 而消失。
+- [ ] 设置中的「清理 Gateterm hooks」在面板内确认或取消;完成后明确显示已清理、无需清理或失败。
+      第三方 PermissionRequest hook 保留,其冲突提示不会因为清理 Gateterm hook 而消失。
 - [ ] 查看历史不启动进程;预览正文及工具折叠与聊天视图一致,不会把历史文本当 HTML 执行。
 - [ ] 已关联的运行中会话直接进入对应终端,从聊天视图打开也应回到终端视图。
-- [ ] 恢复未打开的会话会新建 Octoterm 终端,使用原 cwd 及精确恢复目标;pi 使用原文件。
+- [ ] 恢复未打开的会话会新建 Gateterm 终端,使用原 cwd 及精确恢复目标;pi 使用原文件。
 - [ ] 在任意工作目录筛选下恢复另一个目录的会话时,新进程仍在该会话记录的原 cwd 启动。
 - [ ] 同一条记录在两个客户端同时恢复只创建一个终端;结束该终端后可再次恢复。
 - [ ] 缺 CLI、原目录已删、记录不可读、服务端关闭 transcript 或旧服务端不支持时显示原因。
@@ -164,9 +164,9 @@ iTerm2 / Windows Terminal 的 profile),见 protocol.md §2.2。
 
 Codex 逐条用 `trusted_hash` 给 hook 上闸,**必须由你在它自己的 TUI 里 `/hooks` review
 过才生效**。我们不伪造那个 hash —— 那道闸防的正是「第三方悄悄让 Codex 执行任意命令」,
-而 octoterm 恰好就是那个第三方。所以这条链路只能手动验。
+而 gateterm 恰好就是那个第三方。所以这条链路只能手动验。
 
-自动化已经覆盖的部分(`cargo test -p octoterm-server --test agent_codex`):装出来的
+自动化已经覆盖的部分(`cargo test -p gateterm-server --test agent_codex`):装出来的
 hooks.json 形状、幂等与还原、所有权判定、`hook` 子命令对真实 server 的端到端、以及
 三条降级路径。**下面要验的是自动化够不到的那一段**:Codex 真的会调用它,以及决策
 真的会被它采纳。
@@ -183,17 +183,17 @@ hooks.json 形状、幂等与还原、所有权判定、`hook` 子命令对真�
 > 同一个地方」绕过去;要修的话是给 adapter 传一个可覆盖的配置目录。
 
 ```sh
-export LAB=/tmp/octoterm-codex-lab
+export LAB=/tmp/gateterm-codex-lab
 rm -rf "$LAB" && mkdir -p "$LAB/.codex"
 cp ~/.codex/auth.json "$LAB/.codex/"          # 借用登录态,不改原文件
-printf '[agents]\ninstall_enabled = true\n' > "$LAB/octoterm.toml"
+printf '[agents]\ninstall_enabled = true\n' > "$LAB/gateterm.toml"
 ```
 
 ### 1. 起 server
 
 ```sh
-HOME="$LAB" cargo run -p octoterm-server -- \
-  --port 7699 --token labtok --config "$LAB/octoterm.toml"
+HOME="$LAB" cargo run -p gateterm-server -- \
+  --port 7699 --token labtok --config "$LAB/gateterm.toml"
 ```
 
 - [ ] 启动日志打印监听地址,没有报错
@@ -210,35 +210,35 @@ curl -s -X POST -H "Authorization: Bearer labtok" \
 - [ ] `plan` 里 `install` 列出 6 个事件,路径是 `$LAB/.codex/hooks.json`
 - [ ] `install` 返回 `changed: true`
 - [ ] `$LAB/.codex/hooks.json` 里每条是 `type: "command"`,命令串形如
-      `"…/octoterm-server" hook http://127.0.0.1:7699/hook/codex/<事件>`
+      `"…/gateterm-server" hook http://127.0.0.1:7699/hook/codex/<事件>`
 - [ ] group **不带 `matcher`**(Codex 接受的就是这个形状)
 - [ ] `GET /api/agents` 里 codex 那条的 `activation` 是 `"codex-hooks-review"`
 
-Windows Codex 使用 PowerShell,命令应为 `& '…\octoterm-server.exe' hook http://…`。
-从桌面设置安装时指向 `octoterm-desktop.exe`,它也必须在日志、单实例锁和 GUI
+Windows Codex 使用 PowerShell,命令应为 `& '…\gateterm-server.exe' hook http://…`。
+从桌面设置安装时指向 `gateterm-desktop.exe`,它也必须在日志、单实例锁和 GUI
 初始化之前处理 `hook` 子命令。路径中的单引号必须转写为两个单引号。
-回归测试: `cargo test -p octoterm-desktop --test hook_cli`。
+回归测试: `cargo test -p gateterm-desktop --test hook_cli`。
 
 旧版本生成过缺少 `&` 的 Windows 命令,会报 `hook exited with code 1`。
-更新程序并完全退出、重开 Octoterm 后,在「设置 → AI 集成」重新安装即可替换;
-需要清残留时先用「清空」或 `octoterm-server purge-hooks` (不是 `prune-hooks`)。
+更新程序并完全退出、重开 Gateterm 后,在「设置 → AI 集成」重新安装即可替换;
+需要清残留时先用「清空」或 `gateterm-server purge-hooks` (不是 `prune-hooks`)。
 最后在 Codex 中执行 `/hooks` 重新审核修改后的命令,重启 Codex 会话。
 
 ### 3. 在**托管会话里**跑 Codex
 
-这一步是关键:必须从 octoterm 的会话里启动,`OCTOTERM_SESSION_ID` /
-`OCTOTERM_HOOK_TOKEN` 是 spawn 时注入的 —— 在别处起的 Codex 拿不到,hook 会自己
+这一步是关键:必须从 gateterm 的会话里启动,`GATETERM_SESSION_ID` /
+`GATETERM_HOOK_TOKEN` 是 spawn 时注入的 —— 在别处起的 Codex 拿不到,hook 会自己
 静默退出(这正是「只管托管会话」那条边界)。
 
 浏览器打开 `http://127.0.0.1:7699/#token=labtok`,新建一个会话,在里面:
 
 ```sh
-echo "$OCTOTERM_SESSION_ID"        # 应当是个数字,不是空
+echo "$GATETERM_SESSION_ID"        # 应当是个数字,不是空
 export CODEX_HOME=$LAB/.codex
 cd /tmp && codex
 ```
 
-- [ ] `echo $OCTOTERM_SESSION_ID` 有值(没值就说明不是从 octoterm 会话里起的)
+- [ ] `echo $GATETERM_SESSION_ID` 有值(没值就说明不是从 gateterm 会话里起的)
 
 ### 4. 过 Codex 自己的闸
 
@@ -248,7 +248,7 @@ cd /tmp && codex
 /hooks
 ```
 
-- [ ] 列出 6 条待审的 hook,命令串指向 octoterm 的二进制
+- [ ] 列出 6 条待审的 hook,命令串指向 gateterm 的二进制
 - [ ] 逐条确认后,`$LAB/.codex/config.toml` 里出现
       `[hooks.state."…/hooks.json:<事件小写下划线>:0:0"]` 与 `trusted_hash`
 - [ ] **审核之前**先随便让它跑个工具 → server 的 `/api/agents/sessions` **不该**出现
@@ -264,14 +264,14 @@ curl -s -H "Authorization: Bearer labtok" http://127.0.0.1:7699/api/agents/sessi
 
 - [ ] 出现 `agent_id: "codex"` 的会话,`session` 等于第 3 步那个数字
 - [ ] 状态随操作变化:提交指令 → `thinking`,跑工具 → `working`
-- [ ] octoterm 网页的会话列表上,那一行出现状态点
+- [ ] gateterm 网页的会话列表上,那一行出现状态点
 
 ### 6. 决策:远程替它拍板
 
 在 Codex 里让它做一件**需要授权**的事(例如写文件或跑一条不在允许列表里的命令)。
 
 - [ ] Codex 卡住等待(它在等我们写响应)
-- [ ] octoterm 网页顶部出现「有 AI 在等你回答」横幅,写着那个会话名
+- [ ] gateterm 网页顶部出现「有 AI 在等你回答」横幅,写着那个会话名
 - [ ] `GET /api/agents/pending` 里能看到 `tool_name` 与 `tool_input`
 - [ ] **换一个设备**(手机浏览器开同一个地址)也能看到同一条 —— 这就是这个功能的意义
 - [ ] 点「允许」→ Codex 立刻继续执行
@@ -294,7 +294,7 @@ curl -s -X POST -H "Authorization: Bearer labtok" \
 - [ ] 原本没有 hooks.json 的话,卸载后会留下一个空的 `{}` —— 那是安装时创建的空壳,
       内容上「我们没来过」,但文件本身还在(已知的小残留,不影响 Codex)
 - [ ] 全程结束后 `stat -f %Sm ~/.codex/config.toml` 与 `~/.codex/hooks.json` 的时间**没变**
-- [ ] `ls ~/Library/Application\ Support/octoterm/agent-backups` 不存在或没有新增
+- [ ] `ls ~/Library/Application\ Support/gateterm/agent-backups` 不存在或没有新增
       (备份都落在 `$LAB` 下)
 
 ### 排查:一步都没触发怎么办
@@ -302,7 +302,7 @@ curl -s -X POST -H "Authorization: Bearer labtok" \
 按这个顺序看,这几条都是实际踩过的:
 
 1. **`/hooks` 审核过了吗** —— 没过的话 hook 完全不会被调用,而且**毫无提示**;
-2. **是从托管会话里起的 Codex 吗** —— `echo $OCTOTERM_SESSION_ID` 为空就说明不是,
+2. **是从托管会话里起的 Codex 吗** —— `echo $GATETERM_SESSION_ID` 为空就说明不是,
    hook 会静默退出、连包都不发;
 3. **`CODEX_HOME` 指对了吗** —— 指错了 Codex 读的是另一份 hooks.json;
 4. **端口对得上吗** —— 换过端口的话已写入的命令串还指着旧端口,

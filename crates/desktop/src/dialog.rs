@@ -32,13 +32,13 @@ pub fn notice(title: &str, body: &str) {
 /// Returns true only when the user chooses to open the new release in their browser.
 pub fn confirm_update(
     current_version: &str,
-    update: &octoterm_server::update::ReleaseUpdate,
+    update: &gateterm_server::update::ReleaseUpdate,
     locale: Locale,
 ) -> bool {
     let update_label = locale.text("立刻更新", "Update now");
     let result = rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Info)
-        .set_title(locale.text("octoterm 有新版本", "octoterm update available"))
+        .set_title(locale.text("gateterm 有新版本", "gateterm update available"))
         .set_description(tr!(locale,
             "发现新版本 {} (当前版本 {})。\n\n点击“立刻更新”将在浏览器中打开 Release 页面。\n\n{}",
             "Version {} is available (current: {}).\n\nChoose Update now to open the release page in your browser.\n\n{}",

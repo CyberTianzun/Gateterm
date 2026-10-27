@@ -2,8 +2,8 @@ mod common;
 use common::{control, parse_server, start_test_server, start_test_server_at};
 
 use futures_util::{SinkExt, StreamExt};
-use octoterm_protocol::{ClientMsg, ServerMsg, PROTO_VERSION};
-use octoterm_server::config::WindowSize;
+use gateterm_protocol::{ClientMsg, ServerMsg, PROTO_VERSION};
+use gateterm_server::config::WindowSize;
 use tokio_tungstenite::tungstenite::Message;
 
 #[tokio::test]
@@ -41,7 +41,7 @@ async fn bad_token_is_rejected_and_closed() {
 async fn explicit_config_path_must_exist() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("nope.toml");
-    assert!(octoterm_server::config::Config::load(Some(path.clone())).is_err());
+    assert!(gateterm_server::config::Config::load(Some(path.clone())).is_err());
     assert!(!path.exists(), "load 不得创建文件");
 }
 
@@ -50,14 +50,14 @@ async fn config_load_reads_existing_and_fills_defaults() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     std::fs::write(&path, "listen = \"0.0.0.0:1234\"\ntoken = \"fixed\"\n").unwrap();
-    let c = octoterm_server::config::Config::load(Some(path.clone())).unwrap();
+    let c = gateterm_server::config::Config::load(Some(path.clone())).unwrap();
     assert_eq!(c.listen.map(|l| l.to_string()).as_deref(), Some("0.0.0.0:1234"));
     assert_eq!(c.token.as_deref(), Some("fixed"));
 
     // 没写 listen 时**保持 None**,而不是在这一层补一个默认值 —— server 与 desktop
     // 的默认监听不一样(只回环 vs 全网卡),谁用谁定。
     std::fs::write(&path, "token = \"only\"\n").unwrap();
-    let c = octoterm_server::config::Config::load(Some(path)).unwrap();
+    let c = gateterm_server::config::Config::load(Some(path)).unwrap();
     assert_eq!(c.listen, None, "「没写」不该在 Config 这一层被抹成默认值");
     assert_eq!(c.token.as_deref(), Some("only"));
 }
@@ -76,7 +76,7 @@ async fn serves_embedded_index() {
     let url = start_test_server("t").await; // ws://addr/ws
     let http = url.replace("ws://", "http://").replace("/ws", "/");
     let body = reqwest::get(&http).await.unwrap().text().await.unwrap();
-    assert!(body.contains("octoterm"));
+    assert!(body.contains("gateterm"));
 }
 
 #[tokio::test]
@@ -97,5 +97,5 @@ async fn fallback_serves_index_html_mime() {
     assert_eq!(resp.status(), 200);
     let ct = resp.headers()["content-type"].to_str().unwrap().to_string();
     assert!(ct.starts_with("text/html"), "got {ct}");
-    assert!(resp.text().await.unwrap().contains("octoterm"));
+    assert!(resp.text().await.unwrap().contains("gateterm"));
 }

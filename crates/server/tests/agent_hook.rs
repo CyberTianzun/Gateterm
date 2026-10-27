@@ -1,11 +1,11 @@
 //! hook 摄入面。
 //!
 //! 这是第三方入口,鉴权与客户端控制面是分开的两套 —— 客户端用 bearer token,
-//! agent 用 hook 密钥,后者只存在于 octoterm 亲手 spawn 的会话的环境变量里。
+//! agent 用 hook 密钥,后者只存在于 gateterm 亲手 spawn 的会话的环境变量里。
 
 mod common;
 
-use octoterm_server::agent::store::hook_token;
+use gateterm_server::agent::store::hook_token;
 
 async fn post_hook(
     addr: std::net::SocketAddr,
@@ -22,7 +22,7 @@ async fn post_hook(
         req = req.header("Authorization", format!("Bearer {t}"));
     }
     if let Some(s) = session {
-        req = req.header("X-Octoterm-Session", s);
+        req = req.header("X-Gateterm-Session", s);
     }
     req.send().await.unwrap()
 }
@@ -81,7 +81,7 @@ async fn client_token_does_not_work_on_hook_plane() {
     assert_quietly_ignored(addr, r).await;
 }
 
-/// 没有会话头 = 不是从 octoterm 会话里起的 agent。这正是「非托管会话」那条路,
+/// 没有会话头 = 不是从 gateterm 会话里起的 agent。这正是「非托管会话」那条路,
 /// 也正是线上天天在发生的那条路。
 #[tokio::test]
 async fn missing_session_header_is_ignored_not_an_error() {

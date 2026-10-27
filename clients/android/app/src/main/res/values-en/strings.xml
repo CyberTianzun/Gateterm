@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Octoterm</string>
+    <string name="app_name">Gateterm</string>
     <string name="chat_load_older">Load earlier messages</string>
     <string name="chat_loading_older">Loading earlier messages…</string>
     <string name="chat_older_failed">Could not load messages. Retry</string>
@@ -18,7 +18,7 @@
     <string name="connection_disconnect">Disconnect</string>
     <string name="connections_disconnect_all">Disconnect all</string>
     <string name="connections_channel">Server connections</string>
-    <string name="connections_notification_title">Octoterm server connections</string>
+    <string name="connections_notification_title">Gateterm server connections</string>
     <string name="connections_notification_summary">%1$d connected, %2$d connecting or reconnecting</string>
     <string name="connections_notification_agents">Agents: %1$s</string>
     <string name="connections_notification_agent_count">%1$s: %2$d</string>
@@ -232,8 +232,8 @@
     <string name="cloud_login_cancelled">Sign-in cancelled</string>
     <string name="cloud_browser_unavailable">Unable to open a browser. Install or enable one and try again.</string>
     <string name="cloud_err_authorization_code">Browser authorization expired. Please sign in again.</string>
-    <string name="cloud_connected_as">%1$s connected to Octoterm Cloud</string>
-    <string name="cloud_not_connected">Not connected to Octoterm Cloud</string>
+    <string name="cloud_connected_as">%1$s connected to Gateterm Cloud</string>
+    <string name="cloud_not_connected">Not connected to Gateterm Cloud</string>
     <string name="cloud_send_register_code">Send sign-up code</string>
     <string name="cloud_register">Sign up</string>
     <string name="cloud_send_reset_code">Send reset code</string>

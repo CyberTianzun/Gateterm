@@ -83,7 +83,7 @@ with sync_playwright() as p:
         assert {'agents','agents/history','launchers'} <= {path for path,_ in requests},(name,requests)
         assert all(auth==f'Bearer {expected}'.rstrip() for _,auth in requests),(name,requests)
         if name=='manual':
-            assert page.evaluate('localStorage.getItem("octoterm-token")')==answer
+            assert page.evaluate('localStorage.getItem("gateterm-token")')==answer
             page.reload();page.wait_for_function('window.authHellos.length===1')
             page.wait_for_timeout(100)
             assert len(prompts)==1,prompts

@@ -1,4 +1,4 @@
-package ai.eclosion.octoterm.diagnostics.fontmetrics;
+package ai.eclosion.gateterm.diagnostics.fontmetrics;
 
 import android.content.Context;
 import android.content.res.Configuration;
@@ -6,9 +6,9 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Typeface;
-import ai.eclosion.octoterm.android.term.FontAdvance;
-import ai.eclosion.octoterm.android.term.TerminalFontMetrics;
-import ai.eclosion.octoterm.android.term.TerminalBlockGlyphs;
+import ai.eclosion.gateterm.android.term.FontAdvance;
+import ai.eclosion.gateterm.android.term.TerminalFontMetrics;
+import ai.eclosion.gateterm.android.term.TerminalBlockGlyphs;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;

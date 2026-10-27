@@ -7,11 +7,11 @@ import { FitAddon } from "@xterm/addon-fit";
 // 升级 xterm 时这两个必须一起动。
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
-import { OctoClient } from "./client";
+import { GateClient } from "./client";
 import { readToken } from "./auth";
 import { mountCloudStatus } from "./cloud";
 import { mountUpdateStatus } from "./update";
-import { type OctoConfig, loadConfig, saveConfig, toTerminalOptions } from "./config";
+import { type GateConfig, loadConfig, saveConfig, toTerminalOptions } from "./config";
 import { ensureFontLoaded } from "./fonts";
 import { resolveTheme } from "./theme-catalog";
 import { swallowTerminalQueries, termColors } from "./queries";
@@ -54,7 +54,7 @@ import {
 } from "./agents";
 
 const $ = (id: string) => document.getElementById(id)!;
-const client = new OctoClient();
+const client = new GateClient();
 const TERM_CHANNEL = 1;
 
 let sessions: any[] = [];
@@ -115,7 +115,7 @@ function resetChatPages() {
 /** 读不到对话记录时的原因(已经翻成人话)。有值就说明这次该显示回落。 */
 let chatFallback: string | null = null;
 
-let config: OctoConfig = loadConfig(resolveTheme);
+let config: GateConfig = loadConfig(resolveTheme);
 const narrowSidebar = window.matchMedia("(max-width: 768px)");
 // 语言先于任何一次渲染定下来:下面 mountSettings / mountNewSessionMenu 在模块
 // 求值时就会铺一批静态文案,那时 t() 必须已经指向对的词条表。
@@ -205,7 +205,7 @@ function syncFont(stack: string) {
   });
 }
 
-function applyConfig(next: OctoConfig) {
+function applyConfig(next: GateConfig) {
 
   config = next;
   saveConfig(config);
@@ -236,14 +236,14 @@ function applyRenderer(terminal: Terminal) {
   try {
     const addon = new WebglAddon();
     addon.onContextLoss(() => {
-      console.warn("octoterm: WebGL 上下文丢失,回落到 DOM 渲染器");
+      console.warn("gateterm: WebGL 上下文丢失,回落到 DOM 渲染器");
       if (webgl === addon) disposeWebgl();
       else addon.dispose();
     });
     terminal.loadAddon(addon);
     webgl = addon;
   } catch (err) {
-    console.warn("octoterm: WebGL 渲染器不可用,使用 DOM 渲染器", err);
+    console.warn("gateterm: WebGL 渲染器不可用,使用 DOM 渲染器", err);
     webgl = null;
   }
 }
@@ -335,7 +335,7 @@ function syncSidebarPosition() {
   requestAnimationFrame(refit);
 }
 
-function setSidebarPosition(position: OctoConfig["ui"]["sidebarPosition"]) {
+function setSidebarPosition(position: GateConfig["ui"]["sidebarPosition"]) {
   config = { ...config, ui: { ...config.ui, sidebarPosition: position } };
   saveConfig(config);
   syncSidebarPosition();
@@ -453,7 +453,7 @@ function disposeWebgl() {
   try {
     addon?.dispose();
   } catch (err) {
-    console.warn("octoterm: WebGL addon 释放失败,已忽略", err);
+    console.warn("gateterm: WebGL addon 释放失败,已忽略", err);
   }
 }
 
@@ -843,7 +843,7 @@ function skipButton(a: AgentSession): HTMLButtonElement {
  * 用户一键批准一条看不见的命令 —— 那比没有这个功能更危险,它会训练人闭眼点允许。
  * 所以命令原文必须在按钮**上方**、完整、不截断。
  *
- * 这里只放结构化的允许/拒绝。自由文本回答不在这儿 —— octoterm 托管着那个 pty,
+ * 这里只放结构化的允许/拒绝。自由文本回答不在这儿 —— gateterm 托管着那个 pty,
  * 「去这个会话」一键过去在终端里打字就是了,再造一个输入框既多余又处理不了
  * agent 自己画的 TUI 交互。
  */
@@ -1174,7 +1174,7 @@ client.onControl = (msg) => {
       if (msg.channel === TERM_CHANNEL) closeTerminal();
       break;
     case "error":
-      console.warn("octoterm error:", msg.message);
+      console.warn("gateterm error:", msg.message);
       showError(msg.message);
       // 重连打到一个已经不存在的会话上(channel 对应的 attach 失败):
       // 该终端已没有意义,退回空态,而不是停留在一个死连接上。

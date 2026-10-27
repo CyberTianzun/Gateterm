@@ -34,8 +34,8 @@ impl Locale {
         }
     }
 
-    pub fn cloud_error(self, error: &octoterm_cloud_client::CloudError) -> String {
-        use octoterm_cloud_client::CloudError;
+    pub fn cloud_error(self, error: &gateterm_cloud_client::CloudError) -> String {
+        use gateterm_cloud_client::CloudError;
         if self == Self::ZhCn {
             return error.user_message();
         }

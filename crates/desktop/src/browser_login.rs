@@ -10,7 +10,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::{Router, routing::get};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use octoterm_cloud_client::{CloudClient, Credentials, credentials};
+use gateterm_cloud_client::{CloudClient, Credentials, credentials};
 use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
@@ -157,8 +157,8 @@ async fn callback(
     {
         return page(
             StatusCode::BAD_REQUEST,
-            "登录请求不匹配，请回到 Octoterm 重新登录。",
-            "The sign-in request does not match. Start again from Octoterm.",
+            "登录请求不匹配，请回到 Gateterm 重新登录。",
+            "The sign-in request does not match. Start again from Gateterm.",
             chinese,
         );
     }
@@ -168,8 +168,8 @@ async fn callback(
     else {
         return page(
             StatusCode::BAD_REQUEST,
-            "缺少登录授权码，请回到 Octoterm 重新登录。",
-            "The authorization code is missing. Start again from Octoterm.",
+            "缺少登录授权码，请回到 Gateterm 重新登录。",
+            "The authorization code is missing. Start again from Gateterm.",
             chinese,
         );
     };
@@ -178,8 +178,8 @@ async fn callback(
         if *claimed {
             return page(
                 StatusCode::CONFLICT,
-                "此登录回调已处理，请返回 Octoterm。",
-                "This sign-in callback has already been handled. Return to Octoterm.",
+                "此登录回调已处理，请返回 Gateterm。",
+                "This sign-in callback has already been handled. Return to Gateterm.",
                 chinese,
             );
         }
@@ -189,22 +189,22 @@ async fn callback(
     if state.sender.send((code.clone(), reply)).await.is_err() {
         return page(
             StatusCode::GONE,
-            "登录已结束，请返回 Octoterm。",
-            "This sign-in has ended. Return to Octoterm.",
+            "登录已结束，请返回 Gateterm。",
+            "This sign-in has ended. Return to Gateterm.",
             chinese,
         );
     }
     match response.await {
         Ok(Ok(())) => page(
             StatusCode::OK,
-            "登录成功，可以关闭此页面并返回 Octoterm。",
-            "Signed in. You can close this page and return to Octoterm.",
+            "登录成功，可以关闭此页面并返回 Gateterm。",
+            "Signed in. You can close this page and return to Gateterm.",
             chinese,
         ),
         _ => page(
             StatusCode::BAD_GATEWAY,
-            "登录未完成，请返回 Octoterm 查看原因并重试。",
-            "Sign-in could not be completed. Return to Octoterm to see the error and try again.",
+            "登录未完成，请返回 Gateterm 查看原因并重试。",
+            "Sign-in could not be completed. Return to Gateterm to see the error and try again.",
             chinese,
         ),
     }
@@ -241,7 +241,7 @@ fn page(status: StatusCode, zh: &str, en: &str, chinese: bool) -> Response {
     let message = if chinese { zh } else { en };
     let lang = if chinese { "zh-CN" } else { "en" };
     let html = format!(
-        "<!doctype html><html lang=\"{lang}\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Octoterm</title><body><main><h1>Octoterm</h1><p>{message}</p></main></body></html>"
+        "<!doctype html><html lang=\"{lang}\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Gateterm</title><body><main><h1>Gateterm</h1><p>{message}</p></main></body></html>"
     );
     (
         status,
@@ -365,7 +365,7 @@ mod tests {
     async fn timeout_and_cancellation_release_the_listener_without_saving() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cloud.json");
-        let login = BrowserLogin::bind("https://octoterm.signal.top/", "Desktop", Locale::ZhCn)
+        let login = BrowserLogin::bind("https://gateterm.signal.top/", "Desktop", Locale::ZhCn)
             .await
             .unwrap();
         let address = login.listener.local_addr().unwrap();
@@ -376,7 +376,7 @@ mod tests {
         assert!(!path.exists());
         assert!(tokio::net::TcpStream::connect(address).await.is_err());
 
-        let login = BrowserLogin::bind("https://octoterm.signal.top/", "Desktop", Locale::ZhCn)
+        let login = BrowserLogin::bind("https://gateterm.signal.top/", "Desktop", Locale::ZhCn)
             .await
             .unwrap();
         let address = login.listener.local_addr().unwrap();

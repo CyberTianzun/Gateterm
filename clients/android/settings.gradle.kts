@@ -18,5 +18,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "octoterm-android"
+rootProject.name = "gateterm-android"
 include(":app")

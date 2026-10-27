@@ -1,5 +1,5 @@
 @echo off
-REM 构建 web 客户端到 clients\web\dist\ —— octoterm-server 直接从那个目录发静态文件。
+REM 构建 web 客户端到 clients\web\dist\ —— gateterm-server 直接从那个目录发静态文件。
 REM
 REM 与 build-frontend.sh 等价,改动请同步两边。
 setlocal

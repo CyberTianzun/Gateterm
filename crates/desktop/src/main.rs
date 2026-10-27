@@ -2,11 +2,11 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 use anyhow::{Context, Result};
-use octoterm_desktop::app::{App, Startup, UserEvent};
-use octoterm_desktop::supervisor::Supervisor;
-use octoterm_desktop::{configfile, dialog, logs, single_instance};
-use octoterm_desktop::i18n::Locale;
-use octoterm_server::config::Config;
+use gateterm_desktop::app::{App, Startup, UserEvent};
+use gateterm_desktop::supervisor::Supervisor;
+use gateterm_desktop::{configfile, dialog, logs, single_instance};
+use gateterm_desktop::i18n::Locale;
+use gateterm_server::config::Config;
 use winit::event_loop::EventLoop;
 
 /// 致命失败:先弹框把原因摆到用户面前,再把错误原样交回去。
@@ -32,18 +32,18 @@ fn main() -> Result<()> {
     // 必须在日志、单实例锁和 GUI 初始化之前转发,否则每个 hook 都会启动桌面程序。
     let mut args = std::env::args().skip(1);
     if args.next().as_deref() == Some("hook") {
-        let code = args.next().map_or(0, |url| octoterm_server::agent::hook_cli::run(&url));
+        let code = args.next().map_or(0, |url| gateterm_server::agent::hook_cli::run(&url));
         std::process::exit(code);
     }
 
     let language = configfile::language();
     let locale = language.resolve(Locale::system());
-    let failed_to_start = locale.text("octoterm 无法启动", "octoterm could not start");
+    let failed_to_start = locale.text("gateterm 无法启动", "gateterm could not start");
     let log_path = or_report(failed_to_start, locale.text("日志初始化失败。", "Could not initialize logging."), logs::init())?;
 
     let config_path =
         or_report(failed_to_start, locale.text("无法确定配置目录。", "Cannot locate the configuration directory."), configfile::default_path())?;
-    let lock_path = config_path.with_file_name("octoterm.lock");
+    let lock_path = config_path.with_file_name("gateterm.lock");
     let lock = single_instance::acquire(&lock_path);
     let _guard = match or_report(failed_to_start, locale.text("无法获取单实例锁。", "Could not acquire the application lock."), lock)? {
         Some(g) => g,
@@ -52,13 +52,13 @@ fn main() -> Result<()> {
             // 便饭(开机自启已经起过一份,用户又去点了一次图标),静默退出的观感就是
             // 「点了没反应」,用户只会接着再点几次。何况托盘图标在 Windows 上默认收
             // 在溢出区里,「它已经在跑了」这件事用户未必看得见。
-            tracing::warn!("已有 octoterm-desktop 实例在运行,退出");
+            tracing::warn!("已有 gateterm-desktop 实例在运行,退出");
             dialog::notice(
-                locale.text("octoterm 已在运行", "octoterm is already running"),
-                locale.text("octoterm 已经在后台运行了。\n\n\
+                locale.text("gateterm 已在运行", "gateterm is already running"),
+                locale.text("gateterm 已经在后台运行了。\n\n\
                  可以在系统托盘(macOS 是右上角菜单栏)里找到它的图标,\
                  从那里打开 Web 客户端或设置。",
-                    "octoterm is already running in the background.\n\nFind its icon in the system tray (the menu bar on macOS) to open the web client or settings."),
+                    "gateterm is already running in the background.\n\nFind its icon in the system tray (the menu bar on macOS) to open the web client or settings."),
             );
             return Ok(());
         }
@@ -79,7 +79,7 @@ fn main() -> Result<()> {
     // 空对空一律放行),而这条路径很现实:设置界面写着「留空表示不固定」,旁边还有
     // 「打开 config.toml」按钮把用户直接引到文件里。同 `Supervisor::restart` 开头的
     // `ensure!`,纵深防御。
-    let (token, _) = octoterm_server::config::resolve_token(
+    let (token, _) = gateterm_server::config::resolve_token(
         None,
         config.token.clone().filter(|t| !t.trim().is_empty()),
     );
@@ -94,14 +94,14 @@ fn main() -> Result<()> {
     )?;
 
     // 必须在任何会话 spawn 之前:密钥要跨重启不变,见 `store::hook_token`
-    octoterm_server::agent::store::init_hook_token(
-        octoterm_server::agent::store::default_hook_token_path().as_deref(),
+    gateterm_server::agent::store::init_hook_token(
+        gateterm_server::agent::store::default_hook_token_path().as_deref(),
     );
     let mut sup = Supervisor::new(1 << 20, config.window_size, &config.launchers, config.agents);
     // Cloud 推送通知器跟 SessionManager 同寿命,不随 HTTP 层重建;没登录时它什么也不发。
     {
         let _rt = rt.enter();
-        octoterm_server::cloud::notifier::spawn(
+        gateterm_server::cloud::notifier::spawn(
             sup.manager().clone(),
             sup.agent_sessions().clone(),
             sup.cloud_creds().clone(),
@@ -109,8 +109,8 @@ fn main() -> Result<()> {
     }
     // 监听失败同样不是退出的理由:端口被占用时用户要能打开设置窗口换一个端口。
     // 配置文件没写 listen 时用 desktop 自己的默认:全网卡。理由与前提见
-    // `octoterm_server::config::desktop_default_listen` 的文档注释。
-    let listen = config.listen.unwrap_or_else(octoterm_server::config::desktop_default_listen);
+    // `gateterm_server::config::desktop_default_listen` 的文档注释。
+    let listen = config.listen.unwrap_or_else(gateterm_server::config::desktop_default_listen);
     let listen_error = match rt.block_on(sup.restart(listen, token)) {
         Ok(addr) => {
             tracing::info!(%addr, "已监听");
@@ -133,7 +133,7 @@ fn main() -> Result<()> {
         builder.with_activation_policy(ActivationPolicy::Accessory);
         // 默认会在启动瞬间把前台应用踢下去抢焦点(activate_ignoring_other_apps 默认
         // true)。一个开机自启的托盘常驻应用这么干不合常规——用户当时在忙别的事,
-        // 不该被 octoterm 打断,关掉这个行为。
+        // 不该被 gateterm 打断,关掉这个行为。
         builder.with_activate_ignoring_other_apps(false);
     }
     let event_loop =
@@ -145,6 +145,6 @@ fn main() -> Result<()> {
     let mut app = App::new(rt, sup, proxy, log_path, startup);
     // 事件循环异常退出时托盘也跟着没了,同样得说一声 —— 否则用户看到的是图标凭空消失。
     let ran = event_loop.run_app(&mut app).map_err(Into::into);
-    or_report(locale.text("octoterm 已退出", "octoterm has exited"), locale.text("事件循环异常退出。", "The event loop stopped unexpectedly."), ran)?;
+    or_report(locale.text("gateterm 已退出", "gateterm has exited"), locale.text("事件循环异常退出。", "The event loop stopped unexpectedly."), ran)?;
     Ok(())
 }

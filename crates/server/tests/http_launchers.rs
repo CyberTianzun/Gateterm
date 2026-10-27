@@ -6,7 +6,7 @@
 
 mod common;
 
-use octoterm_server::config::LauncherSpec;
+use gateterm_server::config::LauncherSpec;
 use serde_json::Value;
 
 async fn get(addr: std::net::SocketAddr, token: Option<&str>) -> reqwest::Response {

@@ -6,7 +6,7 @@ use axum::extract::ws::{Message, WebSocket};
 use base64::Engine;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use octoterm_protocol::{AttachMode, ClientMsg, Frame, ServerMsg, TermColors, CONTROL_CHANNEL};
+use gateterm_protocol::{AttachMode, ClientMsg, Frame, ServerMsg, TermColors, CONTROL_CHANNEL};
 use tokio::sync::mpsc;
 
 use crate::app::AppState;

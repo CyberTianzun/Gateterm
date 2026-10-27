@@ -56,7 +56,7 @@ with sync_playwright() as p:
   box=page.locator('.xterm-screen').bounding_box();page.mouse.move(box['x']+50,box['y']+30);page.mouse.wheel(0,delta);page.wait_for_timeout(120)
  clear();drag();assert any('\x1b[<' in data for data in output()),output()
  block(True);assert page.locator('.xterm.enable-mouse-events').count()==0
- assert page.evaluate('JSON.parse(localStorage.getItem("octoterm-config")).terminal.blockMouseEvents') is True
+ assert page.evaluate('JSON.parse(localStorage.getItem("gateterm-config")).terminal.blockMouseEvents') is True
  clear();page.locator('.xterm-helper-textarea').focus();page.keyboard.insert_text('KEYBOARD_OK');page.wait_for_timeout(80)
  assert any('KEYBOARD_OK' in data for data in output()),output()
  clear();drag();assert not output(),output()

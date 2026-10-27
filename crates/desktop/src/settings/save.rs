@@ -38,7 +38,7 @@ pub trait Effects {
     fn save_config(&mut self, path: &Path, edit: &Editable) -> Result<()>;
     /// 返回实际监听到的地址。
     fn restart(&mut self, listen: SocketAddr, token: String) -> Result<SocketAddr>;
-    /// 现场生成一个新的随机 token。格式与 `octoterm_server::config::resolve_token`
+    /// 现场生成一个新的随机 token。格式与 `gateterm_server::config::resolve_token`
     /// 一致(32 位无连字符十六进制)。**不允许返回空串。**
     fn new_token(&mut self) -> String;
 }

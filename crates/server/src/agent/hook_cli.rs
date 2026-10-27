@@ -1,17 +1,17 @@
-//! `octoterm-server hook <url>` —— 给只支持 `type: "command"` 的 agent 用的 hook 客户端。
+//! `gateterm-server hook <url>` —— 给只支持 `type: "command"` 的 agent 用的 hook 客户端。
 //!
 //! 为什么需要它:Claude Code 多数事件支持 `type: "http"`,可直接 POST 到 server,
 //! 但 SessionStart 必须用 command。**Codex 不支持 HTTP** —— 它的 `HookHandlerConfig` 只有 command / prompt / agent
 //! 三种(从 codex 二进制里的类型名读出来的),所以必须有一个可执行文件站在中间。
 //!
-//! 那个可执行文件就是 octoterm 自己。不引入 HTTP 客户端依赖:目标永远是 127.0.0.1,
+//! 那个可执行文件就是 gateterm 自己。不引入 HTTP 客户端依赖:目标永远是 127.0.0.1,
 //! 请求形状完全固定,手写一个几十行的 HTTP/1.1 POST 比拖进一个通用客户端更符合
 //! 「单个小体积静态二进制」的定位。
 //!
 //! 行为约定(顺序就是防线的顺序):
 //!
-//! 1. 环境里没有 `OCTOTERM_SESSION_ID` / `OCTOTERM_HOOK_TOKEN` → **立刻退出,不联网**。
-//!    这是「只管托管会话」这条边界的执行点:在 octoterm 之外启动的 agent 拿不到这两个
+//! 1. 环境里没有 `GATETERM_SESSION_ID` / `GATETERM_HOOK_TOKEN` → **立刻退出,不联网**。
+//!    这是「只管托管会话」这条边界的执行点:在 gateterm 之外启动的 agent 拿不到这两个
 //!    变量,于是连一个包都不会发出去。
 //! 2. 任何失败都**静默 exit 0 且不打印** —— 不打印就等于「无决定」,agent 回落到它自己
 //!    的审批流程。宿主不在、端口换了、网络抽风,都绝不能把 agent 卡住或者替它决定。
@@ -37,7 +37,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 /// 自检会把它报成 `Outdated`(见 `edit::is_current`)。
 pub fn command_for(agent: &str, port: u16, event: &str) -> String {
     let exe = std::env::current_exe()
-        .unwrap_or_else(|_| std::path::PathBuf::from("octoterm-server"));
+        .unwrap_or_else(|_| std::path::PathBuf::from("gateterm-server"));
     command_for_executable(agent, port, event, &exe)
 }
 
@@ -69,7 +69,7 @@ fn windows_encoded_command(exe: &str, url: &str) -> String {
         "$ErrorActionPreference = 'Stop'\n\
          $ProgressPreference = 'SilentlyContinue'\n\
          $url = '{url}'\n\
-         if (-not $env:OCTOTERM_SESSION_ID -or -not $env:OCTOTERM_HOOK_TOKEN) {{ [Console]::Out.Write('{{}}'); exit 0 }}\n\
+         if (-not $env:GATETERM_SESSION_ID -or -not $env:GATETERM_HOOK_TOKEN) {{ [Console]::Out.Write('{{}}'); exit 0 }}\n\
          $p = [System.Diagnostics.Process]::new()\n\
          $p.StartInfo.FileName = '{}'\n\
          $p.StartInfo.Arguments = 'hook ' + $url\n\
@@ -105,7 +105,7 @@ pub(crate) fn decode_windows_command(command: &str) -> Option<String> {
 /// 返回进程退出码。永远是 0 —— 见模块文档第 2 条。
 pub fn run(url: &str) -> i32 {
     let (Ok(session), Ok(token)) =
-        (std::env::var("OCTOTERM_SESSION_ID"), std::env::var("OCTOTERM_HOOK_TOKEN"))
+        (std::env::var("GATETERM_SESSION_ID"), std::env::var("GATETERM_HOOK_TOKEN"))
     else {
         return 0;
     };
@@ -150,7 +150,7 @@ fn post(url: &str, session: &str, token: &str, body: &[u8]) -> std::io::Result<V
         "POST {path} HTTP/1.1\r\n\
          Host: {addr}\r\n\
          Authorization: Bearer {token}\r\n\
-         X-Octoterm-Session: {session}\r\n\
+         X-Gateterm-Session: {session}\r\n\
          Content-Type: application/json\r\n\
          Content-Length: {len}\r\n\
          Connection: close\r\n\r\n",

@@ -10,7 +10,7 @@
 //!
 //! 与参考实现 clawd-on-desk 有意做的两处不同:
 //!
-//! 1. **备份落在 octoterm 自己的配置目录**,不是就地写 `.bak`。`~/.claude` 是别人的
+//! 1. **备份落在 gateterm 自己的配置目录**,不是就地写 `.bak`。`~/.claude` 是别人的
 //!    地方,我们不往里堆垃圾。
 //! 2. **只在 install / uninstall 这种用户显式动作时写**,不做「每次 server 启动重写」。
 //!    Claude Code 自己也会写这个文件(「Yes, and always allow」会往 `permissions` 里加
@@ -107,7 +107,7 @@ fn apply_file(path: &Path, ops: &[&EditOp], opts: &ApplyOpts) -> Result<Outcome,
             if foreign {
                 return Err(ApplyError::Invalid {
                     path: path.to_path_buf(),
-                    detail: "同名文件不是 octoterm 写的,拒绝覆盖".into(),
+                    detail: "同名文件不是 gateterm 写的,拒绝覆盖".into(),
                 });
             }
             if original.as_deref() == Some(content.as_str()) {
@@ -220,7 +220,7 @@ fn write_atomic(path: &Path, content: &str) -> Result<(), ApplyError> {
     let dir = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir).map_err(|e| io_err(dir, e))?;
     let tmp = dir.join(format!(
-        ".{}.octoterm-{}.tmp",
+        ".{}.gateterm-{}.tmp",
         path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
         std::process::id()
     ));
@@ -233,8 +233,8 @@ fn write_atomic(path: &Path, content: &str) -> Result<(), ApplyError> {
     Ok(())
 }
 
-/// 备份放 octoterm 自己的配置目录下,不放 `~/.claude`。
+/// 备份放 gateterm 自己的配置目录下,不放 `~/.claude`。
 pub fn default_backup_dir() -> Option<PathBuf> {
-    directories::ProjectDirs::from("", "", "octoterm")
+    directories::ProjectDirs::from("", "", "gateterm")
         .map(|d| d.config_dir().join("agent-backups"))
 }

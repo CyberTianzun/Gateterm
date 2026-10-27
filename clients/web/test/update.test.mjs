@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const result = await build({ entryPoints: [fileURLToPath(new URL("../src/update.ts", import.meta.url))],
   bundle: true, format: "esm", write: false });
 const { fetchUpdateStatus } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`);
-const release = { version: "0.3.0", url: "https://github.com/CyberTianzun/Octoterm/releases/tag/release-v0.3.0" };
+const release = { version: "0.3.0", url: "https://github.com/CyberTianzun/Gateterm/releases/tag/release-v0.3.0" };
 const ok = (update) => ({ ok: true, status: 200, json: async () => ({ current_version: "0.2.3", update }) });
 
 test("version status reads the authenticated local cache, never GitHub directly", async (t) => {
@@ -36,9 +36,9 @@ test("no update and older server endpoints return no offer", async (t) => {
 test("only this repository's HTTPS Release pages are accepted", async (t) => {
   const original = globalThis.fetch;
   t.after(() => { globalThis.fetch = original; });
-  for (const url of ["javascript:alert(1)", "http://github.com/CyberTianzun/Octoterm/releases/latest",
-    "https://github.com.evil.example/CyberTianzun/Octoterm/releases/latest",
-    "https://github.com/other/project/releases/latest", "https://user@github.com/CyberTianzun/Octoterm/releases/latest"]) {
+  for (const url of ["javascript:alert(1)", "http://github.com/CyberTianzun/Gateterm/releases/latest",
+    "https://github.com.evil.example/CyberTianzun/Gateterm/releases/latest",
+    "https://github.com/other/project/releases/latest", "https://user@github.com/CyberTianzun/Gateterm/releases/latest"]) {
     globalThis.fetch = async () => ok({ ...release, url });
     await assert.rejects(fetchUpdateStatus("t"), url);
   }

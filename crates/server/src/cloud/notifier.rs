@@ -7,9 +7,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use octoterm_cloud_client::credentials::{self, Credentials};
-use octoterm_cloud_client::{CloudClient, CloudError, Notify};
-use octoterm_protocol::{AgentState, ServerMsg};
+use gateterm_cloud_client::credentials::{self, Credentials};
+use gateterm_cloud_client::{CloudClient, CloudError, Notify};
+use gateterm_protocol::{AgentState, ServerMsg};
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::agent::store::AgentSessionStore;

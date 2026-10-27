@@ -1,5 +1,5 @@
 [package]
-name = "octoterm-cloud-client"
+name = "gateterm-cloud-client"
 version = "0.2.5"
 edition.workspace = true
 license.workspace = true

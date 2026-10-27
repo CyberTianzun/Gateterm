@@ -2,10 +2,10 @@
 //!
 //! 全部用 tempfile 造假 home,不碰真实的 `~/.claude` / `~/.codex`。
 
-use octoterm_server::agent::apply::{apply, ApplyOpts};
-use octoterm_server::agent::detect::DetectEnv;
-use octoterm_server::agent::edit::InstallCtx;
-use octoterm_server::agent::{find, plan_purge, scan, startup_warnings, Integration};
+use gateterm_server::agent::apply::{apply, ApplyOpts};
+use gateterm_server::agent::detect::DetectEnv;
+use gateterm_server::agent::edit::InstallCtx;
+use gateterm_server::agent::{find, plan_purge, scan, startup_warnings, Integration};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -189,7 +189,7 @@ fn codex_command_with_other_binary_is_outdated() {
     assert_eq!(e.integration("codex", 7683), Integration::NeedsActivation);
     let text = fs::read_to_string(e.codex_hooks()).unwrap();
     let exe = std::env::current_exe().unwrap().to_string_lossy().replace('\\', "\\\\");
-    fs::write(e.codex_hooks(), text.replace(&exe, "/old/place/octoterm-server")).unwrap();
+    fs::write(e.codex_hooks(), text.replace(&exe, "/old/place/gateterm-server")).unwrap();
     assert_eq!(e.integration("codex", 7683), Integration::Outdated);
 }
 

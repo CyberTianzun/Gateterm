@@ -1,9 +1,9 @@
 mod common;
 
 use common::FakeCloud;
-use octoterm_cloud_client::ClientKind;
-use octoterm_cloud_client::credentials;
-use octoterm_cloud_client::ops::{self, OpsError};
+use gateterm_cloud_client::ClientKind;
+use gateterm_cloud_client::credentials;
+use gateterm_cloud_client::ops::{self, OpsError};
 use serde_json::json;
 
 fn path(dir: &tempfile::TempDir) -> std::path::PathBuf {

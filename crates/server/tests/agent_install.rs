@@ -2,9 +2,9 @@
 //!
 //! 全部用 tempfile 造假 home,不碰真实的 `~/.claude`。
 
-use octoterm_server::agent::apply::{apply, ApplyError, ApplyOpts};
-use octoterm_server::agent::edit::InstallCtx;
-use octoterm_server::agent::find;
+use gateterm_server::agent::apply::{apply, ApplyError, ApplyOpts};
+use gateterm_server::agent::edit::InstallCtx;
+use gateterm_server::agent::find;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -35,11 +35,11 @@ impl Env {
             backup_keep: 5,
         }
     }
-    fn install(&self, enabled: bool) -> Result<Vec<octoterm_server::agent::apply::Outcome>, ApplyError> {
+    fn install(&self, enabled: bool) -> Result<Vec<gateterm_server::agent::apply::Outcome>, ApplyError> {
         let a = find("claude-code").unwrap();
         apply(&a.plan_install(&self.ctx()).unwrap(), &self.opts(enabled))
     }
-    fn uninstall(&self) -> Result<Vec<octoterm_server::agent::apply::Outcome>, ApplyError> {
+    fn uninstall(&self) -> Result<Vec<gateterm_server::agent::apply::Outcome>, ApplyError> {
         let a = find("claude-code").unwrap();
         apply(&a.plan_uninstall(&self.ctx()).unwrap(), &self.opts(true))
     }

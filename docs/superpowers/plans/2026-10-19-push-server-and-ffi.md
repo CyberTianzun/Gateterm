@@ -58,7 +58,7 @@ scripts/build-android-ffi.sh(新)
 - [ ] **Step 1: 建分支**
 
 ```bash
-cd ~/online/eclosion/Octoterm && git checkout -b feat/push-server-ffi
+cd ~/online/eclosion/Gateterm && git checkout -b feat/push-server-ffi
 ```
 
 - [ ] **Step 2: 失败测试**
@@ -113,9 +113,9 @@ async fn register_push_target_revokes_on_401() {
 }
 ```
 
-(`use octoterm_cloud_client::ClientKind;` 加到该文件顶部;`logged_in` 是该文件已有辅助函数,若其内部调用了 `ops::login` 一并补参数。)
+(`use gateterm_cloud_client::ClientKind;` 加到该文件顶部;`logged_in` 是该文件已有辅助函数,若其内部调用了 `ops::login` 一并补参数。)
 
-Run: `cargo test -p octoterm-cloud-client`
+Run: `cargo test -p gateterm-cloud-client`
 Expected: 编译失败(签名不匹配 / 方法不存在)。
 
 - [ ] **Step 3: 实现**
@@ -156,7 +156,7 @@ Expected: 编译失败(签名不匹配 / 方法不存在)。
   ```
 
 调用方:
-- `crates/server/src/cloud/cli.rs`:`ops::register(..., &default_label())` 与 `ops::login(...)` 在 label 前补 `ClientKind::Server`(import `octoterm_cloud_client::ClientKind`)。
+- `crates/server/src/cloud/cli.rs`:`ops::register(..., &default_label())` 与 `ops::login(...)` 在 label 前补 `ClientKind::Server`(import `gateterm_cloud_client::ClientKind`)。
 - `crates/desktop/src/cloud_ops.rs`:同上补 `ClientKind::Server`。
 - `crates/server/src/cloud/notifier.rs`:`Notify { .. }` 字面量补 `expires_at: None`(Task 3 再改成真实值)。
 
@@ -181,7 +181,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - Modify: `crates/protocol/src/messages.rs`, `crates/server/src/cloud/mod.rs`, `crates/server/src/cloud/notifier.rs`, `crates/server/src/app.rs`, `crates/server/src/main.rs`, `crates/server/src/agent/history.rs`(测试里的 `AppState` 字面量), `crates/server/tests/common/mod.rs`, `crates/server/tests/ws_auth.rs`, `crates/server/tests/cloud_notifier.rs`, `crates/desktop/src/supervisor.rs`, `crates/desktop/src/main.rs`
 
 **Interfaces:**
-- Consumes: `octoterm_cloud_client::credentials::{self, Credentials}`
+- Consumes: `gateterm_cloud_client::credentials::{self, Credentials}`
 - Produces:
   - `ServerMsg::HelloOk { proto, os, cloud_server_id: Option<String> }`
   - `cloud::creds::SharedCreds`(`Clone + Default`):`new(Option<PathBuf>)`、`path() -> Option<&Path>`、`get() -> Option<Credentials>`、`server_id() -> Option<String>`
@@ -215,14 +215,14 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
         proto: u32,
         #[serde(default)]
         os: String,
-        /// 本机登录 Octoterm Cloud 后的 server_id。手机收到推送时用它找回本地保存的连接。
+        /// 本机登录 Gateterm Cloud 后的 server_id。手机收到推送时用它找回本地保存的连接。
         /// 新增可选字段,旧客户端忽略,不 bump proto。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cloud_server_id: Option<String>,
     },
 ```
 
-Run: `cargo test -p octoterm-protocol`
+Run: `cargo test -p gateterm-protocol`
 Expected: PASS。
 
 - [ ] **Step 3: `crates/server/src/cloud/creds.rs`**
@@ -238,7 +238,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use octoterm_cloud_client::credentials::{self, Credentials};
+use gateterm_cloud_client::credentials::{self, Credentials};
 
 type Cached = Option<((SystemTime, u64), Credentials)>;
 
@@ -309,7 +309,7 @@ impl SharedCreds {
 
 `notifier::spawn` 签名改为 `pub fn spawn(manager: Arc<SessionManager>, store: Arc<AgentSessionStore>, creds: SharedCreds)`;删除本文件的 `CredCache`;循环里 `cache.get()` 改为 `creds.get()`;`send()` 的 401 分支需要的路径改从 `creds.path()` 取(`let Some(path) = creds.path().map(Path::to_path_buf) else { return }` 在 spawn 开头取一次即可;`path()` 为 None 时直接 return,与旧行为「无路径不启动」一致)。
 
-`crates/server/tests/cloud_notifier.rs` 的 `Rig::new` 中 `notifier::spawn(..., Some(path))` 改为 `notifier::spawn(..., SharedCreds::new(Some(path)))`(import `octoterm_server::cloud::creds::SharedCreds`)。
+`crates/server/tests/cloud_notifier.rs` 的 `Rig::new` 中 `notifier::spawn(..., Some(path))` 改为 `notifier::spawn(..., SharedCreds::new(Some(path)))`(import `gateterm_server::cloud::creds::SharedCreds`)。
 
 - [ ] **Step 5: AppState 与握手**
 
@@ -331,7 +331,7 @@ impl SharedCreds {
 各 `AppState` 构造处补字段:
 - `crates/server/src/main.rs`:
   ```rust
-      let cloud = octoterm_server::cloud::creds::SharedCreds::new(octoterm_cloud_client::credentials::default_path());
+      let cloud = gateterm_server::cloud::creds::SharedCreds::new(gateterm_cloud_client::credentials::default_path());
       let state = AppState { manager, token, launchers, listen_port, agents, agent_sessions, cloud };
   ```
   notifier 调用改为 `notifier::spawn(state.manager.clone(), state.agent_sessions.clone(), state.cloud.clone());`
@@ -339,10 +339,10 @@ impl SharedCreds {
 - `crates/server/tests/common/mod.rs` 现有构造:加 `cloud: Default::default(),`;并新增(复制现有 spawn 函数体,只换 cloud 与参数):
   ```rust
   /// 带 Cloud 登录态的 server,用于验证握手回带 cloud_server_id。
-  pub async fn spawn_server_with_cloud(cloud: octoterm_server::cloud::creds::SharedCreds, token: &str) -> std::net::SocketAddr
+  pub async fn spawn_server_with_cloud(cloud: gateterm_server::cloud::creds::SharedCreds, token: &str) -> std::net::SocketAddr
   ```
   其余参数取现有测试最常用的默认值(缓冲 `1 << 20`、默认窗口策略、空 launcher、默认 `AgentsConfig`)。
-- `crates/desktop/src/supervisor.rs`:`Supervisor` 加字段 `cloud: octoterm_server::cloud::creds::SharedCreds`,在 `new()` 里 `SharedCreds::new(octoterm_cloud_client::credentials::default_path())`;`restart()` 构造 `AppState` 时 `cloud: self.cloud.clone()`;加访问器 `pub fn cloud_creds(&self) -> &octoterm_server::cloud::creds::SharedCreds { &self.cloud }`。
+- `crates/desktop/src/supervisor.rs`:`Supervisor` 加字段 `cloud: gateterm_server::cloud::creds::SharedCreds`,在 `new()` 里 `SharedCreds::new(gateterm_cloud_client::credentials::default_path())`;`restart()` 构造 `AppState` 时 `cloud: self.cloud.clone()`;加访问器 `pub fn cloud_creds(&self) -> &gateterm_server::cloud::creds::SharedCreds { &self.cloud }`。
 - `crates/desktop/src/main.rs`:notifier 调用第三个参数改为 `sup.cloud_creds().clone()`。
 
 `crates/server/tests/ws_auth.rs` 里精确比较 `HelloOk` 的字面量补 `cloud_server_id: None`。
@@ -354,9 +354,9 @@ impl SharedCreds {
 ```rust
 mod common;
 
-use octoterm_cloud_client::credentials::{self, Credentials};
-use octoterm_protocol::ServerMsg;
-use octoterm_server::cloud::creds::SharedCreds;
+use gateterm_cloud_client::credentials::{self, Credentials};
+use gateterm_protocol::ServerMsg;
+use gateterm_server::cloud::creds::SharedCreds;
 
 // 发 hello 并取回第一条控制消息;具体写法照搬 ws_auth.rs 里的同名步骤。
 async fn hello(addr: std::net::SocketAddr, token: &str) -> ServerMsg {
@@ -465,7 +465,7 @@ async fn permission_carries_expires_at() {
     let (url, seen) = fake_cloud(202).await;
     let rig = Rig::new(Some(&url));
     let expires = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 590) as u64;
-    let _rx = rig.store.insert_pending(octoterm_server::agent::store::PendingRequest {
+    let _rx = rig.store.insert_pending(gateterm_server::agent::store::PendingRequest {
         id: "p1".into(),
         agent_id: "claude-code".into(),
         agent_session_id: "s-1".into(),
@@ -487,7 +487,7 @@ async fn permission_carries_expires_at() {
 
 (`PendingRequest` 若还有本计划未列出的字段,按其定义补齐默认值。)
 
-Run: `cargo test -p octoterm-server --test cloud_notifier`
+Run: `cargo test -p gateterm-server --test cloud_notifier`
 Expected: 新测试失败。
 
 - [ ] **Step 3: 实现**
@@ -552,7 +552,7 @@ pub fn decide(prev: &Track, state: AgentState, pending: &Option<String>) -> Opti
 
 - [ ] **Step 4: 运行并提交**
 
-Run: `cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings`;另外 `cargo test -p octoterm-server --test cloud_notifier` 连跑 5 次确认稳定。
+Run: `cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings`;另外 `cargo test -p gateterm-server --test cloud_notifier` 连跑 5 次确认稳定。
 
 ```bash
 git add crates/server/src/cloud/notifier.rs crates/server/tests/cloud_notifier.rs
@@ -571,11 +571,11 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: `ops::{current, normalize_email, register, login, reset_password, logout, request_delete_code, delete_account, register_push_target, OpsError}`、`CloudClient::request_code`、`ClientKind::Device`、`CodePurpose`
-- Produces(Kotlin 包 `uniffi.octoterm_cloud_ffi`):
+- Produces(Kotlin 包 `uniffi.gateterm_cloud_ffi`):
   - `class CloudAccount(credPath: String, label: String)`:`status(): CloudStatus?`;suspend:`requestCode(url, email, purpose: Purpose)`、`register(url, email, code, password): CloudStatus`、`login(url, email, password): CloudStatus`、`resetPassword(url, email, code, newPassword)`、`logout(): Boolean`(true = Cloud 也已撤销)、`requestDeleteCode(): String`(邮箱)、`deleteAccount(password, code)`、`registerPushTarget(platform, token)`
   - `data class CloudStatus(email: String, url: String)`、`enum class Purpose { REGISTER, RESET }`
   - `sealed class CloudFfiException`:`NotLoggedIn`、`Unauthorized`、`RateLimited(retryAfter: ULong?)`、`Api(code: String)`、`Unreachable(message: String)`、`Local(message: String)`
-  - 构建产物:`liboctoterm_cloud_ffi.so`(arm64-v8a)与 `uniffi/octoterm_cloud_ffi/octoterm_cloud_ffi.kt`
+  - 构建产物:`libgateterm_cloud_ffi.so`(arm64-v8a)与 `uniffi/gateterm_cloud_ffi/gateterm_cloud_ffi.kt`
   - `scripts/build-android-ffi.sh <jniLibs 输出目录> <Kotlin 输出目录>`
 
 - [ ] **Step 1: 前置检查**
@@ -594,13 +594,13 @@ workspace `Cargo.toml` members 末尾加 `"crates/cloud-ffi"`。
 
 ```toml
 [package]
-name = "octoterm-cloud-ffi"
+name = "gateterm-cloud-ffi"
 version = "0.2.1"
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "octoterm_cloud_ffi"
+name = "gateterm_cloud_ffi"
 # cdylib 给 Android(JNA 加载),staticlib 留给 iOS,lib 给本 crate 的 Rust 测试
 crate-type = ["cdylib", "staticlib", "lib"]
 
@@ -613,7 +613,7 @@ required-features = ["cli"]
 cli = ["uniffi/cli"]
 
 [dependencies]
-octoterm-cloud-client = { path = "../cloud-client" }
+gateterm-cloud-client = { path = "../cloud-client" }
 thiserror = "2"
 uniffi = { version = "0.29", features = ["tokio"] }
 
@@ -646,7 +646,7 @@ use std::sync::{Arc, Mutex};
 use axum::Router;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{post, put};
-use octoterm_cloud_ffi::{CloudAccount, CloudFfiError};
+use gateterm_cloud_ffi::{CloudAccount, CloudFfiError};
 use serde_json::{Value, json};
 
 type Seen = Arc<Mutex<Vec<(String, Option<String>, Value)>>>;
@@ -726,13 +726,13 @@ async fn not_logged_in_is_its_own_error() {
 }
 ```
 
-Run: `cargo test -p octoterm-cloud-ffi`
+Run: `cargo test -p gateterm-cloud-ffi`
 Expected: 编译失败(lib 尚未实现)。
 
 - [ ] **Step 4: `crates/cloud-ffi/src/lib.rs`**
 
 ```rust
-//! 把 `octoterm-cloud-client::ops` 用 UniFFI 导出给移动端(Android 现在、iOS 将来)。
+//! 把 `gateterm-cloud-client::ops` 用 UniFFI 导出给移动端(Android 现在、iOS 将来)。
 //!
 //! 只做类型转换:账号逻辑、吊销规则、凭据文件都在 `ops` 里,三端行为因此一致。
 //! 错误只给错误码,文案由 App 按自己的语言生成。
@@ -742,8 +742,8 @@ uniffi::setup_scaffolding!();
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use octoterm_cloud_client::ops::{self, OpsError};
-use octoterm_cloud_client::{ClientKind, CloudClient, CloudError, CodePurpose};
+use gateterm_cloud_client::ops::{self, OpsError};
+use gateterm_cloud_client::{ClientKind, CloudClient, CloudError, CodePurpose};
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum CloudFfiError {
@@ -865,7 +865,7 @@ impl CloudAccount {
 
 > 若 UniFFI 0.29 的宏或 `async_runtime` 属性写法与上面不符(版本差异),按该版本文档做最小改动,并在报告中写明;Kotlin 侧接口名(`CloudAccount`、`CloudStatus`、`Purpose`、`CloudFfiException.*`)必须保持。
 
-Run: `cargo test -p octoterm-cloud-ffi`
+Run: `cargo test -p gateterm-cloud-ffi`
 Expected: 3 个测试 PASS。
 
 - [ ] **Step 5: `scripts/build-android-ffi.sh`**
@@ -883,10 +883,10 @@ OUT_KT="${2:?需要 Kotlin 输出目录}"
 : "${ANDROID_NDK_HOME:?需要 ANDROID_NDK_HOME(本机:/Users/hiro/frameworks/android-ndk-r30)}"
 
 cd "$ROOT"
-cargo ndk -t arm64-v8a -o "$OUT_JNI" build --release -p octoterm-cloud-ffi
+cargo ndk -t arm64-v8a -o "$OUT_JNI" build --release -p gateterm-cloud-ffi
 rm -rf "$OUT_KT"
-cargo run -q -p octoterm-cloud-ffi --features cli --bin uniffi-bindgen -- \
-  generate --library "$OUT_JNI/arm64-v8a/liboctoterm_cloud_ffi.so" \
+cargo run -q -p gateterm-cloud-ffi --features cli --bin uniffi-bindgen -- \
+  generate --library "$OUT_JNI/arm64-v8a/libgateterm_cloud_ffi.so" \
   --language kotlin --out-dir "$OUT_KT" --no-format
 ```
 
@@ -898,11 +898,11 @@ chmod +x scripts/build-android-ffi.sh
 
 ```bash
 T=$(mktemp -d) && ANDROID_NDK_HOME=${ANDROID_NDK_HOME:-/Users/hiro/frameworks/android-ndk-r30} scripts/build-android-ffi.sh "$T/jni" "$T/kt" \
-  && ls -la "$T/jni/arm64-v8a/liboctoterm_cloud_ffi.so" && find "$T/kt" -name '*.kt' \
+  && ls -la "$T/jni/arm64-v8a/libgateterm_cloud_ffi.so" && find "$T/kt" -name '*.kt' \
   && grep -c "class CloudAccount" $(find "$T/kt" -name '*.kt')
 ```
 
-Expected:`.so` 存在(记下大小写进报告);生成 `uniffi/octoterm_cloud_ffi/octoterm_cloud_ffi.kt`;`class CloudAccount` 计数 ≥ 1。
+Expected:`.so` 存在(记下大小写进报告);生成 `uniffi/gateterm_cloud_ffi/gateterm_cloud_ffi.kt`;`class CloudAccount` 计数 ≥ 1。
 
 - [ ] **Step 7: 全量并提交**
 

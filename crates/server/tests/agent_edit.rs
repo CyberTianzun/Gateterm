@@ -3,8 +3,8 @@
 //! 这是整个 agent 集成里**唯一会改用户文件**的逻辑,所以测试密度最高。三条验收线:
 //! 幂等、不碰别人的、卸载能还原。
 
-use octoterm_server::agent::edit::{apply_to_json, is_ours, ConfigEdit, InstallCtx};
-use octoterm_server::agent::find;
+use gateterm_server::agent::edit::{apply_to_json, is_ours, ConfigEdit, InstallCtx};
+use gateterm_server::agent::find;
 use serde_json::{json, Value};
 
 const PORT: u16 = 7683;
@@ -47,8 +47,8 @@ fn install_creates_permission_hook() {
     assert_eq!(hook["url"], format!("http://127.0.0.1:{PORT}/hook/claude-code/permission-request"));
     assert_eq!(hook["timeout"], 600, "阻塞式决策要给足人类反应时间");
     assert!(hook.get("async").is_none(), "决策类 hook 不能是 async,否则拿不到回答");
-    assert_eq!(hook["headers"]["Authorization"], "Bearer $OCTOTERM_HOOK_TOKEN");
-    assert_eq!(hook["allowedEnvVars"][0], "OCTOTERM_HOOK_TOKEN");
+    assert_eq!(hook["headers"]["Authorization"], "Bearer $GATETERM_HOOK_TOKEN");
+    assert_eq!(hook["allowedEnvVars"][0], "GATETERM_HOOK_TOKEN");
 }
 
 #[test]

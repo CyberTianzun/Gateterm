@@ -45,7 +45,7 @@ mod tests {
     #[test]
     fn a_second_acquire_on_the_same_file_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("octoterm.lock");
+        let path = dir.path().join("gateterm.lock");
 
         let first = acquire(&path).unwrap();
         assert!(first.is_some(), "第一个实例应当拿到锁");
@@ -57,7 +57,7 @@ mod tests {
     #[test]
     fn releasing_the_guard_lets_the_next_one_in() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("octoterm.lock");
+        let path = dir.path().join("gateterm.lock");
 
         drop(acquire(&path).unwrap());
         assert!(acquire(&path).unwrap().is_some(), "锁没被释放");

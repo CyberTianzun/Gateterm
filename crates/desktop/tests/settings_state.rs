@@ -1,6 +1,6 @@
-use octoterm_desktop::i18n::Locale;
-use octoterm_desktop::configfile::Editable;
-use octoterm_desktop::settings::state::{needs_rebind, FieldError, Form};
+use gateterm_desktop::i18n::Locale;
+use gateterm_desktop::configfile::Editable;
+use gateterm_desktop::settings::state::{needs_rebind, FieldError, Form};
 
 fn form(host: &str, port: &str, token: &str) -> Form {
     Form { host: host.into(), port: port.into(), token: token.into(), autostart: false, language: Default::default() }

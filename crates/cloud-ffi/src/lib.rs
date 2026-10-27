@@ -1,4 +1,4 @@
-//! 把 `octoterm-cloud-client::ops` 与 `octoterm-client-core::term` 用 UniFFI 导出给移动端(Android 现在、iOS 将来)。
+//! 把 `gateterm-cloud-client::ops` 与 `gateterm-client-core::term` 用 UniFFI 导出给移动端(Android 现在、iOS 将来)。
 //!
 //! 只做类型转换:账号逻辑、吊销规则、凭据文件都在 `ops` 里,终端状态机在 `client-core` 里,三端行为因此一致。
 //! 错误只给错误码,文案由 App 按自己的语言生成。
@@ -8,9 +8,9 @@ uniffi::setup_scaffolding!();
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use octoterm_client_core::term::{ClientTerm, ClientTermState};
-use octoterm_cloud_client::ops::{self, OpsError};
-use octoterm_cloud_client::{ClientKind, CloudClient, CloudError, CodePurpose};
+use gateterm_client_core::term::{ClientTerm, ClientTermState};
+use gateterm_cloud_client::ops::{self, OpsError};
+use gateterm_cloud_client::{ClientKind, CloudClient, CloudError, CodePurpose};
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum CloudFfiError {
@@ -116,13 +116,13 @@ impl CloudAccount {
     pub async fn finish_browser_login(&self, url: String, code: String, verifier: String, redirect_uri: String) -> Result<CloudStatus, CloudFfiError> {
         let client = CloudClient::new(&url);
         let auth = client.exchange_mobile_code(&code, &verifier, &redirect_uri).await?;
-        let creds = octoterm_cloud_client::Credentials {
+        let creds = gateterm_cloud_client::Credentials {
             url: url.trim().trim_end_matches('/').to_string(),
             email: auth.email,
             token: auth.token,
             server_id: None,
         };
-        if let Err(error) = octoterm_cloud_client::credentials::save(&self.path, &creds) {
+        if let Err(error) = gateterm_cloud_client::credentials::save(&self.path, &creds) {
             let _ = client.logout(&creds.token).await;
             return Err(CloudFfiError::Local { reason: error.to_string() });
         }

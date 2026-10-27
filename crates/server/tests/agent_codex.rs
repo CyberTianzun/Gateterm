@@ -2,9 +2,9 @@
 
 mod common;
 
-use octoterm_server::agent::detect::DetectEnv;
-use octoterm_server::agent::edit::{apply_to_json, is_ours, InstallCtx};
-use octoterm_server::agent::{find, store::hook_token, Confidence};
+use gateterm_server::agent::detect::DetectEnv;
+use gateterm_server::agent::edit::{apply_to_json, is_ours, InstallCtx};
+use gateterm_server::agent::{find, store::hook_token, Confidence};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
@@ -82,14 +82,14 @@ fn blocking_hook_gets_a_human_sized_timeout() {
         let hook = &doc["hooks"][event][0]["hooks"][0];
         assert_eq!(hook["timeout"], 3, "{event} 的超时不能超过 Codex 的上限");
         assert!(hook["command"].as_str().unwrap().contains(
-            &format!("/hook/codex/{}", octoterm_server::agent::edit::slug_of_event(event))
+            &format!("/hook/codex/{}", gateterm_server::agent::edit::slug_of_event(event))
         ));
     }
 }
 
 #[test]
 fn interrupt_keeps_the_session_but_session_end_finishes_it() {
-    use octoterm_protocol::AgentState;
+    use gateterm_protocol::AgentState;
     let adapter = find("codex").unwrap();
     assert_eq!(adapter.parse("Interrupt", &json!({})).unwrap().state, Some(AgentState::Idle));
     assert_eq!(adapter.parse("Stop", &json!({})).unwrap().state, Some(AgentState::Idle));
@@ -98,7 +98,7 @@ fn interrupt_keeps_the_session_but_session_end_finishes_it() {
 
 #[tokio::test]
 async fn ctrl_c_updates_the_http_snapshot_and_broadcasts_the_transition() {
-    use octoterm_protocol::{AgentState, ServerMsg};
+    use gateterm_protocol::{AgentState, ServerMsg};
     let addr = common::start_test_server_at("t", 1 << 16, Default::default(), vec![]).await;
     let mut ws = common::connect(&format!("ws://{addr}/ws")).await;
     let client = reqwest::Client::new();
@@ -111,7 +111,7 @@ async fn ctrl_c_updates_the_http_snapshot_and_broadcasts_the_transition() {
     ] {
         let response = client.post(format!("http://{addr}/hook/codex/{event}"))
             .bearer_auth(hook_token())
-            .header("X-Octoterm-Session", "9")
+            .header("X-Gateterm-Session", "9")
             .json(&json!({"session_id": "cx-ctrl-c"}))
             .send().await.unwrap();
         assert_eq!(response.status(), 200);
@@ -137,12 +137,12 @@ fn install_is_idempotent_and_uninstall_restores() {
 #[test]
 fn ownership_spans_both_transports() {
     let http = json!({"type":"http","url":"http://127.0.0.1:7683/hook/codex/stop"});
-    let cmd = json!({"type":"command","command":"\"/opt/octoterm-server\" hook http://127.0.0.1:7683/hook/codex/stop"});
+    let cmd = json!({"type":"command","command":"\"/opt/gateterm-server\" hook http://127.0.0.1:7683/hook/codex/stop"});
     assert!(is_ours(&http, PORT));
     assert!(is_ours(&cmd, PORT));
 
     for bad in [
-        json!({"type":"command","command":"\"/opt/octoterm-server\" hook http://127.0.0.1:9999/hook/codex/stop"}),
+        json!({"type":"command","command":"\"/opt/gateterm-server\" hook http://127.0.0.1:9999/hook/codex/stop"}),
         json!({"type":"command","command":"node /some/other-vendor-hook.js"}),
         json!({"type":"command","command":"curl http://evil.example/hook/codex/stop"}),
     ] {
@@ -155,10 +155,10 @@ fn ownership_spans_both_transports() {
 async fn hook_cli_reaches_the_server() {
     let addr = common::start_test_server_at("tok", 1 << 16, Default::default(), vec![]).await;
     let url = format!("http://127.0.0.1:{}/hook/codex/pre-tool-use", addr.port());
-    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_octoterm-server"))
+    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_gateterm-server"))
         .args(["hook", &url])
-        .env("OCTOTERM_SESSION_ID", "9")
-        .env("OCTOTERM_HOOK_TOKEN", hook_token())
+        .env("GATETERM_SESSION_ID", "9")
+        .env("GATETERM_HOOK_TOKEN", hook_token())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
@@ -196,10 +196,10 @@ async fn hook_cli_reaches_the_server() {
 /// 在客户端这一侧,而不是等服务端拒收。
 #[tokio::test]
 async fn hook_cli_stays_silent_without_env() {
-    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_octoterm-server"))
+    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_gateterm-server"))
         .args(["hook", "http://127.0.0.1:1/hook/codex/stop"])
-        .env_remove("OCTOTERM_SESSION_ID")
-        .env_remove("OCTOTERM_HOOK_TOKEN")
+        .env_remove("GATETERM_SESSION_ID")
+        .env_remove("GATETERM_HOOK_TOKEN")
         .stdin(std::process::Stdio::null())
         .output()
         .await
@@ -211,10 +211,10 @@ async fn hook_cli_stays_silent_without_env() {
 /// 宿主不在时也必须安静退出:绝不能把 agent 卡住,也绝不能打印出什么被当成决策。
 #[tokio::test]
 async fn hook_cli_survives_a_dead_host() {
-    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_octoterm-server"))
+    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_gateterm-server"))
         .args(["hook", "http://127.0.0.1:1/hook/codex/stop"])
-        .env("OCTOTERM_SESSION_ID", "1")
-        .env("OCTOTERM_HOOK_TOKEN", "whatever")
+        .env("GATETERM_SESSION_ID", "1")
+        .env("GATETERM_HOOK_TOKEN", "whatever")
         .stdin(std::process::Stdio::null())
         .output()
         .await

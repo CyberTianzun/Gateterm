@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use octoterm_protocol::{ServerMsg, SessionEventKind, SessionInfo};
+use gateterm_protocol::{ServerMsg, SessionEventKind, SessionInfo};
 use tokio::sync::broadcast;
 
 use crate::config::WindowSize;
@@ -74,7 +74,7 @@ impl SessionManager {
         cwd: Option<String>,
     ) -> Result<Arc<Session>> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        let name = name.unwrap_or_else(|| format!("octoterm-{id}"));
+        let name = name.unwrap_or_else(|| format!("gateterm-{id}"));
         let launch = Launch { command, cwd };
         let session =
             match Session::spawn(id, name, 80, 24, launch, self.buffer_cap, self.window_size) {

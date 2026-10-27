@@ -131,7 +131,7 @@ const BUILTIN = [
 ];
 
 function sparseCheckout() {
-  const dir = mkdtempSync(join(tmpdir(), "octoterm-themes-"));
+  const dir = mkdtempSync(join(tmpdir(), "gateterm-themes-"));
   const git = (...args) => execFileSync("git", ["-C", dir, ...args], { stdio: ["ignore", "pipe", "inherit"] });
   execFileSync("git", ["clone", "--depth", "1", "--filter=blob:none", "--sparse", REPO, dir], {
     stdio: ["ignore", "pipe", "inherit"],

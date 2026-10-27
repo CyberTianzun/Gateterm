@@ -1,4 +1,4 @@
-package ai.eclosion.octoterm.diagnostics.fontmetrics;
+package ai.eclosion.gateterm.diagnostics.fontmetrics;
 
 import android.app.Activity;
 import android.app.Instrumentation;
@@ -12,10 +12,10 @@ import android.util.DisplayMetrics;
 import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
-import ai.eclosion.octoterm.android.term.TerminalFontMetrics;
-import ai.eclosion.octoterm.android.term.FontAdvance;
+import ai.eclosion.gateterm.android.term.TerminalFontMetrics;
+import ai.eclosion.gateterm.android.term.FontAdvance;
 
-/** Standalone instrumentation: does not launch or replace the Octoterm app. */
+/** Standalone instrumentation: does not launch or replace the Gateterm app. */
 public final class FontMetricsProbe extends Instrumentation {
     private String mode = "metrics";
     @Override public void onCreate(Bundle arguments) {
@@ -110,7 +110,7 @@ public final class FontMetricsProbe extends Instrumentation {
                         .put("inkBounds", new JSONArray(new int[] {bounds.left, bounds.top, bounds.right, bounds.bottom})));
                 }
                 row.put("samples", samples);
-                Log.i("OctotermFontMetrics", row.toString());
+                Log.i("GatetermFontMetrics", row.toString());
                 rows.put(row);
               }
             }

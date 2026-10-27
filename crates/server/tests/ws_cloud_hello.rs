@@ -1,8 +1,8 @@
 mod common;
 
-use octoterm_cloud_client::credentials::{self, Credentials};
-use octoterm_protocol::ServerMsg;
-use octoterm_server::cloud::creds::SharedCreds;
+use gateterm_cloud_client::credentials::{self, Credentials};
+use gateterm_protocol::ServerMsg;
+use gateterm_server::cloud::creds::SharedCreds;
 
 async fn hello(addr: std::net::SocketAddr, token: &str) -> ServerMsg {
     common::hello_and_first_control(addr, token).await

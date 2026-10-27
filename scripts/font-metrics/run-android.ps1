@@ -21,7 +21,7 @@ function Check-Exit([string]$Step) {
     if ($LASTEXITCODE -ne 0) { throw "$Step failed ($LASTEXITCODE)" }
 }
 
-$termSource = Join-Path $repoRoot 'clients/android/app/src/main/java/ai/eclosion/octoterm/android/term'
+$termSource = Join-Path $repoRoot 'clients/android/app/src/main/java/ai/eclosion/gateterm/android/term'
 & "$env:JAVA_HOME/bin/javac.exe" -encoding UTF-8 --release 8 -classpath $androidJar -d $classes (Join-Path $PSScriptRoot 'FontMetricsProbe.java') (Join-Path $PSScriptRoot 'BlockGlyphProbe.java') (Join-Path $termSource 'FontAdvance.java') (Join-Path $termSource 'TerminalCellMetrics.java') (Join-Path $termSource 'TerminalFontMetrics.java') (Join-Path $termSource 'TerminalBlockGlyphs.java')
 Check-Exit 'javac'
 $classFiles = @(Get-ChildItem -LiteralPath $classes -Recurse -Filter '*.class' | Select-Object -ExpandProperty FullName)
@@ -37,14 +37,14 @@ $apk = Join-Path $outputDir 'probe.apk'
 Check-Exit 'zipalign'
 $keystore = Join-Path $outputDir 'probe.keystore'
 if (-not (Test-Path -LiteralPath $keystore)) {
-    & "$env:JAVA_HOME/bin/keytool.exe" -genkeypair -keystore $keystore -storepass android -keypass android -alias probe -keyalg RSA -keysize 2048 -validity 3650 -dname 'CN=Octoterm Diagnostics'
+    & "$env:JAVA_HOME/bin/keytool.exe" -genkeypair -keystore $keystore -storepass android -keypass android -alias probe -keyalg RSA -keysize 2048 -validity 3650 -dname 'CN=Gateterm Diagnostics'
     Check-Exit 'keytool'
 }
 & (Join-Path $toolDir 'apksigner.bat') sign --ks $keystore --ks-pass pass:android --key-pass pass:android --ks-key-alias probe $apk
 Check-Exit 'apksigner'
 & $adb @deviceArgs install -r $apk
 Check-Exit 'install probe'
-$log = & $adb @deviceArgs shell am instrument -w -e mode $Mode ai.eclosion.octoterm.diagnostics.fontmetrics/.FontMetricsProbe
+$log = & $adb @deviceArgs shell am instrument -w -e mode $Mode ai.eclosion.gateterm.diagnostics.fontmetrics/.FontMetricsProbe
 Check-Exit 'run probe'
 $stem = if ($Mode -eq 'blocks') { 'android-blocks' } else { 'android' }
 $prefix = if ($Mode -eq 'blocks') { 'BLOCK_GLYPHS_JSON=' } else { 'FONT_METRICS_JSON=' }

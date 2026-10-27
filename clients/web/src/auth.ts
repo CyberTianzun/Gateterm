@@ -8,10 +8,10 @@ export function readToken(promptMessage: string): string {
     history.replaceState(history.state, "", `${location.pathname}${location.search}${hash ? `#${hash}` : ""}`);
   }
   let saved: string | null = null;
-  try { saved = localStorage.getItem("octoterm-token"); } catch { /* Storage may be unavailable. */ }
+  try { saved = localStorage.getItem("gateterm-token"); } catch { /* Storage may be unavailable. */ }
   const token = fromHash || saved || (prompt(promptMessage) ?? "").trim();
   if (token) {
-    try { localStorage.setItem("octoterm-token", token); } catch { /* The caller retains it for this page. */ }
+    try { localStorage.setItem("gateterm-token", token); } catch { /* The caller retains it for this page. */ }
   }
   return token;
 }

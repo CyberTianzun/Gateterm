@@ -1,10 +1,10 @@
-# octoterm wire protocol
+# gateterm wire protocol
 
 ```
-proto_version: 1        # octoterm_protocol::PROTO_VERSION
+proto_version: 1        # gateterm_protocol::PROTO_VERSION
 status:        normative
 audience:      implementers; AI reviewers of protocol changes
-scope:         everything on the wire between a client and octoterm-server
+scope:         everything on the wire between a client and gateterm-server
 ```
 
 ## 0. How to use this document
@@ -78,10 +78,10 @@ scope:         everything on the wire between a client and octoterm-server
   to repeat, no effect on any session. A client MAY call one at any time,
   including before the WebSocket handshake.
 - **T10a** A **mutating subset** exists under `/api/agents/`. These routes are
-  `POST`, change state outside octoterm (they edit another program's
+  `POST`, change state outside gateterm (they edit another program's
   configuration file), and are gated by server configuration
   (`agents.install_enabled`, default on) — a disabled deployment answers `403`.
-  `purge` is the one exception: it only ever removes octoterm's own hooks, so it
+  `purge` is the one exception: it only ever removes gateterm's own hooks, so it
   is not gated.
   They are still session-independent: nothing here concerns a session, a channel
   or a byte stream. Rationale for keeping them off the control channel: a new
@@ -100,11 +100,11 @@ scope:         everything on the wire between a client and octoterm-server
 | `GET /api/launchers` | `{ "launchers": [Launcher] }` | see §2.2 |
 | `GET /api/cloud/status` | `{ "connected": bool, "email": string \| null }` | current server's saved Cloud sign-in; reflects login/logout without restarting; `Cache-Control: no-store`; returns account identity only, never Cloud credentials |
 | `GET /api/update` | `{ "current_version": string, "update": { "version": string, "url": string } \| null, "checked_at": number \| null }` | authenticated, `Cache-Control: no-store`; process-wide cached result of startup and daily stable Release checks; reading it never calls GitHub; null means no known update; timestamps are Unix seconds |
-| `GET /api/agents` | `{ "agents": [AgentStatus] }` | which agents are installed on the host, and whether octoterm's integration is in place (`integration`: `not-installed` \| `installed` \| `stale-port` \| `outdated` \| `needs-activation`; the last one means installed and current, but the agent itself has not approved the hooks yet — e.g. Codex hooks not reviewed via `/hooks` — so they never fire) |
+| `GET /api/agents` | `{ "agents": [AgentStatus] }` | which agents are installed on the host, and whether gateterm's integration is in place (`integration`: `not-installed` \| `installed` \| `stale-port` \| `outdated` \| `needs-activation`; the last one means installed and current, but the agent itself has not approved the hooks yet — e.g. Codex hooks not reviewed via `/hooks` — so they never fire) |
 | `GET /api/agents/{id}/plan` | `{ "install": [...], "uninstall": [...] }` | dry run: what editing the agent's config would do |
 | `POST /api/agents/{id}/install` | `{ "changed": bool, "files": [...] }` | T10a; `403` when disabled |
 | `POST /api/agents/{id}/uninstall` | same | T10a |
-| `POST /api/agents/{id}/purge` | same | T10a, ungated: removes every octoterm hook in that agent's config regardless of port or event |
+| `POST /api/agents/{id}/purge` | same | T10a, ungated: removes every gateterm hook in that agent's config regardless of port or event |
 | `GET /api/agents/sessions` | `{ "sessions": [AgentSession], "transcript_enabled": bool }` | full snapshot plus permission to read chat transcripts; a client re-fetches this after every reconnect (A5) |
 | `GET /api/agents/pending` | `{ "pending": [PendingRequest] }` | what is blocked waiting for a human, with the tool name and arguments needed to decide |
 | `POST /api/agents/answer` | `200` / `404` / `409` | T10a; answers one pending request. `409` = someone already answered it |
@@ -116,7 +116,7 @@ scope:         everything on the wire between a client and octoterm-server
   session". Entries are discovered server-side by *providers*: the built-in
   default shell, the operator's own `[[launcher]]` entries in `config.toml`, and
   **read-only** scans of other terminals' configuration already present on the
-  host (iTerm2, Windows Terminal). octoterm never writes those files.
+  host (iTerm2, Windows Terminal). gateterm never writes those files.
 - **T15** `Launcher` shape:
 
 ```
@@ -561,7 +561,7 @@ Every item MUST be answered in the proposal.
 - **U2** Client-side scrollback retention.
 - **U3** Reconnect backoff schedule (reference values in §10).
 - **U4** Session geometry before the first attach (currently 80×24).
-- **U5** Default session name (currently `octoterm-{id}`).
+- **U5** Default session name (currently `gateterm-{id}`).
 - **U6** Multi-user identity or authorization beyond one shared bearer token.
 - **U7** What the client renders; the server assumes only a VT-compatible sink.
 - **U8** Which geometry merge policy a deployment runs, and whether it offers
@@ -573,7 +573,7 @@ Every item MUST be answered in the proposal.
 
 ## 14. Known deviations from the design doc
 
-- **DEV1** `docs/superpowers/specs/2026-08-16-octoterm-design.md` describes
+- **DEV1** `docs/superpowers/specs/2026-08-16-gateterm-design.md` describes
   output coalescing as "~16 ms timer or size threshold". The implementation has
   only the size threshold (non-blocking drain up to 64 KiB in `pump_output`).
   Conformant with D3; the design doc's wording is stale.
@@ -599,7 +599,7 @@ Every item MUST be answered in the proposal.
   `POST /api/agents/answer`, because a new client→server type is breaking (X3)
   and the request is low-frequency.
 - **A3** `session` is the hosted session the agent belongs to. It is optional
-  only so that supporting agents outside octoterm later does not require a bump
+  only so that supporting agents outside gateterm later does not require a bump
   (X4); the current server always sets it.
 - **A4** `pending` is non-null exactly when the agent is blocked waiting for a
   human answer. Its value is the natural key (C5) a client passes back to
@@ -648,8 +648,8 @@ Every item MUST be answered in the proposal.
 - **A8** The server↔agent side of this feature (how hooks are installed into a
   third-party agent's configuration, and the `/hook/...` ingress they call) is
   **not part of this document**: it is not on the wire between a client and
-  octoterm. It is specified in
-  `docs/superpowers/specs/2026-08-18-octoterm-agent-integration-design.md`.
+  gateterm. It is specified in
+  `docs/superpowers/specs/2026-08-18-gateterm-agent-integration-design.md`.
   Clients neither see nor depend on it.
 
 ### 15.1 Host agent session history
@@ -673,7 +673,7 @@ Disabling transcript reading returns 403 before any history files are scanned.
   `max_sessions` gives the limit to display at the end of the list. Each entry contains
   `{agent_id, agent_name, agent_session_id, title, description, model, cwd, updated_at,
   terminal_session, can_resume, unavailable_reason}`. Timestamps are Unix
-  seconds; `terminal_session` is an optional live Octoterm session ID. Clients
+  seconds; `terminal_session` is an optional live Gateterm session ID. Clients
   MUST distinguish a truncated scan or skipped records from a complete result.
   `description` is a bounded recent conversation excerpt, excluding tool output;
   `model` is optional recorded metadata. Named titles take priority over the first

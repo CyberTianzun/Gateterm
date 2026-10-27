@@ -19,12 +19,12 @@ pub struct Credentials {
     pub server_id: Option<String>,
 }
 
-/// 与 config.toml、hook-token 同目录。`OCTOTERM_CLOUD_FILE` 可覆盖(测试与冒烟用)。
+/// 与 config.toml、hook-token 同目录。`GATETERM_CLOUD_FILE` 可覆盖(测试与冒烟用)。
 pub fn default_path() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("OCTOTERM_CLOUD_FILE").filter(|p| !p.is_empty()) {
+    if let Some(p) = std::env::var_os("GATETERM_CLOUD_FILE").filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(p));
     }
-    directories::ProjectDirs::from("", "", "octoterm").map(|d| d.config_dir().join("cloud.json"))
+    directories::ProjectDirs::from("", "", "gateterm").map(|d| d.config_dir().join("cloud.json"))
 }
 
 pub fn load(path: &Path) -> io::Result<Option<Credentials>> {

@@ -4,7 +4,7 @@
 //!
 //! 1. **Codex 不支持 `type: "http"`**。它的 `HookHandlerConfig` 只有
 //!    command / prompt / agent 三个变体(从 codex 二进制的类型名读出来)。所以这里的
-//!    hook 指向 octoterm 自己的二进制(`hook <url>` 子命令,见 [`super::hook_cli`]),
+//!    hook 指向 gateterm 自己的二进制(`hook <url>` 子命令,见 [`super::hook_cli`]),
 //!    由它转发到本地 server。
 //! 2. **配置在 `~/.codex/hooks.json`**,不在 config.toml 里,而且 group **不带
 //!    `matcher`**(本机上被 Codex 接受并信任过的那份就是这个形状)。
@@ -32,7 +32,7 @@ use super::detect::{self, DetectEnv};
 use super::edit::{is_ours, slug_of_event, ConfigEdit, EditOp, InstallCtx};
 use super::store::{Decision, Update};
 use super::{AgentAdapter, Confidence, Detected, Integration};
-use octoterm_protocol::AgentState;
+use gateterm_protocol::AgentState;
 
 pub struct Codex;
 

@@ -1,9 +1,9 @@
 //! Grok 的 `updates.jsonl` 解析。夹具是 grok 1.0.52 真实跑出来的一次会话(思考、正文、
 //! 一次成功的 shell、一次失败的 read_file),只把临时目录路径换成了 `/tmp/grokprobe`。
 
-use octoterm_server::agent::find;
-use octoterm_server::agent::grok_transcript::{locate, parse};
-use octoterm_server::agent::transcript::{Block, Role};
+use gateterm_server::agent::find;
+use gateterm_server::agent::grok_transcript::{locate, parse};
+use gateterm_server::agent::transcript::{Block, Role};
 use std::fs;
 
 const FIXTURE: &str = include_str!("fixtures/grok-updates.jsonl");
@@ -49,7 +49,7 @@ fn tools_and_results_carry_the_useful_bits() {
             _ => None,
         })
         .collect();
-    assert_eq!(uses, [("run_terminal_command", "echo octoterm-probe"), ("read_file", "probe.txt")]);
+    assert_eq!(uses, [("run_terminal_command", "echo gateterm-probe"), ("read_file", "probe.txt")]);
 
     let results: Vec<_> = msgs
         .iter()
@@ -59,7 +59,7 @@ fn tools_and_results_carry_the_useful_bits() {
         })
         .collect();
     assert!(!results[0].0 && results[0].1.contains("does not exist"), "read_file 失败要标成失败");
-    assert!(results[1].0 && results[1].1.trim() == "octoterm-probe");
+    assert!(results[1].0 && results[1].1.trim() == "gateterm-probe");
 }
 
 /// id 取 `_meta.eventId`:换个窗口起点再读,同一条还是同一个 id —— 客户端去重靠它。

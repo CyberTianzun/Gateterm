@@ -1,10 +1,10 @@
 #![allow(dead_code)]
 
 use futures_util::{SinkExt, StreamExt};
-use octoterm_protocol::{ClientMsg, Frame, ServerMsg, CONTROL_CHANNEL, PROTO_VERSION};
-use octoterm_server::app::{serve, AppState};
-use octoterm_server::config::WindowSize;
-use octoterm_server::session::manager::SessionManager;
+use gateterm_protocol::{ClientMsg, Frame, ServerMsg, CONTROL_CHANNEL, PROTO_VERSION};
+use gateterm_server::app::{serve, AppState};
+use gateterm_server::config::WindowSize;
+use gateterm_server::session::manager::SessionManager;
 use tokio_tungstenite::tungstenite::Message;
 
 pub async fn start_test_server(token: &str) -> String {
@@ -26,7 +26,7 @@ pub async fn start_test_server_at(
     token: &str,
     cap: usize,
     window_size: WindowSize,
-    specs: Vec<octoterm_server::config::LauncherSpec>,
+    specs: Vec<gateterm_server::config::LauncherSpec>,
 ) -> std::net::SocketAddr {
     start_test_server_with_agents(token, cap, window_size, specs, Default::default()).await
 }
@@ -37,18 +37,18 @@ pub async fn start_test_server_with_agents(
     token: &str,
     cap: usize,
     window_size: WindowSize,
-    specs: Vec<octoterm_server::config::LauncherSpec>,
-    agents: octoterm_server::config::AgentsConfig,
+    specs: Vec<gateterm_server::config::LauncherSpec>,
+    agents: gateterm_server::config::AgentsConfig,
 ) -> std::net::SocketAddr {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let state = AppState {
         manager: SessionManager::new(cap, window_size),
         token: token.into(),
-        launchers: std::sync::Arc::new(octoterm_server::launcher::providers(&specs)),
+        launchers: std::sync::Arc::new(gateterm_server::launcher::providers(&specs)),
         listen_port: addr.port(),
         agents,
-        agent_sessions: std::sync::Arc::new(octoterm_server::agent::store::AgentSessionStore::new()),
+        agent_sessions: std::sync::Arc::new(gateterm_server::agent::store::AgentSessionStore::new()),
         cloud: Default::default(),
     };
     tokio::spawn(async move { serve(listener, state).await.unwrap() });
@@ -57,7 +57,7 @@ pub async fn start_test_server_with_agents(
 
 /// 带 Cloud 登录态的 server,用于验证握手回带 cloud_server_id。
 pub async fn spawn_server_with_cloud(
-    cloud: octoterm_server::cloud::creds::SharedCreds,
+    cloud: gateterm_server::cloud::creds::SharedCreds,
     token: &str,
 ) -> std::net::SocketAddr {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -65,10 +65,10 @@ pub async fn spawn_server_with_cloud(
     let state = AppState {
         manager: SessionManager::new(1 << 20, WindowSize::default()),
         token: token.into(),
-        launchers: std::sync::Arc::new(octoterm_server::launcher::providers(&Vec::new())),
+        launchers: std::sync::Arc::new(gateterm_server::launcher::providers(&Vec::new())),
         listen_port: addr.port(),
         agents: Default::default(),
-        agent_sessions: std::sync::Arc::new(octoterm_server::agent::store::AgentSessionStore::new()),
+        agent_sessions: std::sync::Arc::new(gateterm_server::agent::store::AgentSessionStore::new()),
         cloud,
     };
     tokio::spawn(async move { serve(listener, state).await.unwrap() });

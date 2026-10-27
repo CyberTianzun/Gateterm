@@ -9,8 +9,8 @@ use common::{
     start_test_server_with, Ws,
 };
 use futures_util::SinkExt;
-use octoterm_protocol::{ClientMsg, ServerMsg};
-use octoterm_server::config::WindowSize;
+use gateterm_protocol::{ClientMsg, ServerMsg};
+use gateterm_server::config::WindowSize;
 use std::time::Duration;
 
 /// 等这个 channel 上的下一条 `resized`,忽略途中的其它控制消息。

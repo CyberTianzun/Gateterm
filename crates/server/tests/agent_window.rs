@@ -3,7 +3,7 @@
 //! 这部分**与 agent 无关** —— 三家的文件都是「一行一条、只追加」,只有「一行是什么
 //! 意思」属于各自的 adapter。C3 加 Codex / Grok 时这里一行都不用改。
 
-use octoterm_server::agent::transcript::{plan_read, INCREMENT_BYTES, WINDOW_BYTES};
+use gateterm_server::agent::transcript::{plan_read, INCREMENT_BYTES, WINDOW_BYTES};
 
 /// 第一屏要的是**最近**发生的事,不是这个会话最早的几句。
 #[test]
@@ -78,7 +78,7 @@ fn nothing_new_is_an_empty_plan() {
 fn a_mid_file_window_drops_the_partial_first_line() {
     let text = "AAAA\nBBBB\nCCCC\n";
     // 从 'B' 那一行的中间开始
-    let (body, consumed) = octoterm_server::agent::transcript::slice_window(text.as_bytes(), 6, true);
+    let (body, consumed) = gateterm_server::agent::transcript::slice_window(text.as_bytes(), 6, true);
     assert_eq!(std::str::from_utf8(body).unwrap(), "CCCC\n", "半行没被丢掉");
     assert_eq!(consumed, text.len() as u64 - 6);
 }
@@ -87,7 +87,7 @@ fn a_mid_file_window_drops_the_partial_first_line() {
 #[test]
 fn a_resumed_window_keeps_its_first_line() {
     let text = "AAAA\nBBBB\n";
-    let (body, _) = octoterm_server::agent::transcript::slice_window(text.as_bytes(), 5, false);
+    let (body, _) = gateterm_server::agent::transcript::slice_window(text.as_bytes(), 5, false);
     assert_eq!(std::str::from_utf8(body).unwrap(), "BBBB\n");
 }
 
@@ -96,15 +96,15 @@ fn a_resumed_window_keeps_its_first_line() {
 #[test]
 fn a_trailing_partial_line_is_not_consumed() {
     let text = "AAAA\nBBB";
-    let (body, consumed) = octoterm_server::agent::transcript::slice_window(text.as_bytes(), 0, false);
+    let (body, consumed) = gateterm_server::agent::transcript::slice_window(text.as_bytes(), 0, false);
     assert_eq!(std::str::from_utf8(body).unwrap(), "AAAA\n");
     assert_eq!(consumed, 5);
 }
 
 /* ---------- 与真实文件接起来 ---------- */
 
-use octoterm_server::agent::claude_transcript::parse;
-use octoterm_server::agent::transcript::{decode_cursor, read_window};
+use gateterm_server::agent::claude_transcript::parse;
+use gateterm_server::agent::transcript::{decode_cursor, read_window};
 use std::io::Write;
 
 fn line(id: &str, text: &str) -> String {
@@ -201,7 +201,7 @@ fn cursor_round_trips_and_rejects_garbage() {
 /// 而「碰巧在范围内」不是限额。
 #[test]
 fn a_reset_window_is_capped_by_bytes_not_just_by_count() {
-    use octoterm_server::agent::transcript::{clamp_for_reset, MAX_BLOCK_BYTES, MAX_RESPONSE_BYTES};
+    use gateterm_server::agent::transcript::{clamp_for_reset, MAX_BLOCK_BYTES, MAX_RESPONSE_BYTES};
     let fat: Vec<_> = (0..100)
         .map(|i| {
             parse(
@@ -230,7 +230,7 @@ fn a_reset_window_is_capped_by_bytes_not_just_by_count() {
 /// 真实会话里很容易触发:一次 cat 大文件的 tool_result,单行超过 256 KiB 很正常。
 #[test]
 fn an_overlong_line_never_stalls_the_cursor() {
-    use octoterm_server::agent::transcript::INCREMENT_BYTES;
+    use gateterm_server::agent::transcript::INCREMENT_BYTES;
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("t.jsonl");
     std::fs::write(&p, line("m0", "short")).unwrap();
@@ -253,7 +253,7 @@ fn an_overlong_line_never_stalls_the_cursor() {
 /// 长到连首屏窗口都放不下时,宁可丢掉这一条也绝不停在原地。
 #[test]
 fn a_line_longer_than_the_window_is_skipped_not_stalled() {
-    use octoterm_server::agent::transcript::WINDOW_BYTES;
+    use gateterm_server::agent::transcript::WINDOW_BYTES;
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("t.jsonl");
     std::fs::write(&p, line("m0", "short")).unwrap();

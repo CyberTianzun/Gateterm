@@ -4,7 +4,7 @@ use axum::Router;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post, put};
-use octoterm_cloud_ffi::{CloudAccount, CloudFfiError, Purpose};
+use gateterm_cloud_ffi::{CloudAccount, CloudFfiError, Purpose};
 use serde_json::{Value, json};
 
 type Seen = Arc<Mutex<Vec<(String, Option<String>, Value)>>>;
@@ -140,7 +140,7 @@ async fn browser_login_saves_device_credentials_and_registers_pushes() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("cloud.json");
     let account = CloudAccount::new(path.display().to_string(), "Android phone".into());
-    let callback = "ai.eclosion.octoterm.android://cloud/auth/callback";
+    let callback = "ai.eclosion.gateterm.android://cloud/auth/callback";
     let status = account
         .finish_browser_login(
             url,
@@ -151,7 +151,7 @@ async fn browser_login_saves_device_credentials_and_registers_pushes() {
         .await
         .unwrap();
     assert_eq!(status.email, "phone@example.com");
-    let creds = octoterm_cloud_client::credentials::load(&path)
+    let creds = gateterm_cloud_client::credentials::load(&path)
         .unwrap()
         .unwrap();
     assert!(creds.server_id.is_none());
@@ -182,7 +182,7 @@ async fn browser_login_revokes_the_issued_token_when_local_save_fails() {
             url,
             "code".into(),
             "verifier".into(),
-            "ai.eclosion.octoterm.android://cloud/auth/callback".into(),
+            "ai.eclosion.gateterm.android://cloud/auth/callback".into(),
         )
         .await
         .unwrap_err();

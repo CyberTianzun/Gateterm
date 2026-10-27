@@ -35,7 +35,7 @@ class Socket {
 }
 window.WebSocket=Socket;
 """
-release_url = 'https://github.com/CyberTianzun/Octoterm/releases/tag/release-v0.3.0'
+release_url = 'https://github.com/CyberTianzun/Gateterm/releases/tag/release-v0.3.0'
 results = []
 try:
     with sync_playwright() as p:

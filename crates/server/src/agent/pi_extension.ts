@@ -1,16 +1,16 @@
-// octoterm-managed — 由 octoterm 生成,卸载 / 清空会删掉这个文件。不要手改:重新安装会覆盖。
+// gateterm-managed — 由 gateterm 生成,卸载 / 清空会删掉这个文件。不要手改:重新安装会覆盖。
 //
-// 把 pi 的生命周期事件报给本机的 octoterm(会话状态、聊天视图)。只在 octoterm 托管的
-// 会话里生效:那里的环境里有 OCTOTERM_HOOK_TOKEN / OCTOTERM_SESSION_ID;在别处启动的
+// 把 pi 的生命周期事件报给本机的 gateterm(会话状态、聊天视图)。只在 gateterm 托管的
+// 会话里生效:那里的环境里有 GATETERM_HOOK_TOKEN / GATETERM_SESSION_ID;在别处启动的
 // pi 拿不到这两个变量,这个扩展什么都不做。
 //
-// 只上报、不拦截:所有请求都是发出去就不管,失败静默 —— octoterm 没在跑时 pi 照常用。
+// 只上报、不拦截:所有请求都是发出去就不管,失败静默 —— gateterm 没在跑时 pi 照常用。
 
-const BASE = "__OCTOTERM_HOOK_BASE__";
+const BASE = "__GATETERM_HOOK_BASE__";
 
 export default function (pi: any) {
-  const token = process.env.OCTOTERM_HOOK_TOKEN;
-  const session = process.env.OCTOTERM_SESSION_ID;
+  const token = process.env.GATETERM_HOOK_TOKEN;
+  const session = process.env.GATETERM_SESSION_ID;
   if (!token || !session) return;
 
   const post = (event: string, ctx: any, extra: Record<string, unknown> = {}): Promise<void> => {
@@ -27,7 +27,7 @@ export default function (pi: any) {
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
-        "X-Octoterm-Session": session,
+        "X-Gateterm-Session": session,
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(3000),

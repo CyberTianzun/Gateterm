@@ -1,0 +1,375 @@
+# gateterm 聊天视图实施计划(C1:只读)
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 托管会话里跑着 Claude Code 时,客户端可以用**聊天视图**打开它 —— 结构化的
+消息流(说了什么、想了什么、调了哪个工具、结果如何),而不是一块 80×24 的 VT 画面。
+C1 **只读**:发消息是 C2。
+
+**Architecture:** `transcript_path` 我们每次 hook 都收到、一直扔掉,现在存下来。服务端
+按窗口 + 游标读那个 JSONL,由 adapter 归一化成**客户端中立**的消息模型,走 HTTP 出去
+(不进控制通道 —— 一段对话可以几 MB,协议 R4 明令不许)。增量靠已有的 `agent-event`
+触发拉取,不新增推送机制,不动 proto。读不到就带**类型化的原因**回落到终端视图。
+
+**Tech Stack:** Rust 2024 / axum 0.8 / serde_json —— **不新增依赖**。
+
+设计依据:`docs/superpowers/specs/2026-08-21-gateterm-chat-view-design.md`
+
+## Global Constraints
+
+- **C1 只做 Claude Code,只做只读**。Codex / Grok 是 C3,发消息是 C2。
+- **不 bump `PROTO_VERSION`**。只新增 `/api/` 只读路由(T12 允许),不加控制消息。
+- **默认关**。`agents.transcript_enabled` 默认 `false` —— 装 hook 是一个决定,把整段
+  对话送上网是另一个决定,后者不能靠前者顺带同意。
+- **只读,不缓存,不落盘**。服务端不保存 transcript 副本,读完即走。
+- **绝不把 agent 的原始 schema 透传出去**(R13)。认不出的块归一化或丢弃。
+- 每个 task 结束时 `cargo clippy --workspace -- -D warnings` 与全量测试必须干净,
+  且**判据取退出码**,不要用管道尾巴(这条栽过两次)。
+
+## File Structure
+
+```
+crates/server/src/agent/transcript.rs        消息模型、窗口与游标(与 agent 无关的部分)
+crates/server/src/agent/claude_transcript.rs Claude 的 JSONL → 归一化消息
+crates/server/tests/agent_transcript.rs
+crates/server/tests/fixtures/claude-transcript.jsonl   从真实会话脱敏而来
+clients/web/src/chat.ts                      聊天视图的数据层
+```
+
+改动:`agent/{mod,store,claude_code,routes}.rs`、`config.rs`、`app.rs`、
+`clients/web/src/{main.ts,i18n.ts,style.css,index.html}`、`docs/protocol.md`。
+
+---
+
+### Task 1: 存下 transcript_path,定下消息模型
+
+**Files:**
+- Create: `crates/server/src/agent/transcript.rs`
+- Modify: `agent/{mod,store,claude_code}.rs`
+
+**Interfaces:**
+- Produces: `transcript::{Message, Block, Role}`;`AgentSession.transcript: Option<String>`
+
+- [x] **Step 1: 写失败的测试**
+
+```rust
+#[test] fn transcript_path_is_kept_from_the_hook_payload() {}
+#[test] fn a_later_event_without_the_path_does_not_clear_it() {}  // 部分更新不该抹掉已知字段
+```
+
+第二条对应已经犯过一次的错:`Update` 里 `None` 是「这次没说」,不是「清空」。
+
+- [x] **Step 2: 消息模型**
+
+```rust
+#[derive(Serialize)] #[serde(rename_all = "kebab-case")]
+pub enum Role { User, Assistant, System }
+
+#[derive(Serialize)] #[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum Block {
+    Text { text: String },
+    Thinking { text: String },
+    /// `input` 是**给人看的一行**,不是原始 JSON:客户端要展示「它要干什么」,
+    /// 而原始入参可以很大;要看细节,终端视图在那儿。
+    ToolUse { name: String, input: String },
+    ToolResult { ok: bool, text: String },
+}
+
+#[derive(Serialize)]
+pub struct Message { pub id: String, pub role: Role, pub ts: Option<u64>, pub blocks: Vec<Block> }
+```
+
+**不透传未知块类型** —— 认不出的归一化成 `Text` 或直接丢弃。这是 R13 要挡的事。
+
+- [x] **Step 3: 存路径**
+
+`Update` 加 `transcript: Option<String>`,`claude_code::parse` 从 payload 取
+`transcript_path`,`AgentSession` 存下来。只覆盖有值的字段(和 `cwd` / `title` 同规则)。
+
+---
+
+### Task 2: Claude 的 transcript 解析
+
+**Files:**
+- Create: `crates/server/src/agent/claude_transcript.rs`
+- Create: `crates/server/tests/fixtures/claude-transcript.jsonl`(脱敏样本)
+- Modify: `agent/mod.rs`(trait 加 `parse_transcript`)、`claude_code.rs`
+
+- [x] **Step 1: 造脱敏 fixture**
+
+从本机一份**真实**会话抽 30~50 行,把文本内容替换成占位符,**保留结构**:
+`user` / `assistant` 记录、`text` / `thinking` / `tool_use` / `tool_result` 四种块、
+以及 `attachment` / `system` / `queue-operation` 这些**要被跳过**的记录类型。
+
+合成数据在这里没有价值 —— 真实风险全在「真文件里到底长什么样」。
+
+- [x] **Step 2: 写失败的测试**
+
+```rust
+#[test] fn four_block_kinds_are_normalized() {}
+#[test] fn non_message_records_are_skipped() {}      // attachment / system / queue-operation
+#[test] fn unknown_block_kinds_are_dropped_not_leaked() {}   // R13
+#[test] fn a_broken_line_does_not_kill_the_window() {}       // 一行坏 JSON 只丢那一行
+#[test] fn tool_input_is_flattened_to_one_line() {}
+#[test] fn tool_result_error_is_marked() {}
+#[test] fn ids_are_stable_across_two_reads() {}      // 增量去重全靠它
+```
+
+倒数第二条是增量的地基:同一条消息读两次必须得到同一个 `id`,否则客户端会重复渲染。
+
+- [x] **Step 3: 实现**
+
+`fn parse_transcript(&self, text: &str) -> Option<Vec<Message>>`。整段文本进,消息出;
+**逐行解析,单行失败只跳过那一行** —— 一个坏字节不该让整个窗口变成「读不了」。
+
+`id` 取记录自带的 `uuid` / `message.id`;都没有就用「窗口内序号 + 角色 + 内容哈希」,
+保证同样的输入得到同样的 id。
+
+---
+
+### Task 3: 窗口与游标
+
+**Files:**
+- Modify: `agent/transcript.rs`
+- Create: `crates/server/tests/agent_transcript.rs`
+
+窗口与游标**与 agent 无关**,所以放在共享模块;只有「一行是什么意思」是 adapter 的事。
+这是 C3 加 Codex/Grok 时能省下大量重复的地方。
+
+- [x] **Step 1: 写失败的测试**
+
+```rust
+#[test] fn first_read_returns_the_tail_not_the_head() {}      // 第一屏要最近的,不是最早的
+#[test] fn window_starts_at_a_line_boundary() {}              // 从末尾回切 N 字节会切在半行上
+#[test] fn cursor_resumes_exactly_where_it_left_off() {}
+#[test] fn a_shrunk_file_invalidates_the_cursor() {}          // compact / 新会话
+#[test] fn message_and_byte_caps_are_enforced() {}
+#[test] fn oversized_block_is_truncated_and_marked() {}
+```
+
+第二条是这一 task 最容易写错的地方:按字节回切窗口一定会切在半行上,那半行必须丢掉,
+否则第一条消息是残的。
+
+- [x] **Step 2: 实现**
+
+```rust
+pub struct Window { pub messages: Vec<Message>, pub cursor: String, pub reset: bool }
+```
+
+游标是**服务端发的不透明串**(内部是 `offset:len`)。`len` 用来判定文件是否变小/换过:
+变小就 `reset: true` + 整窗重发,客户端整段替换而不是往后追加。
+
+限额(同时写进 protocol.md §10):单次 200 条 / 256 KiB;单块 8 KiB(超出截断并标记);
+窗口 = 文件末尾 4 MiB。
+
+---
+
+### Task 4: `GET /api/agents/messages` 与回落
+
+**Files:**
+- Modify: `agent/routes.rs`、`app.rs`、`config.rs`
+
+**Interfaces:**
+- Produces: `GET /api/agents/messages?agent_id=&agent_session_id=&after=`
+
+- [x] **Step 1: 写失败的测试**
+
+```rust
+#[tokio::test] async fn disabled_by_default_falls_back_to_terminal() {}
+#[tokio::test] async fn missing_transcript_path_falls_back() {}
+#[tokio::test] async fn unreadable_file_falls_back() {}
+#[tokio::test] async fn unknown_agent_session_is_404() {}
+#[tokio::test] async fn requires_the_client_bearer() {}
+```
+
+- [x] **Step 2: 回落是带类型的,不是空数组**
+
+```jsonc
+{ "source": "transcript", "messages": [...], "cursor": "...", "reset": false }
+{ "source": "terminal", "reason": "disabled" | "no-transcript-path" | "unsupported-agent"
+                                  | "unreadable" | "parse-failed" }
+```
+
+抄的是 orca 的 `source` + `fallbackReason`。他们有个 bug 恰恰是这条没兜住 ——
+Windows 上 Codex 会话「聊天界面渲染出一个空 transcript」。**空聊天框比说清原因更糟**:
+用户会以为对话真的是空的。
+
+- [x] **Step 3: 配置与门控**
+
+```toml
+[agents]
+transcript_enabled = false   # 默认关
+```
+
+关着时不是 403 而是 `source: "terminal", reason: "disabled"` —— 这不是错误,是「你没开」,
+客户端据此显示一句说明 + 一个「用终端打开」。
+
+- [x] **Step 4: 读文件是阻塞 IO**
+
+`spawn_blocking`,照抄 `launchers_handler` 与 `agent::routes::list` 的写法。
+
+---
+
+### Task 5: web 端聊天视图(只读)
+
+**Files:**
+- Create: `clients/web/src/chat.ts`
+- Modify: `clients/web/src/{main.ts,i18n.ts,style.css,index.html}`
+
+- [x] **Step 1: 数据层 + 测试**
+
+`chat.ts` 只放纯逻辑与 fetch,能被 node:test 直接跑(和 `agents.ts` 同规矩):
+
+```ts
+export async function fetchMessages(token, agentId, agentSessionId, after?): Promise<ChatWindow>
+/** reset 时整段替换,否则按 id 去重后追加 —— 服务端可能重发边界上的那条 */
+export function mergeWindow(prev: Message[], win: ChatWindow): Message[]
+```
+
+```
+test: reset 整段替换
+test: 增量按 id 去重,不重复渲染
+test: 路由缺失/报错降级为 source=terminal(T12)
+```
+
+- [x] **Step 2: 视图切换**
+
+会话上绑着 agent 时,终端顶栏出现「聊天 / 终端」切换。**默认仍是终端** —— C1 只读,
+不能发消息,把它设成默认会让人以为坏了。
+
+- [x] **Step 3: 渲染**
+
+四种块各自的样式;`thinking` **默认折叠**(它常常比正文长);`tool-use` 显示工具名 +
+那一行入参;`tool-result` 用 `ok` 区分正常/报错。
+
+- [x] **Step 4: 增量**
+
+收到该会话的 `agent-event` 就带游标拉一次。**不做轮询** —— 没有事件就意味着没有新消息。
+
+- [x] **Step 5: 回落**
+
+`source: "terminal"` 时按 `reason` 显示一句人话 + 一个「用终端打开」,**绝不画空聊天框**。
+
+---
+
+### Task 6: 文档
+
+- [x] `docs/protocol.md`:T13 路由表补一行;§10 补三条限额;§1 来源地图补 transcript 模块。
+      **`PROTO_VERSION` 不动**,在提交信息里写明为什么不用动(只加 `/api/` 只读路由,T12)。
+- [x] README 双语:说明聊天视图、默认关、以及**它与 desktop 默认监听 `0.0.0.0` 叠加后的
+      暴露面** —— 局域网里拿到 token 的人,现在能看终端画面,开了这个之后是整段对话。
+- [x] spec 状态从「草案」改为「C1 已实施」。
+
+## 完成标准
+
+- [x] `cargo test --workspace` 无 FAILED(**数 `^test result: FAILED` 的行数**,不看汇总)
+- [x] `cargo clippy --workspace -- -D warnings` **退出码为 0**
+- [x] `npx tsc --noEmit` 退出码为 0;`npm test` 无 fail
+- [x] `PROTO_VERSION` 未改动
+- [x] 开关关着时,`/api/agents/messages` 返回 `source: "terminal", reason: "disabled"`,
+      且**没有读过任何 transcript 文件**
+- [x] 用一份真实会话手工验证:聊天视图里的消息数、顺序、工具调用与终端里看到的一致
+- [x] 把 transcript 文件改小(模拟 compact)后再拉一次 → `reset: true`,客户端整段替换
+
+
+---
+
+## 实施记录:C1(2026-08-21,已完成)
+
+Rust 无 FAILED、clippy 与 tsc 退出码均为 0、web 86 用例 0 失败,`PROTO_VERSION` 仍是 1
+(只新增 `/api/` 只读路由,T12 允许)。
+
+**真实数据验证**(一份 10 MB / 5258 行的会话记录):200 条消息、四种块齐全、工具名正确、
+id 全部唯一、响应 164 KiB。
+
+### 计划没写、实现时才发现的三件事
+
+1. **溢出时丢哪一头,两条路不一样**。首次加载丢最旧的是对的;增量丢头就是**静默丢
+   消息**。所以首次按条数限、增量按字节限(读不完置 `more` 让客户端再拉一次,一条不少)。
+   两条路用同一套限额的话,增量超限时会悄无声息地吞掉消息。
+
+2. **条数上限挡不住字节数**。这是拿真实数据量出来的:那次碰巧只产出 164 KiB,而
+   「碰巧在范围内」不是限额 —— 200 条里每条都塞满 8 KiB 的块能有好几 MB。补了
+   `MAX_RESPONSE_BYTES`,同样从最旧的一头丢。**不测真实数据就发现不了**:合成用例
+   我本来也只会造小消息。
+
+3. **`docs/protocol.md` 的 T13 表漏了两行**。`/api/agents/pending` 与
+   `/api/agents/answer` 是上一期加的路由,当时没同步进协议文档。这一期一并补上 ——
+   那份文档自称是契约,漏一行就是契约和实现分了叉。
+
+### 一个把自己绊倒三次的错误
+
+收尾时发现 `crates/server/tests/ws_auth.rs` **从 `db2fa97` 起就编译不过**:那一笔把
+`Config.listen` 改成了 `Option`,这个测试还在 `c.listen.to_string()`。而我一路上报的
+「全绿」全是假的 —— 因为我的判据是 `grep -c '^test result: FAILED'`,而**编译失败根本
+不产生任何 `test result:` 行**,于是它稳定地返回 0。
+
+这是同一类错误的第三次:
+
+| 次数 | 判据 | 为什么会假绿 |
+| --- | --- | --- |
+| 一 | `awk '{p+=$4; f+=$6}'` 汇总 | `FAILED` 行的字段布局与 `ok` 行不同,失败被算成 0 |
+| 二 | `cargo clippy ... | tail -1` | 管道让退出码变成 `tail` 的,永远是 0 |
+| 三 | `grep -c 'test result: FAILED'` | 编译失败一行 `test result` 都没有,计数为 0 |
+
+三次的形状是一样的:**判据在找失败的证据,而不是在要成功的证据**。缺席被当成了通过。
+
+唯一可靠的判据是**退出码**:
+
+```sh
+cargo test --workspace > /dev/null 2>&1; echo "exit=$?"
+```
+
+修好之后的真实数字:35 个测试二进制、307 个用例、退出码 0。
+
+### 「门控排在读文件之前」怎么断言
+
+这条没法直接测。反过来做:**开关关着时给一个真实存在、可读的 transcript 路径**,
+回答必须是 `reason: "disabled"`。换成任何别的 reason,都说明我们已经去碰过那个文件了。
+
+
+---
+
+## 实施记录:C3 的 Codex 部分(2026-08-21,已完成)
+
+C1 把「与 agent 无关的那半」切干净了,所以这一轮只写了两样东西:一个解析器,一个路径
+推导。窗口、游标、限额、回落、客户端全都没动 —— 那个切分的回报在这里兑现了。
+
+**Codex 的记录有三处和 Claude 不同**,都是实测出来的:
+
+1. **一个文件里两条并行的流**。`response_item` 是 API 层(消息、工具调用及其输出),
+   `event_msg` 是渲染层(思考、token 计数)。两条在同一文件里按时间交错,只要每种记录
+   只映射一次,顺序天然是对的。消息与工具取 `response_item`(结构完整,`event_msg` 里
+   没有通用的工具调用),思考取 `event_msg`。
+2. **思考只在渲染流里是明文**。`response_item/reasoning` 带的是 `encrypted_content`。
+   挑错文件就会得出「思考读不了」的半错结论 —— 和 Grok 那次是同一个坑。
+3. **`arguments` 是塞进字符串里的 JSON**,不先解开就会展示成一坨转义。
+
+还顺手发现 Codex 有个 `developer` 角色(系统指令那一路),归到 System。
+
+### 拿真实数据抓到的一个真 bug:内容哈希做 id 会撞
+
+C1 里「拿不到 agent 自己的 id 就按内容哈希」的做法,在 Codex 上直接露馅:200 条消息里
+id 不唯一。原因是它的记录重复率很高(同一个 `wait` 调用、一样的短输出)。而客户端
+`mergeWindow` 按 id 去重 —— **撞了就会把不同的消息当成重复丢掉**。
+
+合成 fixture 测不出来:那里每条内容都不一样。**又一次是真实数据抓的**。
+
+换成**这一行在文件里的字节偏移**。它同时满足两个要求:唯一(一行一个位置),而且比内容
+哈希更稳定 —— 文件只追加,同一行的偏移永远不变,换个窗口起点读到的还是同一个。
+compact 之后偏移含义会变,但那时服务端判游标失效、整窗重发,客户端整段替换,不存在
+新旧 id 混着的情况。
+
+### 一个测试「正确地失败了」
+
+`an_agent_without_transcript_support_falls_back` 原本断言 Codex 回落为 `unsupported-agent`。
+Codex 支持之后它挂了 —— 这是对的,行为是有意改的。改成断言「推不出路径时说
+`no-transcript-path`,而不是说这家不支持」。同时把客户端那句「聊天视图目前只支持
+Claude Code」也改掉了:那句话在这一轮之后就是错的。
+
+### 真实数据验证
+
+| | 消息数 | 块 | id 唯一 |
+| --- | --- | --- | --- |
+| Codex(7893 行 rollout,**只给 session_id**,路径自己推) | 200 | thinking 64 / tool-result 60 / tool-use 59 / text 17 | ✅ 200/200 |
+| Claude(10 MB 记录,回归) | 200 | — | ✅ |

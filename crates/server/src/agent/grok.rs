@@ -3,11 +3,11 @@
 //! 依据是它随安装附带的文档(`~/.grok/docs/user-guide/10-hooks.md`,grok 1.0.52),
 //! 要点和别家的差异:
 //!
-//! 1. **装在 `~/.grok/hooks/octoterm.json`**,整个文件只放我们的 hook。全局 hook 目录
+//! 1. **装在 `~/.grok/hooks/gateterm.json`**,整个文件只放我们的 hook。全局 hook 目录
 //!    「Always trusted」—— 没有 Codex 那种逐条审核的闸,装上即对新会话生效。
 //! 2. **只能用 command 类 hook**。它也支持 `type: "http"`,但 handler 只认 `type` /
 //!    `command` / `url` / `timeout` / `env`,`headers` 会被丢掉,带不上密钥和会话号;
-//!    URL 里的 `$VAR` 倒是会展开,可变量为空时它会报 hook 错误 —— 于是在 octoterm 之外
+//!    URL 里的 `$VAR` 倒是会展开,可变量为空时它会报 hook 错误 —— 于是在 gateterm 之外
 //!    开的每个 grok 会话都会满屏报错。command 走 [`super::hook_cli`]:环境里没有我们的
 //!    变量就静默退出,什么都不发。
 //! 3. **payload 是驼峰的**:`sessionId`、`toolName`、`notificationType`。另外也带着
@@ -32,7 +32,7 @@ use super::detect::{self, DetectEnv};
 use super::edit::{is_ours, ConfigEdit, EditOp, InstallCtx};
 use super::store::{Decision, Update};
 use super::{AgentAdapter, Confidence, Detected, Integration};
-use octoterm_protocol::AgentState;
+use gateterm_protocol::AgentState;
 
 pub struct Grok;
 
@@ -58,7 +58,7 @@ fn home_dir(home: &Path) -> PathBuf {
 }
 
 fn hooks_path(home: &Path) -> PathBuf {
-    home_dir(home).join("hooks").join("octoterm.json")
+    home_dir(home).join("hooks").join("gateterm.json")
 }
 
 fn hook_spec(port: u16, event: &str) -> Value {

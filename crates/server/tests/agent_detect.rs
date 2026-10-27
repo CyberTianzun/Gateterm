@@ -3,8 +3,8 @@
 //! 这里每一条都对应 clawd-on-desk 踩过的坑:它自己会创建 `~/.claude/`,于是
 //! 「目录存在」变成了自证,最后不得不把 claude-code 整个从默认检测里排除。
 
-use octoterm_server::agent::detect::DetectEnv;
-use octoterm_server::agent::{find, Confidence};
+use gateterm_server::agent::detect::DetectEnv;
+use gateterm_server::agent::{find, Confidence};
 use std::fs;
 use std::path::Path;
 
@@ -14,7 +14,7 @@ fn env(home: &Path) -> DetectEnv {
     DetectEnv { home: home.to_path_buf(), path: None }
 }
 
-fn detect(home: &Path) -> octoterm_server::agent::Detected {
+fn detect(home: &Path) -> gateterm_server::agent::Detected {
     find("claude-code").unwrap().detect(&env(home))
 }
 
@@ -46,7 +46,7 @@ fn settings_with_user_content_is_high_confidence() {
     assert_eq!(d.reason, "config-file");
 }
 
-/// 配置里只有我们自己写进去的 hook —— 这只能证明 octoterm 来过,不能证明
+/// 配置里只有我们自己写进去的 hook —— 这只能证明 gateterm 来过,不能证明
 /// 用户装了 Claude Code。
 #[test]
 fn settings_with_only_our_hooks_is_not_evidence() {

@@ -38,7 +38,7 @@ window.measureTerminalFonts = async function measureTerminalFonts() {
             cellWidthCssPx: dimensions.css.cell.width, cellHeightCssPx: dimensions.css.cell.height,
             grid80x24DevicePx: [80 * dimensions.device.cell.width, 24 * dimensions.device.cell.height], samples };
           report.rows.push(row);
-          console.log("OctotermFontMetrics", JSON.stringify(row));
+          console.log("GatetermFontMetrics", JSON.stringify(row));
         } finally {
           terminal.dispose();
           host.replaceChildren();

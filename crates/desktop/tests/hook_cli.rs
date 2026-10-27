@@ -12,12 +12,12 @@ fn run_hook(mut command: Command, managed: bool) -> std::process::Output {
         .stderr(Stdio::piped());
     if managed {
         command
-            .env("OCTOTERM_SESSION_ID", "test-session")
-            .env("OCTOTERM_HOOK_TOKEN", "test-token");
+            .env("GATETERM_SESSION_ID", "test-session")
+            .env("GATETERM_HOOK_TOKEN", "test-token");
     } else {
         command
-            .env_remove("OCTOTERM_SESSION_ID")
-            .env_remove("OCTOTERM_HOOK_TOKEN");
+            .env_remove("GATETERM_SESSION_ID")
+            .env_remove("GATETERM_HOOK_TOKEN");
     }
     let mut child = command.spawn().unwrap();
     child
@@ -44,7 +44,7 @@ fn run_hook(mut command: Command, managed: bool) -> std::process::Output {
 #[test]
 fn desktop_hook_is_silent_without_managed_environment() {
     let dir = tempfile::tempdir().unwrap();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_octoterm-desktop"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_gateterm-desktop"));
     command.args(["hook", "http://127.0.0.1:1/hook/codex/stop"]);
     command
         .env("APPDATA", dir.path())
@@ -77,8 +77,8 @@ fn installed_antigravity_command_forwards_stdin_and_reply_through_cmd() {
 #[cfg(windows)]
 #[test]
 fn installed_antigravity_command_returns_neutral_json_without_server_or_environment() {
-    let text = octoterm_server::agent::hook_cli::command_for_executable(
-        "antigravity", 1, "Stop", std::path::Path::new(env!("CARGO_BIN_EXE_octoterm-desktop")));
+    let text = gateterm_server::agent::hook_cli::command_for_executable(
+        "antigravity", 1, "Stop", std::path::Path::new(env!("CARGO_BIN_EXE_gateterm-desktop")));
     for managed in [false, true] {
         let mut command = Command::new("cmd.exe");
         command.args(["/C", &text]);
@@ -87,7 +87,7 @@ fn installed_antigravity_command_returns_neutral_json_without_server_or_environm
 }
 
 fn installed_command_forwards_stdin_and_reply_through_desktop(agent: &str) {
-    use octoterm_server::agent::{edit::InstallCtx, find};
+    use gateterm_server::agent::{edit::InstallCtx, find};
     let home = tempfile::tempdir().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -102,10 +102,10 @@ fn installed_command_forwards_stdin_and_reply_through_desktop(agent: &str) {
         .unwrap();
     let mut doc = serde_json::json!({});
     for edit in plan {
-        octoterm_server::agent::edit::apply_to_json(&mut doc, &edit.op).unwrap();
+        gateterm_server::agent::edit::apply_to_json(&mut doc, &edit.op).unwrap();
     }
     let installed = if agent == "antigravity" {
-        &doc["octoterm"]["PreInvocation"][0]["command"]
+        &doc["gateterm"]["PreInvocation"][0]["command"]
     } else if agent == "claude-code" {
         &doc["hooks"]["SessionStart"][0]["hooks"][0]["command"]
     } else {
@@ -119,23 +119,23 @@ fn installed_command_forwards_stdin_and_reply_through_desktop(agent: &str) {
         .to_string();
     // 安装路径允许空格、中文和 PowerShell 元字符,不能只测无空格的开发目录。
     let executable_dir = home.path().join(if cfg!(windows) {
-        "Octoterm 中文 $cash 'quoted' %PATH% & (safe)!"
+        "Gateterm 中文 $cash 'quoted' %PATH% & (safe)!"
     } else {
-        "Octoterm 中文 spaces"
+        "Gateterm 中文 spaces"
     });
     std::fs::create_dir(&executable_dir).unwrap();
     let desktop_path = executable_dir.join(if cfg!(windows) {
-        "octoterm-desktop.exe"
+        "gateterm-desktop.exe"
     } else {
-        "octoterm-desktop"
+        "gateterm-desktop"
     });
-    std::fs::copy(env!("CARGO_BIN_EXE_octoterm-desktop"), &desktop_path).unwrap();
+    std::fs::copy(env!("CARGO_BIN_EXE_gateterm-desktop"), &desktop_path).unwrap();
     let desktop = desktop_path.to_str().unwrap();
     let command_text = if agent == "antigravity" || agent == "claude-code" {
         // The path is inside an encoded PowerShell command, so generate the same
         // installed command using the copied desktop executable's path.
         let event = if agent == "claude-code" { "SessionStart" } else { "PreInvocation" };
-        octoterm_server::agent::hook_cli::command_for_executable(agent, port, event, &desktop_path)
+        gateterm_server::agent::hook_cli::command_for_executable(agent, port, event, &desktop_path)
     } else if cfg!(windows) {
         installed.replace(&exe.replace('\'', "''"), &desktop.replace('\'', "''"))
     } else {
@@ -183,7 +183,7 @@ fn installed_command_forwards_stdin_and_reply_through_desktop(agent: &str) {
         let request = String::from_utf8(request).unwrap();
         assert!(request.starts_with(&format!("POST /hook/{endpoint} HTTP/1.1\r\n")));
         assert!(request.contains("Authorization: Bearer test-token\r\n"));
-        assert!(request.contains("X-Octoterm-Session: test-session\r\n"));
+        assert!(request.contains("X-Gateterm-Session: test-session\r\n"));
         assert!(request.ends_with(r#"{"tool_name":"shell","message":"中文"}"#));
         stream
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")

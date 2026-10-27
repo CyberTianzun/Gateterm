@@ -89,14 +89,14 @@ export async function fetchLaunchers(token: string): Promise<Launcher[]> {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) {
-      console.warn("octoterm: 启动项列表返回", res.status);
+      console.warn("gateterm: 启动项列表返回", res.status);
       return [defaultLauncher()];
     }
     const body = (await res.json()) as { launchers?: unknown };
     const list = sanitize(body?.launchers);
     return list.length > 0 ? list : [defaultLauncher()];
   } catch (err) {
-    console.warn("octoterm: 启动项列表拉取失败", err);
+    console.warn("gateterm: 启动项列表拉取失败", err);
     return [defaultLauncher()];
   }
 }

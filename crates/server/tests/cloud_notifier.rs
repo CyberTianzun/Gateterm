@@ -6,12 +6,12 @@ use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
-use octoterm_cloud_client::credentials::{self, Credentials};
-use octoterm_protocol::{AgentState, ServerMsg};
-use octoterm_server::agent::store::AgentSessionStore;
-use octoterm_server::cloud::creds::SharedCreds;
-use octoterm_server::cloud::notifier;
-use octoterm_server::session::manager::SessionManager;
+use gateterm_cloud_client::credentials::{self, Credentials};
+use gateterm_protocol::{AgentState, ServerMsg};
+use gateterm_server::agent::store::AgentSessionStore;
+use gateterm_server::cloud::creds::SharedCreds;
+use gateterm_server::cloud::notifier;
+use gateterm_server::session::manager::SessionManager;
 use serde_json::{Value, json};
 
 type Seen = Arc<Mutex<Vec<Value>>>;
@@ -138,8 +138,8 @@ async fn wait_for(seen: &Seen, n: usize) {
 /// Stop must reach Cloud, and startup/duplicate Stop must not create extra pushes.
 #[tokio::test]
 async fn claude_codex_and_antigravity_hooks_notify_completion_each_turn() {
-    use octoterm_server::agent::store::hook_token;
-    use octoterm_server::app::{AppState, serve};
+    use gateterm_server::agent::store::hook_token;
+    use gateterm_server::app::{AppState, serve};
 
     let (url, seen) = fake_cloud(202).await;
     let rig = Rig::new(Some(&url));
@@ -166,7 +166,7 @@ async fn claude_codex_and_antigravity_hooks_notify_completion_each_turn() {
         for event in ["session-start", start_turn, "stop", "stop", start_turn, "stop"] {
             let response = client.post(format!("http://{addr}/hook/{agent}/{event}"))
                 .bearer_auth(hook_token())
-                .header("X-Octoterm-Session", "7")
+                .header("X-Gateterm-Session", "7")
                 .json(&body).send().await.unwrap();
             assert!(response.status().is_success());
         }
@@ -288,7 +288,7 @@ async fn permission_carries_expires_at() {
     let (url, seen) = fake_cloud(202).await;
     let rig = Rig::new(Some(&url));
     let expires = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 590;
-    let _rx = rig.store.insert_pending(octoterm_server::agent::store::PendingRequest {
+    let _rx = rig.store.insert_pending(gateterm_server::agent::store::PendingRequest {
         id: "p1".into(),
         agent_id: "claude-code".into(),
         agent_session_id: "s-1".into(),

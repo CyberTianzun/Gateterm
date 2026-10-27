@@ -1,11 +1,11 @@
 [package]
-name = "octoterm-cloud-ffi"
+name = "gateterm-cloud-ffi"
 version = "0.2.5"
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "octoterm_cloud_ffi"
+name = "gateterm_cloud_ffi"
 # cdylib 给 Android(JNA 加载),staticlib 留给 iOS,lib 给本 crate 的 Rust 测试
 crate-type = ["cdylib", "staticlib", "lib"]
 
@@ -18,8 +18,8 @@ required-features = ["cli"]
 cli = ["uniffi/cli"]
 
 [dependencies]
-octoterm-client-core = { path = "../client-core" }
-octoterm-cloud-client = { path = "../cloud-client" }
+gateterm-client-core = { path = "../client-core" }
+gateterm-cloud-client = { path = "../cloud-client" }
 thiserror = "2"
 uniffi = { version = "0.29", features = ["tokio"] }
 

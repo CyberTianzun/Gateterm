@@ -1,4 +1,4 @@
-//! 用户自己写的 launcher,来自 octoterm 的 config.toml:
+//! 用户自己写的 launcher,来自 gateterm 的 config.toml:
 //!
 //! ```toml
 //! [[launcher]]

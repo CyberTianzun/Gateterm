@@ -1,11 +1,11 @@
 //! Claude Code adapter。
 //!
 //! SessionStart 不支持 HTTP hook,经自身的 hook 子命令转发;其余事件直接 POST
-//! 到 octoterm-server。不需要随包携带任何脚本或 node 运行时。
+//! 到 gateterm-server。不需要随包携带任何脚本或 node 运行时。
 //!
 //! 鉴权与会话关联走同一个机制:hook 的 `headers` 支持 `$VAR` 插值,插值发生在
-//! hook 触发那一刻、取自 Claude 进程的环境,而那份环境是 octoterm spawn 这个会话
-//! 时给的。于是**环境变量就是能力本身** —— 在 octoterm 之外启动的 Claude 拿不到
+//! hook 触发那一刻、取自 Claude 进程的环境,而那份环境是 gateterm spawn 这个会话
+//! 时给的。于是**环境变量就是能力本身** —— 在 gateterm 之外启动的 Claude 拿不到
 //! 这两个变量,hook 照样触发,但没有 `Authorization` 头,一律 401 拒收。
 
 use anyhow::Result;
@@ -16,7 +16,7 @@ use super::detect::{self, DetectEnv};
 use super::edit::{is_ours, slug_of_event, ConfigEdit, EditOp, InstallCtx};
 use super::store::{Decision, Update};
 use super::{AgentAdapter, Confidence, Detected, Integration};
-use octoterm_protocol::AgentState;
+use gateterm_protocol::AgentState;
 
 pub struct ClaudeCode;
 
@@ -59,10 +59,10 @@ fn hook_spec(port: u16, event: &str, blocking: bool) -> Value {
         "type": "http",
         "url": url,
         "headers": {
-            "Authorization": "Bearer $OCTOTERM_HOOK_TOKEN",
-            "X-Octoterm-Session": "$OCTOTERM_SESSION_ID",
+            "Authorization": "Bearer $GATETERM_HOOK_TOKEN",
+            "X-Gateterm-Session": "$GATETERM_SESSION_ID",
         },
-        "allowedEnvVars": ["OCTOTERM_HOOK_TOKEN", "OCTOTERM_SESSION_ID"],
+        "allowedEnvVars": ["GATETERM_HOOK_TOKEN", "GATETERM_SESSION_ID"],
     });
     let obj = spec.as_object_mut().expect("字面量就是对象");
     if blocking {

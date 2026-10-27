@@ -1,24 +1,24 @@
-# Octoterm Cloud 登录与推送接入 Implementation Plan
+# Gateterm Cloud 登录与推送接入 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 让 octoterm-server / desktop 可选地登录 Octoterm Cloud(注册、登录、退出、找回密码、删除账号),并在 agent 进入 waiting 时调用 Cloud 的 `/v1/notify`;不登录时行为完全不变。
+**Goal:** 让 gateterm-server / desktop 可选地登录 Gateterm Cloud(注册、登录、退出、找回密码、删除账号),并在 agent 进入 waiting 时调用 Cloud 的 `/v1/notify`;不登录时行为完全不变。
 
 **Architecture:** 新 crate `crates/cloud-client` 封装 Cloud HTTP API、`cloud.json` 凭据文件与「调用 + 落盘」组合操作(`ops`),server CLI 与 desktop 设置窗口都只是它的薄壳。server 内新增 `cloud::notifier`,订阅 `SessionManager::events()` 的 `AgentEvent`,只在状态迁移进入 waiting / 出现新 pending 时异步推一次;每次发送前按 mtime 重读 `cloud.json`,所以 desktop 登录/退出无需重启。
 
 **Tech Stack:** Rust 2024、reqwest 0.12(rustls)、serde、directories 5、gethostname、rpassword、axum 0.8(测试用假 Cloud)、egui 0.36。
 
-**Spec:** `~/online/eclosion/OctotermCloud/docs/specs/2026-10-19-octoterm-cloud-account-push-design.md` §6
-**依赖:** `~/online/eclosion/OctotermCloud/docs/plans/2026-10-19-cloud-account-push.md` 已完成(Task 6 的端到端冒烟需要它)。
+**Spec:** `~/online/eclosion/GatetermCloud/docs/specs/2026-10-19-gateterm-cloud-account-push-design.md` §6
+**依赖:** `~/online/eclosion/GatetermCloud/docs/plans/2026-10-19-cloud-account-push.md` 已完成(Task 6 的端到端冒烟需要它)。
 
 ## Global Constraints
 
 - 不登录 Cloud 时,server / desktop 的行为与现在完全一致;Cloud 任何失败都不得阻塞 hook、WS 推送或 UI。
 - Cloud 永远拿不到 server 的 bearer token 与 hook token;`/v1/notify` 只发 `{session, agent_id, kind, tool_name?}`,**不发工具入参、不发 detail**。
-- 凭据文件 `<ProjectDirs("", "", "octoterm").config_dir()>/cloud.json`(与 `config.toml`、`hook-token` 同目录),Unix 权限 `0600`;环境变量 `OCTOTERM_CLOUD_FILE` 可覆盖路径(测试与冒烟用)。
+- 凭据文件 `<ProjectDirs("", "", "gateterm").config_dir()>/cloud.json`(与 `config.toml`、`hook-token` 同目录),Unix 权限 `0600`;环境变量 `GATETERM_CLOUD_FILE` 可覆盖路径(测试与冒烟用)。
 - 收到 Cloud 的 `401 {"error":"unauthorized"}` = 凭据已被撤销,删除本地 `cloud.json`。
 - `kind`:`pending` 有值为 `permission`,否则 `waiting`;同一 agent 会话持续 waiting 不重复推;`done` 不推。
-- 登录时 `client.kind = "server"`(desktop 也是 server),`label` = 主机名(截断 64 字符,空则 `octoterm`)。
+- 登录时 `client.kind = "server"`(desktop 也是 server),`label` = 主机名(截断 64 字符,空则 `gateterm`)。
 - 提交流程:在 `feat/cloud-login` 分支上每个 Task 提交一次,完成后 `git merge --ff-only` 回 `dev`,不推送。commit message 结尾加 `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`。
 
 ## File Structure
@@ -38,7 +38,7 @@ crates/server/src/config.rs                  [cloud] url
 crates/server/src/lib.rs                     pub mod cloud
 crates/server/src/cloud/mod.rs
 crates/server/src/cloud/notifier.rs          AgentEvent → /v1/notify
-crates/server/src/cloud/cli.rs               `octoterm-server cloud ...`
+crates/server/src/cloud/cli.rs               `gateterm-server cloud ...`
 crates/server/src/main.rs                    Cmd::Cloud、启动 notifier
 crates/server/tests/cloud_notifier.rs
 crates/desktop/Cargo.toml                    加 cloud-client
@@ -72,7 +72,7 @@ README.md / README-cnzh.md                   Cloud 一节
 - [ ] **Step 1: 建分支、加 crate 骨架**
 
 ```bash
-cd ~/online/eclosion/Octoterm && git checkout -b feat/cloud-login
+cd ~/online/eclosion/Gateterm && git checkout -b feat/cloud-login
 ```
 
 workspace `Cargo.toml` 的 members 改为:
@@ -85,7 +85,7 @@ members = ["crates/protocol", "crates/server", "crates/client-core", "crates/des
 
 ```toml
 [package]
-name = "octoterm-cloud-client"
+name = "gateterm-cloud-client"
 version = "0.2.1"
 edition.workspace = true
 license.workspace = true
@@ -106,7 +106,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
 `crates/cloud-client/src/lib.rs`:
 
 ```rust
-//! Octoterm Cloud 客户端:HTTP API、本地凭据文件、以及两者组合起来的账号操作。
+//! Gateterm Cloud 客户端:HTTP API、本地凭据文件、以及两者组合起来的账号操作。
 //! server CLI 和 desktop 设置窗口都只是这里的薄壳。
 
 pub mod api;
@@ -142,12 +142,12 @@ pub struct Credentials {
     pub server_id: Option<String>,
 }
 
-/// 与 config.toml、hook-token 同目录。`OCTOTERM_CLOUD_FILE` 可覆盖(测试与冒烟用)。
+/// 与 config.toml、hook-token 同目录。`GATETERM_CLOUD_FILE` 可覆盖(测试与冒烟用)。
 pub fn default_path() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("OCTOTERM_CLOUD_FILE").filter(|p| !p.is_empty()) {
+    if let Some(p) = std::env::var_os("GATETERM_CLOUD_FILE").filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(p));
     }
-    directories::ProjectDirs::from("", "", "octoterm").map(|d| d.config_dir().join("cloud.json"))
+    directories::ProjectDirs::from("", "", "gateterm").map(|d| d.config_dir().join("cloud.json"))
 }
 
 pub fn load(path: &Path) -> io::Result<Option<Credentials>> {
@@ -320,7 +320,7 @@ async fn handle(State(sh): State<Shared>, method: Method, uri: Uri, headers: Hea
 mod common;
 
 use common::FakeCloud;
-use octoterm_cloud_client::{ClientInfo, CloudClient, CloudError, CodePurpose, Notify};
+use gateterm_cloud_client::{ClientInfo, CloudClient, CloudError, CodePurpose, Notify};
 use serde_json::json;
 
 #[tokio::test]
@@ -392,13 +392,13 @@ async fn delete_account_uses_delete_with_body() {
 
 - [ ] **Step 5: 运行确认失败**
 
-Run: `cargo test -p octoterm-cloud-client`
+Run: `cargo test -p gateterm-cloud-client`
 Expected: 编译失败,`api` 模块不存在。
 
 - [ ] **Step 6: 写 `src/api.rs`**
 
 ```rust
-//! Cloud HTTP API。错误码与 OctotermCloud 的 `{"error": "<code>"}` 一一对应。
+//! Cloud HTTP API。错误码与 GatetermCloud 的 `{"error": "<code>"}` 一一对应。
 
 use std::time::Duration;
 
@@ -521,7 +521,7 @@ pub struct Notify {
 /// 登录时给 Cloud 看的这台机器的名字。
 pub fn default_label() -> String {
     let name: String = gethostname::gethostname().to_string_lossy().trim().chars().take(64).collect();
-    if name.is_empty() { "octoterm".into() } else { name }
+    if name.is_empty() { "gateterm".into() } else { name }
 }
 
 pub struct CloudClient {
@@ -617,7 +617,7 @@ impl CloudClient {
 
 - [ ] **Step 7: 运行测试**
 
-Run: `cargo test -p octoterm-cloud-client`
+Run: `cargo test -p gateterm-cloud-client`
 Expected: credentials 3 个单测 + api.rs 7 个测试 PASS。
 
 - [ ] **Step 8: Commit**
@@ -638,7 +638,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: Task 1 全部
-- Produces(都在 `octoterm_cloud_client::ops`):
+- Produces(都在 `gateterm_cloud_client::ops`):
   - `OpsError::{Cloud(CloudError), Local(String), NotLoggedIn}`,`user_message(&self) -> String`,`From<CloudError>`
   - `normalize_email(&str) -> String`
   - `current(path) -> Result<Credentials, OpsError>`
@@ -655,8 +655,8 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 mod common;
 
 use common::FakeCloud;
-use octoterm_cloud_client::credentials;
-use octoterm_cloud_client::ops::{self, OpsError};
+use gateterm_cloud_client::credentials;
+use gateterm_cloud_client::ops::{self, OpsError};
 use serde_json::json;
 
 fn path(dir: &tempfile::TempDir) -> std::path::PathBuf {
@@ -749,7 +749,7 @@ async fn delete_account_flow() {
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `cargo test -p octoterm-cloud-client --test ops`
+Run: `cargo test -p gateterm-cloud-client --test ops`
 Expected: 编译失败,`ops` 模块不存在。
 
 - [ ] **Step 3: 写 `src/ops.rs`,在 `lib.rs` 加 `pub mod ops;`**
@@ -872,7 +872,7 @@ pub async fn delete_account(path: &Path, password: &str, code: &str) -> Result<(
 
 - [ ] **Step 4: 运行测试**
 
-Run: `cargo test -p octoterm-cloud-client`
+Run: `cargo test -p gateterm-cloud-client`
 Expected: 全部 PASS。
 
 - [ ] **Step 5: Commit**
@@ -892,7 +892,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - Modify: `crates/server/Cargo.toml`, `crates/server/src/lib.rs`, `crates/server/src/config.rs`, `crates/server/src/main.rs`
 
 **Interfaces:**
-- Consumes: `octoterm_cloud_client::{CloudClient, CloudError, Notify, credentials}`;`SessionManager::events() -> broadcast::Receiver<ServerMsg>`;`AgentSessionStore::list_pending() -> Vec<PendingRequest>`(`PendingRequest { id, tool_name: Option<String>, .. }`);`octoterm_protocol::{AgentState, ServerMsg}`
+- Consumes: `gateterm_cloud_client::{CloudClient, CloudError, Notify, credentials}`;`SessionManager::events() -> broadcast::Receiver<ServerMsg>`;`AgentSessionStore::list_pending() -> Vec<PendingRequest>`(`PendingRequest { id, tool_name: Option<String>, .. }`);`gateterm_protocol::{AgentState, ServerMsg}`
 - Produces:
   - `config::CloudConfig { url: Option<String> }`,`Config.cloud: CloudConfig`
   - `cloud::notifier::classify(prev: Option<&(AgentState, Option<String>)>, state: AgentState, pending: &Option<String>) -> Option<&'static str>`
@@ -903,7 +903,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 `crates/server/Cargo.toml` 的 `[dependencies]` 加:
 
 ```toml
-octoterm-cloud-client = { path = "../cloud-client" }
+gateterm-cloud-client = { path = "../cloud-client" }
 # `cloud register/login` 在终端里读密码时不回显
 rpassword = "7"
 ```
@@ -911,8 +911,8 @@ rpassword = "7"
 `crates/server/src/config.rs`:在 `pub struct Config` 前加
 
 ```rust
-/// `[cloud]` —— 可选的 Octoterm Cloud(账号 + 手机推送中继)。
-/// `url` 只是登录时的默认地址;真正的登录态在 `cloud.json`(见 `octoterm_cloud_client::credentials`)。
+/// `[cloud]` —— 可选的 Gateterm Cloud(账号 + 手机推送中继)。
+/// `url` 只是登录时的默认地址;真正的登录态在 `cloud.json`(见 `gateterm_cloud_client::credentials`)。
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct CloudConfig {
     #[serde(default)]
@@ -941,7 +941,7 @@ pub struct CloudConfig {
 
 (若 `config.rs` 没有 tests 模块,就新建 `#[cfg(test)] mod tests { use super::*; ... }`。)
 
-Run: `cargo test -p octoterm-server --lib config`
+Run: `cargo test -p gateterm-server --lib config`
 Expected: PASS。
 
 - [ ] **Step 2: 写失败测试 `crates/server/tests/cloud_notifier.rs`**
@@ -954,11 +954,11 @@ use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
-use octoterm_cloud_client::credentials::{self, Credentials};
-use octoterm_protocol::{AgentState, ServerMsg};
-use octoterm_server::agent::store::AgentSessionStore;
-use octoterm_server::cloud::notifier;
-use octoterm_server::session::manager::SessionManager;
+use gateterm_cloud_client::credentials::{self, Credentials};
+use gateterm_protocol::{AgentState, ServerMsg};
+use gateterm_server::agent::store::AgentSessionStore;
+use gateterm_server::cloud::notifier;
+use gateterm_server::session::manager::SessionManager;
 use serde_json::{Value, json};
 
 type Seen = Arc<Mutex<Vec<Value>>>;
@@ -1080,19 +1080,19 @@ async fn revoked_credentials_are_deleted() {
 }
 ```
 
-`crates/server/Cargo.toml` 的 `[dev-dependencies]` 已有 `tempfile`、`tokio`;如缺 `octoterm-protocol` 不需要加(它是普通依赖)。
+`crates/server/Cargo.toml` 的 `[dev-dependencies]` 已有 `tempfile`、`tokio`;如缺 `gateterm-protocol` 不需要加(它是普通依赖)。
 
 - [ ] **Step 3: 运行确认失败**
 
-Run: `cargo test -p octoterm-server --test cloud_notifier`
-Expected: 编译失败,`octoterm_server::cloud` 不存在。
+Run: `cargo test -p gateterm-server --test cloud_notifier`
+Expected: 编译失败,`gateterm_server::cloud` 不存在。
 
 - [ ] **Step 4: 写 `src/cloud/mod.rs` 与 `src/cloud/notifier.rs`,`lib.rs` 加 `pub mod cloud;`**
 
 `crates/server/src/cloud/mod.rs`:
 
 ```rust
-//! 可选的 Octoterm Cloud 集成:账号命令行(`cli`)与 agent 推送通知器(`notifier`)。
+//! 可选的 Gateterm Cloud 集成:账号命令行(`cli`)与 agent 推送通知器(`notifier`)。
 //! 没登录时两者都是空操作。
 
 pub mod notifier;
@@ -1111,9 +1111,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use octoterm_cloud_client::credentials::{self, Credentials};
-use octoterm_cloud_client::{CloudClient, CloudError, Notify};
-use octoterm_protocol::{AgentState, ServerMsg};
+use gateterm_cloud_client::credentials::{self, Credentials};
+use gateterm_cloud_client::{CloudClient, CloudError, Notify};
+use gateterm_protocol::{AgentState, ServerMsg};
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::agent::store::AgentSessionStore;
@@ -1242,16 +1242,16 @@ mod tests {
 `main.rs` 中 `let state = AppState { ... };` 之后、`start_index` 之前插入:
 
 ```rust
-    octoterm_server::cloud::notifier::spawn(
+    gateterm_server::cloud::notifier::spawn(
         state.manager.clone(),
         state.agent_sessions.clone(),
-        octoterm_cloud_client::credentials::default_path(),
+        gateterm_cloud_client::credentials::default_path(),
     );
 ```
 
 - [ ] **Step 6: 运行测试**
 
-Run: `cargo test -p octoterm-server --test cloud_notifier && cargo test -p octoterm-server --lib cloud`
+Run: `cargo test -p gateterm-server --test cloud_notifier && cargo test -p gateterm-server --lib cloud`
 Expected: 4 个集成测试 + `classify_transitions` PASS。
 
 - [ ] **Step 7: Commit**
@@ -1264,27 +1264,27 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 4: server CLI —— `octoterm-server cloud ...`
+### Task 4: server CLI —— `gateterm-server cloud ...`
 
 **Files:**
 - Create: `crates/server/src/cloud/cli.rs`
 - Modify: `crates/server/src/cloud/mod.rs`(加 `pub mod cli;`), `crates/server/src/main.rs`
 
 **Interfaces:**
-- Consumes: `octoterm_cloud_client::{ops, CodePurpose, CloudClient, CloudError, credentials, default_label}`、`config::Config::load`
+- Consumes: `gateterm_cloud_client::{ops, CodePurpose, CloudClient, CloudError, credentials, default_label}`、`config::Config::load`
 - Produces: `cloud::cli::{CloudCmd, run(cmd: CloudCmd, config_path: Option<PathBuf>) -> i32}`;`CloudCmd::{Register, Login, Logout, Status, ResetPassword, DeleteAccount}`
 
 - [ ] **Step 1: 写 `src/cloud/cli.rs`**
 
 ```rust
-//! `octoterm-server cloud <子命令>`:在没有 GUI 的机器上登录 Cloud。
-//! 逻辑都在 `octoterm_cloud_client::ops`,这里只管问答与输出。
+//! `gateterm-server cloud <子命令>`:在没有 GUI 的机器上登录 Cloud。
+//! 逻辑都在 `gateterm_cloud_client::ops`,这里只管问答与输出。
 
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
-use octoterm_cloud_client::ops::{self, OpsError};
-use octoterm_cloud_client::{CloudClient, CloudError, CodePurpose, credentials, default_label};
+use gateterm_cloud_client::ops::{self, OpsError};
+use gateterm_cloud_client::{CloudClient, CloudError, CodePurpose, credentials, default_label};
 
 #[derive(clap::Subcommand, Debug, Clone, Copy)]
 pub enum CloudCmd {
@@ -1372,7 +1372,7 @@ async fn dispatch(cmd: CloudCmd, path: &Path, default_url: Option<String>) -> Re
     match cmd {
         CloudCmd::Register => {
             if let Ok(c) = ops::current(path) {
-                return Err(format!("本机已登录为 {};请先 `octoterm-server cloud logout`", c.email));
+                return Err(format!("本机已登录为 {};请先 `gateterm-server cloud logout`", c.email));
             }
             let url = ask_url(default_url)?;
             let email = ops::normalize_email(&ask("邮箱:")?);
@@ -1388,7 +1388,7 @@ async fn dispatch(cmd: CloudCmd, path: &Path, default_url: Option<String>) -> Re
         }
         CloudCmd::Login => {
             if let Ok(c) = ops::current(path) {
-                return Err(format!("本机已登录为 {};请先 `octoterm-server cloud logout`", c.email));
+                return Err(format!("本机已登录为 {};请先 `gateterm-server cloud logout`", c.email));
             }
             let url = ask_url(default_url)?;
             let email = ask("邮箱:")?;
@@ -1459,10 +1459,10 @@ async fn dispatch(cmd: CloudCmd, path: &Path, default_url: Option<String>) -> Re
 `enum Cmd` 末尾加:
 
 ```rust
-    /// Octoterm Cloud 账号(可选,用于手机推送通知)
+    /// Gateterm Cloud 账号(可选,用于手机推送通知)
     Cloud {
         #[command(subcommand)]
-        cmd: octoterm_server::cloud::cli::CloudCmd,
+        cmd: gateterm_server::cloud::cli::CloudCmd,
     },
 ```
 
@@ -1470,24 +1470,24 @@ async fn dispatch(cmd: CloudCmd, path: &Path, default_url: Option<String>) -> Re
 
 ```rust
     if let Some(Cmd::Cloud { cmd }) = Args::parse().cmd {
-        std::process::exit(octoterm_server::cloud::cli::run(cmd, Args::parse().config));
+        std::process::exit(gateterm_server::cloud::cli::run(cmd, Args::parse().config));
     }
 ```
 
 - [ ] **Step 3: 构建并检查帮助输出**
 
-Run: `cargo build -p octoterm-server && ./target/debug/octoterm-server cloud --help && OCTOTERM_CLOUD_FILE=/tmp/octoterm-none.json ./target/debug/octoterm-server cloud status`
+Run: `cargo build -p gateterm-server && ./target/debug/gateterm-server cloud --help && GATETERM_CLOUD_FILE=/tmp/gateterm-none.json ./target/debug/gateterm-server cloud status`
 Expected: 列出 6 个子命令;`status` 输出 `未登录`,退出码 0。
 
 - [ ] **Step 4: 全量测试**
 
-Run: `cargo test -p octoterm-server`
+Run: `cargo test -p gateterm-server`
 Expected: 全部 PASS(含已有测试)。
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add -A && git commit -m "feat(server): octoterm-server cloud 账号子命令
+git add -A && git commit -m "feat(server): gateterm-server cloud 账号子命令
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
@@ -1501,7 +1501,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - Modify: `crates/desktop/Cargo.toml`, `crates/desktop/src/lib.rs`, `crates/desktop/src/main.rs`, `crates/desktop/src/supervisor.rs`, `crates/desktop/src/settings/mod.rs`, `crates/desktop/src/settings/ui.rs`, `crates/desktop/src/app.rs`
 
 **Interfaces:**
-- Consumes: `octoterm_cloud_client::{ops, CloudClient, CodePurpose, credentials, default_label}`、`notifier::spawn`、`settings::state::Message`
+- Consumes: `gateterm_cloud_client::{ops, CloudClient, CodePurpose, credentials, default_label}`、`notifier::spawn`、`settings::state::Message`
 - Produces:
   - `settings::cloud::{CloudForm { url, email, password, code, confirm_delete }, CloudStatus::{LoggedOut, LoggedIn { email, url }}, CloudAction::{SendRegisterCode, Register, Login, SendResetCode, ResetPassword, Logout, SendDeleteCode, DeleteAccount}, CloudAction::keeps_secrets(self) -> bool, CloudJob, prepare(&CloudForm, &CloudStatus, CloudAction) -> Result<CloudJob, String>, status_from(Option<Credentials>) -> CloudStatus}`
   - `cloud_ops::run(job: CloudJob, path: PathBuf, label: String) -> Result<String, String>`(async)
@@ -1510,12 +1510,12 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 - [ ] **Step 1: 依赖、访问器、启动通知器**
 
-`crates/desktop/Cargo.toml` `[dependencies]` 加 `octoterm-cloud-client = { path = "../cloud-client" }`。
+`crates/desktop/Cargo.toml` `[dependencies]` 加 `gateterm-cloud-client = { path = "../cloud-client" }`。
 
 `supervisor.rs` 的 `impl Supervisor` 里、`manager()` 之后加:
 
 ```rust
-    pub fn agent_sessions(&self) -> &Arc<octoterm_server::agent::store::AgentSessionStore> {
+    pub fn agent_sessions(&self) -> &Arc<gateterm_server::agent::store::AgentSessionStore> {
         &self.agent_sessions
     }
 ```
@@ -1526,15 +1526,15 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
     // Cloud 推送通知器跟 SessionManager 同寿命,不随 HTTP 层重建;没登录时它什么也不发。
     {
         let _rt = rt.enter();
-        octoterm_server::cloud::notifier::spawn(
+        gateterm_server::cloud::notifier::spawn(
             sup.manager().clone(),
             sup.agent_sessions().clone(),
-            octoterm_cloud_client::credentials::default_path(),
+            gateterm_cloud_client::credentials::default_path(),
         );
     }
 ```
 
-Run: `cargo build -p octoterm-desktop`
+Run: `cargo build -p gateterm-desktop`
 Expected: 编译通过。
 
 - [ ] **Step 2: 写失败测试 + 纯逻辑 `settings/cloud.rs`**
@@ -1544,7 +1544,7 @@ Expected: 编译通过。
 ```rust
 //! 「Cloud 账号」区的表单与校验。和 state.rs 一样不认识 egui,全部可单测。
 
-use octoterm_cloud_client::{CodePurpose, Credentials};
+use gateterm_cloud_client::{CodePurpose, Credentials};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CloudForm {
@@ -1730,7 +1730,7 @@ mod tests {
 }
 ```
 
-Run: `cargo test -p octoterm-desktop settings::cloud`
+Run: `cargo test -p gateterm-desktop settings::cloud`
 Expected: 5 个测试 PASS。
 
 - [ ] **Step 3: 写 `crates/desktop/src/cloud_ops.rs`,`lib.rs` 加 `pub mod cloud_ops;`**
@@ -1740,8 +1740,8 @@ Expected: 5 个测试 PASS。
 
 use std::path::PathBuf;
 
-use octoterm_cloud_client::ops::{self, OpsError};
-use octoterm_cloud_client::{CloudClient, CodePurpose};
+use gateterm_cloud_client::ops::{self, OpsError};
+use gateterm_cloud_client::{CloudClient, CodePurpose};
 
 use crate::settings::cloud::CloudJob;
 
@@ -1940,9 +1940,9 @@ fn draw_cloud(ui: &mut egui::Ui, view: &mut View) -> Option<CloudAction> {
 3. `impl App` 里加两个方法:
 
 ```rust
-    fn cloud_creds() -> Option<octoterm_cloud_client::Credentials> {
-        let path = octoterm_cloud_client::credentials::default_path()?;
-        octoterm_cloud_client::credentials::load(&path).ok().flatten()
+    fn cloud_creds() -> Option<gateterm_cloud_client::Credentials> {
+        let path = gateterm_cloud_client::credentials::default_path()?;
+        gateterm_cloud_client::credentials::load(&path).ok().flatten()
     }
 
     fn start_cloud(&mut self, action: crate::settings::cloud::CloudAction) {
@@ -1958,7 +1958,7 @@ fn draw_cloud(ui: &mut egui::Ui, view: &mut View) -> Option<CloudAction> {
                 return;
             }
         };
-        let Some(path) = octoterm_cloud_client::credentials::default_path() else {
+        let Some(path) = gateterm_cloud_client::credentials::default_path() else {
             view.cloud_message = Some(Message::Err("无法确定配置目录".into()));
             return;
         };
@@ -1966,7 +1966,7 @@ fn draw_cloud(ui: &mut egui::Ui, view: &mut View) -> Option<CloudAction> {
         view.cloud_message = None;
         let proxy = self.proxy.clone();
         self.rt.spawn(async move {
-            let result = crate::cloud_ops::run(job, path, octoterm_cloud_client::default_label()).await;
+            let result = crate::cloud_ops::run(job, path, gateterm_cloud_client::default_label()).await;
             let _ = proxy.send_event(UserEvent::CloudDone(action, result));
         });
     }
@@ -2004,12 +2004,12 @@ fn draw_cloud(ui: &mut egui::Ui, view: &mut View) -> Option<CloudAction> {
 
 - [ ] **Step 6: 构建、测试、Clippy**
 
-Run: `cargo build -p octoterm-desktop && cargo test -p octoterm-desktop && cargo clippy -p octoterm-desktop -p octoterm-server -p octoterm-cloud-client --all-targets -- -D warnings`
+Run: `cargo build -p gateterm-desktop && cargo test -p gateterm-desktop && cargo clippy -p gateterm-desktop -p gateterm-server -p gateterm-cloud-client --all-targets -- -D warnings`
 Expected: 全部通过。若 `match outcome` / `match event` 报非穷尽,补上对应分支。
 
 - [ ] **Step 7: 人工验证 UI(需要 GUI)**
 
-Run: `cargo run -p octoterm-desktop`,托盘 →「设置…」。
+Run: `cargo run -p gateterm-desktop`,托盘 →「设置…」。
 Expected: 设置窗口底部出现「Cloud 账号」区;未填地址点「登录」显示红字「Cloud 地址必须以 http:// 或 https:// 开头」。完整注册/登录在 Task 6 用真实 Cloud 验证。
 
 - [ ] **Step 8: Commit**
@@ -2022,7 +2022,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 6: 端到端冒烟(真实 OctotermCloud)与文档
+### Task 6: 端到端冒烟(真实 GatetermCloud)与文档
 
 **Files:**
 - Modify: `README.md`, `README-cnzh.md`
@@ -2032,7 +2032,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 注册需要交互式输入中途收到的验证码,这里用 curl 注册,再用 CLI 登录/查看/退出:
 
 ```bash
-S=$(mktemp -d); CLOUD=~/online/eclosion/OctotermCloud
+S=$(mktemp -d); CLOUD=~/online/eclosion/GatetermCloud
 (cd $CLOUD && DEV_MAIL_LOG=1 LISTEN=127.0.0.1:18090 DATABASE_URL="sqlite://$S/cloud.db?mode=rwc" cargo run -q > $S/cloud.log 2>&1 &)
 for i in $(seq 1 90); do curl -fsS http://127.0.0.1:18090/healthz >/dev/null 2>&1 && break; sleep 1; done
 curl -s -X POST http://127.0.0.1:18090/v1/auth/email-code -H 'content-type: application/json' \
@@ -2041,14 +2041,14 @@ sleep 1; CODE=$(grep -o '<b>[0-9]\{6\}</b>' $S/cloud.log | tail -1 | tr -dc 0-9)
 curl -s -X POST http://127.0.0.1:18090/v1/auth/register -H 'content-type: application/json' \
   -d "{\"email\":\"e2e@example.com\",\"code\":\"$CODE\",\"password\":\"e2e-password\",\"client\":{\"kind\":\"device\",\"label\":\"phone\"}}"; echo
 printf '[cloud]\nurl = "http://127.0.0.1:18090"\n' > $S/config.toml
-export OCTOTERM_CLOUD_FILE=$S/cloud.json
-cd ~/online/eclosion/Octoterm
-printf 'e2e@example.com\ne2e-password\n' | ./target/debug/octoterm-server --config $S/config.toml cloud login
-./target/debug/octoterm-server --config $S/config.toml cloud status
+export GATETERM_CLOUD_FILE=$S/cloud.json
+cd ~/online/eclosion/Gateterm
+printf 'e2e@example.com\ne2e-password\n' | ./target/debug/gateterm-server --config $S/config.toml cloud login
+./target/debug/gateterm-server --config $S/config.toml cloud status
 stat -f '%Lp' $S/cloud.json
-./target/debug/octoterm-server --config $S/config.toml cloud logout
-./target/debug/octoterm-server --config $S/config.toml cloud status
-pkill -f 'target/debug/octoterm-cloud'
+./target/debug/gateterm-server --config $S/config.toml cloud logout
+./target/debug/gateterm-server --config $S/config.toml cloud status
+pkill -f 'target/debug/gateterm-cloud'
 ```
 
 Expected:
@@ -2063,7 +2063,7 @@ Expected:
 `README-cnzh.md` 末尾(或「配置」一节之后)加:
 
 ```markdown
-## Octoterm Cloud(可选)
+## Gateterm Cloud(可选)
 
 登录 Cloud 之后,agent 进入「等你」状态时会通过 Cloud 推送到手机(手机端推送将在后续版本提供)。不登录不影响任何功能。
 
@@ -2071,12 +2071,12 @@ Expected:
 - 登录态保存在配置目录的 `cloud.json`(权限 0600)。
 
 ```bash
-octoterm-server cloud register        # 注册并登录(邮件验证码)
-octoterm-server cloud login
-octoterm-server cloud status
-octoterm-server cloud logout
-octoterm-server cloud reset-password
-octoterm-server cloud delete-account  # 永久删除账号及全部数据
+gateterm-server cloud register        # 注册并登录(邮件验证码)
+gateterm-server cloud login
+gateterm-server cloud status
+gateterm-server cloud logout
+gateterm-server cloud reset-password
+gateterm-server cloud delete-account  # 永久删除账号及全部数据
 ```
 
 Cloud 地址可写进 `config.toml`:
@@ -2092,20 +2092,20 @@ desktop 用户在「设置…」窗口底部的「Cloud 账号」区操作。
 `README.md` 加对应英文段落:
 
 ```markdown
-## Octoterm Cloud (optional)
+## Gateterm Cloud (optional)
 
-Signing in to Octoterm Cloud lets agent "waiting for you" events reach your phone as push notifications (mobile push lands in a later release). Everything works without signing in.
+Signing in to Gateterm Cloud lets agent "waiting for you" events reach your phone as push notifications (mobile push lands in a later release). Everything works without signing in.
 
 - Cloud never relays terminal data and never sees this machine's access token; a push carries only the session number, agent name and tool name.
 - The sign-in state lives in `cloud.json` in the config directory (mode 0600).
 
 ```bash
-octoterm-server cloud register        # sign up and sign in (email code)
-octoterm-server cloud login
-octoterm-server cloud status
-octoterm-server cloud logout
-octoterm-server cloud reset-password
-octoterm-server cloud delete-account  # permanently delete the account and all its data
+gateterm-server cloud register        # sign up and sign in (email code)
+gateterm-server cloud login
+gateterm-server cloud status
+gateterm-server cloud logout
+gateterm-server cloud reset-password
+gateterm-server cloud delete-account  # permanently delete the account and all its data
 ```
 
 Set a default Cloud address in `config.toml`:
@@ -2126,7 +2126,7 @@ Expected: 全部通过。
 - [ ] **Step 4: Commit 并合回 dev**
 
 ```bash
-git add -A && git commit -m "docs: Octoterm Cloud 登录与推送说明
+git add -A && git commit -m "docs: Gateterm Cloud 登录与推送说明
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 git checkout dev && git merge --ff-only feat/cloud-login

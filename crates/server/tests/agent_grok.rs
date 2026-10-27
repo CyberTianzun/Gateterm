@@ -4,11 +4,11 @@
 
 mod common;
 
-use octoterm_server::agent::apply::{apply, ApplyOpts};
-use octoterm_server::agent::detect::DetectEnv;
-use octoterm_server::agent::edit::InstallCtx;
-use octoterm_server::agent::store::hook_token;
-use octoterm_server::agent::{find, plan_purge, scan, Confidence, Integration};
+use gateterm_server::agent::apply::{apply, ApplyOpts};
+use gateterm_server::agent::detect::DetectEnv;
+use gateterm_server::agent::edit::InstallCtx;
+use gateterm_server::agent::store::hook_token;
+use gateterm_server::agent::{find, plan_purge, scan, Confidence, Integration};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
@@ -24,7 +24,7 @@ fn env() -> Env {
 
 impl Env {
     fn hooks(&self) -> PathBuf {
-        self.home.path().join(".grok").join("hooks").join("octoterm.json")
+        self.home.path().join(".grok").join("hooks").join("gateterm.json")
     }
     fn ctx(&self, port: u16) -> InstallCtx {
         InstallCtx { home: self.home.path().to_path_buf(), port, include_blocking: true }
@@ -106,11 +106,11 @@ fn parses_camel_case_payloads() {
     assert_eq!(up.cwd.as_deref(), Some("/w"));
 
     let waiting = g.parse("Notification", &json!({ "notificationType": "permission_prompt" })).unwrap();
-    assert_eq!(waiting.state, Some(octoterm_protocol::AgentState::Waiting));
+    assert_eq!(waiting.state, Some(gateterm_protocol::AgentState::Waiting));
     assert!(g.parse("Notification", &json!({ "notificationType": "task_complete" })).is_none());
     assert_eq!(
         g.parse("SessionEnd", &json!({})).unwrap().state,
-        Some(octoterm_protocol::AgentState::Done)
+        Some(gateterm_protocol::AgentState::Done)
     );
 }
 
@@ -148,7 +148,7 @@ async fn hook_route_reads_camel_case_session_id() {
     let r = reqwest::Client::new()
         .post(format!("http://{addr}/hook/grok/user-prompt-submit"))
         .header("Authorization", format!("Bearer {}", hook_token()))
-        .header("X-Octoterm-Session", "3")
+        .header("X-Gateterm-Session", "3")
         .body(json!({ "sessionId": "g-1", "cwd": "/w", "hook_event_name": "UserPromptSubmit" }).to_string())
         .send()
         .await

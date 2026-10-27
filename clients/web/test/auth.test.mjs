@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 function browser(url, savedToken) {
-  const storage = new Map(savedToken === undefined ? [] : [["octoterm-token", savedToken]]);
+  const storage = new Map(savedToken === undefined ? [] : [["gateterm-token", savedToken]]);
   const replacements = [];
   const prompts = [];
   globalThis.location = new URL(url);
@@ -36,7 +36,7 @@ function browser(url, savedToken) {
 test("a shared token is saved and removed from the current URL; refresh still authenticates", () => {
   const { storage, replacements, prompts } = browser("https://example.com/#token=new%2Bsecret", "old-token");
   assert.equal(readToken("Token:"), "new+secret");
-  assert.equal(storage.get("octoterm-token"), "new+secret");
+  assert.equal(storage.get("gateterm-token"), "new+secret");
   assert.equal(location.href, "https://example.com/");
   assert.deepEqual(replacements, [{ state: history.state, title: "", url: "/" }]);
   assert.equal(readToken("Token:"), "new+secret");
@@ -71,7 +71,7 @@ test("manual credentials are saved and reused without another prompt", () => {
   const { prompts } = browser("https://example.com/");
   assert.equal(readToken("Enter token:"), "manual-token");
   assert.equal(readToken("Enter token:"), "manual-token");
-  assert.equal(localStorage.getItem("octoterm-token"), "manual-token");
+  assert.equal(localStorage.getItem("gateterm-token"), "manual-token");
   assert.deepEqual(prompts, ["Enter token:"]);
 });
 
@@ -81,7 +81,7 @@ test("cancellation and whitespace do not save an empty credential", () => {
   assert.equal(readToken("Enter token:"), "");
   globalThis.prompt = () => "   ";
   assert.equal(readToken("Enter token:"), "");
-  assert.equal(storage.has("octoterm-token"), false);
+  assert.equal(storage.has("gateterm-token"), false);
 });
 
 test("blocked storage does not discard a shared or manually entered token", () => {

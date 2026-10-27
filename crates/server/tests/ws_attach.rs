@@ -4,7 +4,7 @@ use common::{
     read_channel_until, start_test_server, start_test_server_with_cap,
 };
 use futures_util::{SinkExt, StreamExt};
-use octoterm_protocol::{AttachMode, ClientMsg, ServerMsg};
+use gateterm_protocol::{AttachMode, ClientMsg, ServerMsg};
 use std::time::Duration;
 
 /// 快速产生大量输出、然后保持存活(便于测试结束时 kill),用来把 256 槽的

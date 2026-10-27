@@ -4,14 +4,14 @@
 
 mod common;
 
-use octoterm_server::agent::apply::{apply, ApplyError, ApplyOpts};
-use octoterm_server::agent::antigravity_transcript::{locate, parse};
-use octoterm_server::agent::detect::DetectEnv;
-use octoterm_server::agent::edit::{InstallCtx, is_ours};
-use octoterm_server::agent::store::hook_token;
-use octoterm_server::agent::transcript::{Block, Role};
-use octoterm_server::agent::{find, plan_purge, scan, Integration};
-use octoterm_protocol::AgentState;
+use gateterm_server::agent::apply::{apply, ApplyError, ApplyOpts};
+use gateterm_server::agent::antigravity_transcript::{locate, parse};
+use gateterm_server::agent::detect::DetectEnv;
+use gateterm_server::agent::edit::{InstallCtx, is_ours};
+use gateterm_server::agent::store::hook_token;
+use gateterm_server::agent::transcript::{Block, Role};
+use gateterm_server::agent::{find, plan_purge, scan, Integration};
+use gateterm_protocol::AgentState;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
@@ -56,7 +56,7 @@ impl Env {
     }
 }
 
-/// 共用文件里只占 `octoterm` 这一个顶层键,别人的具名 hook 原样不动。
+/// 共用文件里只占 `gateterm` 这一个顶层键,别人的具名 hook 原样不动。
 #[test]
 fn installs_as_one_named_entry_in_the_shared_file() {
     let e = env();
@@ -65,7 +65,7 @@ fn installs_as_one_named_entry_in_the_shared_file() {
     e.install(7683).unwrap();
     let doc = e.doc();
     assert_eq!(doc["lint"], theirs["lint"]);
-    let ours = &doc["octoterm"];
+    let ours = &doc["gateterm"];
     // 平铺事件直接是处理器列表;工具事件要包 {matcher, hooks}
     assert!(is_ours(&ours["SessionStart"][0], 7683));
     assert!(ours["Stop"][0]["command"].is_string());
@@ -79,14 +79,14 @@ fn installs_as_one_named_entry_in_the_shared_file() {
 fn never_installs_pre_tool_use() {
     let e = env();
     e.install(7683).unwrap();
-    assert!(e.doc()["octoterm"].get("PreToolUse").is_none());
+    assert!(e.doc()["gateterm"].get("PreToolUse").is_none());
 }
 
 /// 同名但不是我们写的条目:拒绝覆盖,文件原样不动。
 #[test]
 fn foreign_entry_with_our_name_is_never_overwritten() {
     let e = env();
-    let foreign = json!({ "octoterm": { "Stop": [{ "command": "./mine.sh" }] } });
+    let foreign = json!({ "gateterm": { "Stop": [{ "command": "./mine.sh" }] } });
     e.seed(&foreign);
     assert!(matches!(e.install(7683), Err(ApplyError::Invalid { .. })));
     assert_eq!(e.doc(), foreign);
@@ -115,7 +115,7 @@ fn purge_removes_our_entry() {
     e.install(7683).unwrap();
     let a = find("antigravity").unwrap();
     apply(&plan_purge(a.as_ref(), &e.ctx(0)).unwrap(), &e.opts()).unwrap();
-    assert!(e.doc().get("octoterm").is_none());
+    assert!(e.doc().get("gateterm").is_none());
 }
 
 #[test]
@@ -183,14 +183,14 @@ fn gemini_cli_and_antigravity_ide_files_do_not_identify_antigravity_cli() {
 #[test]
 fn replaces_legacy_quoted_commands_and_recognizes_the_encoded_install() {
     let e = env();
-    e.seed(&json!({"octoterm":{"Stop":[{"type":"command", "command":
-        "\"C:\\Old Octoterm\\octoterm-desktop.exe\" hook http://127.0.0.1:7683/hook/antigravity/stop"}]}}));
+    e.seed(&json!({"gateterm":{"Stop":[{"type":"command", "command":
+        "\"C:\\Old Gateterm\\gateterm-desktop.exe\" hook http://127.0.0.1:7683/hook/antigravity/stop"}]}}));
     assert_eq!(e.integration(7683), Integration::Outdated);
     e.install(7683).unwrap();
     assert_eq!(e.integration(7683), Integration::Installed);
     assert_eq!(e.integration(9999), Integration::StalePort);
     e.uninstall();
-    assert!(e.doc().get("octoterm").is_none());
+    assert!(e.doc().get("gateterm").is_none());
 }
 
 #[test]
@@ -226,7 +226,7 @@ async fn hook_route_replies_with_an_empty_json_object() {
     let r = reqwest::Client::new()
         .post(format!("http://{addr}/hook/antigravity/pre-invocation"))
         .header("Authorization", format!("Bearer {}", hook_token()))
-        .header("X-Octoterm-Session", "4")
+        .header("X-Gateterm-Session", "4")
         .body(json!({ "conversationId": "c-9", "workspacePaths": ["/w"] }).to_string())
         .send()
         .await
@@ -252,15 +252,15 @@ async fn installed_hooks_link_terminal_state_and_chat_messages() {
     });
     for (event, expected) in [("SessionStart", "idle"), ("PreInvocation", "thinking"),
         ("PostToolUse", "working"), ("Stop", "idle")] {
-        let command = octoterm_server::agent::hook_cli::command_for_executable(
-            "antigravity", addr.port(), event, std::path::Path::new(env!("CARGO_BIN_EXE_octoterm-server")));
+        let command = gateterm_server::agent::hook_cli::command_for_executable(
+            "antigravity", addr.port(), event, std::path::Path::new(env!("CARGO_BIN_EXE_gateterm-server")));
         let mut shell = if cfg!(windows) {
             let mut command = tokio::process::Command::new("cmd.exe"); command.arg("/C"); command
         } else {
             let mut command = tokio::process::Command::new("sh"); command.arg("-c"); command
         };
         let mut child = shell.arg(command)
-            .env("OCTOTERM_SESSION_ID", "21").env("OCTOTERM_HOOK_TOKEN", hook_token())
+            .env("GATETERM_SESSION_ID", "21").env("GATETERM_HOOK_TOKEN", hook_token())
             .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
             .kill_on_drop(true).spawn().unwrap();
         child.stdin.take().unwrap().write_all(body.to_string().as_bytes()).await.unwrap();

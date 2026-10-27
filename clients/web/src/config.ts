@@ -18,9 +18,9 @@ import { BUILTIN_FONTS } from "./fonts";
 import { LOCALES, type LocalePref, t } from "./i18n";
 
 export const CONFIG_VERSION = 1;
-export const STORAGE_KEY = "octoterm-config";
+export const STORAGE_KEY = "gateterm-config";
 
-export interface OctoConfig {
+export interface GateConfig {
   version: number;
   theme: {
     /** 主题名。只是标签 —— 真正生效的是 colors,这样导出的 JSON 自带全部颜色, */
@@ -83,7 +83,7 @@ export const DEFAULT_FONT_FAMILY = BUILTIN_FONTS[0].stack;
  * 参数化而不是在这里读 matchMedia,是为了保住这个模块「纯函数、不碰 DOM」的
  * 性质(见文件顶部)——系统偏好由调用方在副作用边界上读,见 systemPrefersDark。
  */
-export function defaultConfig(prefersDark = true): OctoConfig {
+export function defaultConfig(prefersDark = true): GateConfig {
   const themeName = prefersDark ? DEFAULT_THEMES.dark : DEFAULT_THEMES.light;
   return {
     version: CONFIG_VERSION,
@@ -187,7 +187,7 @@ export function sanitizeTheme(input: unknown, warn: Warn = () => {}): ITheme {
 }
 
 /**
- * 把任意输入收敛成一个可用的 OctoConfig。永不抛异常。
+ * 把任意输入收敛成一个可用的 GateConfig。永不抛异常。
  *
  * `resolveTheme` 用来处理「只给了主题名、没给颜色」的导入(手写配置的常见形态):
  * 拿名字去查目录。查不到就退回默认主题。
@@ -195,7 +195,7 @@ export function sanitizeTheme(input: unknown, warn: Warn = () => {}): ITheme {
 export function sanitizeConfig(
   input: unknown,
   opts: { resolveTheme?: (name: string) => ITheme | undefined; warn?: Warn } = {},
-): OctoConfig {
+): GateConfig {
   const warn = opts.warn ?? (() => {});
   const resolve = opts.resolveTheme ?? ((n: string) => BUILTIN_THEMES[n]);
   const d = defaultConfig();
@@ -230,9 +230,9 @@ export function sanitizeConfig(
 
 function sanitizeRest(
   src: Record<string, unknown>,
-  d: OctoConfig,
+  d: GateConfig,
   warn: Warn,
-): Pick<OctoConfig, "font" | "terminal" | "ui"> {
+): Pick<GateConfig, "font" | "terminal" | "ui"> {
   const f = isObj(src.font) ? src.font : {};
   const t = isObj(src.terminal) ? src.terminal : {};
   const u = isObj(src.ui) ? src.ui : {};
@@ -266,7 +266,7 @@ function sanitizeRest(
 /* ---------- 与 xterm 的接口 ---------- */
 
 /** 配置 -> xterm 选项。赋给 `term.options` 即时生效,不需要重建 Terminal。 */
-export function toTerminalOptions(cfg: OctoConfig): ITerminalOptions {
+export function toTerminalOptions(cfg: GateConfig): ITerminalOptions {
   return {
     theme: cfg.theme.colors,
     fontFamily: cfg.font.family,
@@ -288,12 +288,12 @@ export function toTerminalOptions(cfg: OctoConfig): ITerminalOptions {
 
 /* ---------- 序列化 ---------- */
 
-export function exportConfigJson(cfg: OctoConfig): string {
+export function exportConfigJson(cfg: GateConfig): string {
   return JSON.stringify(cfg, null, 2) + "\n";
 }
 
 export interface ImportResult {
-  config: OctoConfig;
+  config: GateConfig;
   warnings: string[];
 }
 
@@ -320,7 +320,7 @@ export function systemPrefersDark(): boolean {
 }
 
 /** 跟随系统亮暗的默认配置。首次打开和「恢复全部默认」都走这里。 */
-export function systemDefaultConfig(): OctoConfig {
+export function systemDefaultConfig(): GateConfig {
   return defaultConfig(systemPrefersDark());
 }
 
@@ -333,7 +333,7 @@ export function systemDefaultConfig(): OctoConfig {
  * 在用户真正改过一次设置之前,主题就一直跟着系统走;一旦改过(哪怕改的是字号),
  * 整份配置被持久化,此后系统再切换亮暗也不会覆盖用户自己的选择。
  */
-export function loadConfig(resolveTheme?: (name: string) => ITheme | undefined): OctoConfig {
+export function loadConfig(resolveTheme?: (name: string) => ITheme | undefined): GateConfig {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw === null) return systemDefaultConfig();
@@ -344,7 +344,7 @@ export function loadConfig(resolveTheme?: (name: string) => ITheme | undefined):
 }
 
 /** 写持久化配置。写不进去(隐私模式/配额满)不是致命错误,当次会话照常工作。 */
-export function saveConfig(cfg: OctoConfig): void {
+export function saveConfig(cfg: GateConfig): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
   } catch {

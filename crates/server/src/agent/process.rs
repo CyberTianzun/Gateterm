@@ -80,7 +80,7 @@ fn find_codex(system: &System, root: u32) -> Option<Identity> {
 
 pub(super) async fn watch_codex(state: &AppState, session: &AgentSession, event: &str) {
     if session.agent_id != "codex"
-        || session.state == octoterm_protocol::AgentState::Done
+        || session.state == gateterm_protocol::AgentState::Done
         || (session.process.is_some() && event != "SessionStart")
     {
         return;
@@ -156,7 +156,7 @@ fn spawn_watch(
 mod tests {
     use super::super::store::Update;
     use super::*;
-    use octoterm_protocol::{AgentState, ServerMsg};
+    use gateterm_protocol::{AgentState, ServerMsg};
 
     #[test]
     fn shared_daemon_is_not_the_terminal_cli() {

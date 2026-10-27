@@ -3,8 +3,8 @@
 //! fixture 从**真实** rollout 文件脱敏而来:文本换占位符,结构原样保留 —— 两条并行的
 //! 流、六种 payload、一条加密的 reasoning、一行坏 JSON,以及 Codex 特有的 `developer` 角色。
 
-use octoterm_server::agent::codex_transcript::{locate, parse};
-use octoterm_server::agent::transcript::{Block, Role};
+use gateterm_server::agent::codex_transcript::{locate, parse};
+use gateterm_server::agent::transcript::{Block, Role};
 
 const FIXTURE: &str = include_str!("fixtures/codex-rollout.jsonl");
 

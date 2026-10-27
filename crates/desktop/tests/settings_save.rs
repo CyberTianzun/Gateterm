@@ -15,13 +15,13 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
-use octoterm_desktop::configfile::Editable;
-use octoterm_desktop::settings::save::{apply as apply_in, Applied, Current, Effects};
-use octoterm_desktop::settings::state::{Form, Message};
+use gateterm_desktop::configfile::Editable;
+use gateterm_desktop::settings::save::{apply as apply_in, Applied, Current, Effects};
+use gateterm_desktop::settings::state::{Form, Message};
 
 /// `config_path()` 返回的路径。`save_config` 会校验自己收到的就是这一个 ——
 /// 否则 `config_path()` 的返回值有没有被正确传下去是测不出来的。
-const CONFIG_PATH: &str = "/tmp/octoterm-test/config.toml";
+const CONFIG_PATH: &str = "/tmp/gateterm-test/config.toml";
 
 /// `new_token()` 的返回值。固定值,方便断言「这个 token 是现场生成的」。
 const FRESH_TOKEN: &str = "0123456789abcdef0123456789abcdef";
@@ -358,12 +358,12 @@ fn the_autostart_checkbox_is_passed_through() {
 }
 
 fn apply(form: &Form, current: &Current, fx: &mut impl Effects) -> Applied {
-    apply_in(form, current, fx, octoterm_desktop::i18n::Locale::ZhCn)
+    apply_in(form, current, fx, gateterm_desktop::i18n::Locale::ZhCn)
 }
 
 #[test]
 fn changing_only_language_persists_without_restarting_sessions() {
-    use octoterm_desktop::i18n::{LanguagePref, Locale};
+    use gateterm_desktop::i18n::{LanguagePref, Locale};
     let mut fx = fx_running();
     let live = current();
     let mut next = Form::from_current(live.listen.unwrap(), false);
@@ -380,7 +380,7 @@ fn changing_only_language_persists_without_restarting_sessions() {
 #[test]
 fn english_validation_error_does_not_apply_or_save_preferences() {
     let mut fx = fx_running();
-    let result = apply_in(&form("invalid", "7683", "tok"), &current(), &mut fx, octoterm_desktop::i18n::Locale::En);
+    let result = apply_in(&form("invalid", "7683", "tok"), &current(), &mut fx, gateterm_desktop::i18n::Locale::En);
     assert_eq!(err_text(&result), "Invalid IP address: invalid");
     assert!(fx.calls.is_empty());
 }

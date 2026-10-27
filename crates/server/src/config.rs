@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
-/// `octoterm-server` 的默认监听:**只回环**。
+/// `gateterm-server` 的默认监听:**只回环**。
 ///
 /// 无头部署往往跑在别人的机器上、被别的东西转发,默认对外开是不礼貌也不安全的。
 /// 要对外用 `--host` 显式说出来。
@@ -12,7 +12,7 @@ pub fn default_listen() -> SocketAddr {
     "127.0.0.1:7683".parse().unwrap()
 }
 
-/// `octoterm-desktop` 的默认监听:**全网卡**。
+/// `gateterm-desktop` 的默认监听:**全网卡**。
 ///
 /// 和 server 不同是有意的。desktop 的存在理由就是「从手机/平板连回自己这台机器」——
 /// 默认只回环等于这个产品开箱即不可用,而绝大多数人不会去翻文档改配置。
@@ -122,8 +122,8 @@ impl Default for AgentsConfig {
     }
 }
 
-/// `[cloud]` —— 可选的 Octoterm Cloud(账号 + 手机推送中继)。
-/// `url` 只是登录时的默认地址;真正的登录态在 `cloud.json`(见 `octoterm_cloud_client::credentials`)。
+/// `[cloud]` —— 可选的 Gateterm Cloud(账号 + 手机推送中继)。
+/// `url` 只是登录时的默认地址;真正的登录态在 `cloud.json`(见 `gateterm_cloud_client::credentials`)。
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct CloudConfig {
     #[serde(default)]
@@ -151,13 +151,13 @@ pub struct Config {
 
 
 fn default_path() -> Result<PathBuf> {
-    let dirs = directories::ProjectDirs::from("", "", "octoterm")
+    let dirs = directories::ProjectDirs::from("", "", "gateterm")
         .context("cannot determine config directory")?;
     Ok(dirs.config_dir().join("config.toml"))
 }
 
 impl Config {
-    /// 只读加载:**自己的** config.toml 由 octoterm-desktop 写,server 只读。
+    /// 只读加载:**自己的** config.toml 由 gateterm-desktop 写,server 只读。
     /// (server 唯一会写的是 agent 集成装 hook 时改的**别人的**配置文件,受
     /// `agents.install_enabled` 门控,见 `crate::agent::apply`。)
     /// 显式路径必须存在;缺省路径存在则读,不存在用默认值。

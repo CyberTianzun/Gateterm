@@ -11,9 +11,9 @@ use anyhow::{Context, Result};
 const MAX_LOG_BYTES: u64 = 1 << 20;
 
 pub fn log_path() -> Result<PathBuf> {
-    let dirs = directories::ProjectDirs::from("", "", "octoterm")
+    let dirs = directories::ProjectDirs::from("", "", "gateterm")
         .context("无法确定配置目录")?;
-    Ok(dirs.config_dir().join("octoterm.log"))
+    Ok(dirs.config_dir().join("gateterm.log"))
 }
 
 pub fn truncate_if_larger_than(path: &Path, limit: u64) -> std::io::Result<()> {
@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn an_oversized_log_is_truncated() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("octoterm.log");
+        let path = dir.path().join("gateterm.log");
         std::fs::write(&path, vec![b'x'; 4096]).unwrap();
 
         truncate_if_larger_than(&path, 1024).unwrap();
@@ -136,7 +136,7 @@ mod tests {
     #[test]
     fn a_small_log_is_left_alone() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("octoterm.log");
+        let path = dir.path().join("gateterm.log");
         std::fs::write(&path, b"hello").unwrap();
 
         truncate_if_larger_than(&path, 1024).unwrap();

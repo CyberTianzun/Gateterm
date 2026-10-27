@@ -7,7 +7,7 @@
 //! 扫描别人的配置,agent 集成在用户显式动作下**会写**别人的配置。这条例外的边界是
 //! 「发现只读、集成需显式动作」,由三道关卡守住:`agents.install_enabled` 开关、
 //! 写前备份、卸载能还原。设计依据见
-//! `docs/superpowers/specs/2026-08-18-octoterm-agent-integration-design.md`。
+//! `docs/superpowers/specs/2026-08-18-gateterm-agent-integration-design.md`。
 
 use serde::Serialize;
 use std::path::PathBuf;
@@ -283,7 +283,7 @@ pub fn startup_warnings(env: &detect::DetectEnv, port: u16) -> Vec<String> {
             };
             Some(format!(
                 "{name}: {why},远程接管 / 通知不会完全生效。{path}\n      \
-                 在「设置 → AI 集成」里重新安装;若有残留,先用「清空」或 `octoterm-server purge-hooks`",
+                 在「设置 → AI 集成」里重新安装;若有残留,先用「清空」或 `gateterm-server purge-hooks`",
                 name = a.name,
             ))
         })
@@ -293,7 +293,7 @@ pub fn startup_warnings(env: &detect::DetectEnv, port: u16) -> Vec<String> {
 /// 启动日志里「放行那一步怎么做」。客户端按 `activation` 键自己出文案,这里只服务日志。
 fn activation_hint(key: Option<&str>) -> &'static str {
     match key {
-        Some("codex-hooks-review") => "在 octoterm 里启动 codex,执行 /hooks 逐条审核通过,再重启 codex",
+        Some("codex-hooks-review") => "在 gateterm 里启动 codex,执行 /hooks 逐条审核通过,再重启 codex",
         Some("pi-reload") => "在 pi 里执行 /reload 或重启 pi",
         _ => "按设置页「AI 集成」里的提示完成最后一步",
     }

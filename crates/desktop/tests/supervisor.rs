@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use octoterm_desktop::supervisor::Supervisor;
-use octoterm_protocol::{ClientMsg, Frame, ServerMsg, CONTROL_CHANNEL, PROTO_VERSION};
-use octoterm_server::config::WindowSize;
+use gateterm_desktop::supervisor::Supervisor;
+use gateterm_protocol::{ClientMsg, Frame, ServerMsg, CONTROL_CHANNEL, PROTO_VERSION};
+use gateterm_server::config::WindowSize;
 use tokio_tungstenite::tungstenite::Message;
 
 /// 一个不会自己退出的会话,测完由 kill 收尾。
@@ -127,7 +127,7 @@ async fn stop_releases_the_port_but_not_the_sessions() {
 // 链条是这样的:`restart` 走「地址没变、只改 token」时是先 `stop()` 再带重试地
 // bind;而 `stop()` 的 abort 够不着已经升级完成的 WebSocket —— axum 的 ws 回调跑在
 // `on_upgrade` 自己 `tokio::spawn` 出去的独立任务里。那条连接的 TCP socket,其
-// local port 就是监听端口,而且按 octoterm 的产品设计它永远不主动关闭。于是重新
+// local port 就是监听端口,而且按 gateterm 的产品设计它永远不主动关闭。于是重新
 // bind 时,同一个 local port 上还挂着一批 ESTABLISHED socket。
 //
 // mio 只在 Unix 给 TcpListener 设 `SO_REUSEADDR`,Windows 上**明确不设**(见 mio

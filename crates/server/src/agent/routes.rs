@@ -219,7 +219,7 @@ pub async fn sessions(State(state): State<AppState>, headers: HeaderMap) -> Resp
 /// 因为 agent 把 hook 的非 2xx 当成错误显示。
 ///
 /// 而「不是托管会话打来的」是**完全正常**的事,不是错误:hook 装在用户级全局配置里,
-/// 这台机器上每一个 Claude 会话都会触发它,其中绝大多数不是从 octoterm 里起的。
+/// 这台机器上每一个 Claude 会话都会触发它,其中绝大多数不是从 gateterm 里起的。
 /// 把设计上必然发生的事报成错误,等于让用户天天看红字。
 ///
 /// `200` + 空体对 agent 的语义恰好是「收到了,没有决定」,它照常走自己的流程。诊断
@@ -278,7 +278,7 @@ pub async fn hook(
     // 关联到哪个托管会话。**不校验会话是否还活着** —— 会话刚没、hook 还在路上是
     // 正常的时序,交给清理去收(见 store::decide),不必在这里制造一个失败。
     let Some(session) = headers
-        .get("X-Octoterm-Session")
+        .get("X-Gateterm-Session")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok())
     else {
@@ -374,7 +374,7 @@ async fn blocking_hook(
         Some(session),
         Update { detail: tool_name.clone(), ..Default::default() },
     );
-    if snapshot.state == octoterm_protocol::AgentState::Done {
+    if snapshot.state == gateterm_protocol::AgentState::Done {
         return Json(adapter.render(&Decision::NoDecision)).into_response();
     }
 

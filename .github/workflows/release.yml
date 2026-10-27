@@ -103,12 +103,12 @@ jobs:
           echo "CARGO_TARGET_$(echo ${{ matrix.target }} | tr 'a-z-' 'A-Z_')_LINKER=${{ matrix.linker }}" >> "$GITHUB_ENV"
 
       - name: Build server
-        run: cargo build --release --target ${{ matrix.target }} -p octoterm-server
+        run: cargo build --release --target ${{ matrix.target }} -p gateterm-server
 
       # desktop 只支持 Windows/macOS
       - name: Build desktop
         if: matrix.desktop
-        run: cargo build --release --target ${{ matrix.target }} -p octoterm-desktop
+        run: cargo build --release --target ${{ matrix.target }} -p gateterm-desktop
 
       - name: Bundle desktop (macOS)
         if: matrix.desktop && runner.os == 'macOS'
@@ -125,12 +125,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          server="octoterm-server-${VERSION}-${{ matrix.target }}.tar.gz"
-          tar -czf "dist/$server" -C "target/${{ matrix.target }}/release" octoterm-server
+          server="gateterm-server-${VERSION}-${{ matrix.target }}.tar.gz"
+          tar -czf "dist/$server" -C "target/${{ matrix.target }}/release" gateterm-server
           if [ "${{ matrix.desktop }}" = "true" ]; then
-            desktop="octoterm-desktop-${VERSION}-${{ matrix.target }}.zip"
+            desktop="gateterm-desktop-${VERSION}-${{ matrix.target }}.zip"
             # ditto 保留 .app 的权限位和扩展属性,比 zip -r 可靠
-            ditto -c -k --keepParent target/bundle/octoterm.app "dist/$desktop"
+            ditto -c -k --keepParent target/bundle/gateterm.app "dist/$desktop"
           fi
           cd dist && for f in *; do shasum -a 256 "$f" > "$f.sha256"; done
 
@@ -139,11 +139,11 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Compress-Archive -Path "target/${{ matrix.target }}/release/octoterm-server.exe" `
-            -DestinationPath "dist/octoterm-server-$env:VERSION-${{ matrix.target }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/gateterm-server.exe" `
+            -DestinationPath "dist/gateterm-server-$env:VERSION-${{ matrix.target }}.zip"
           if ("${{ matrix.desktop }}" -eq "true") {
-            Compress-Archive -Path "target/bundle/octoterm-desktop.exe" `
-              -DestinationPath "dist/octoterm-desktop-$env:VERSION-${{ matrix.target }}.zip"
+            Compress-Archive -Path "target/bundle/gateterm-desktop.exe" `
+              -DestinationPath "dist/gateterm-desktop-$env:VERSION-${{ matrix.target }}.zip"
           }
           Get-ChildItem dist -File | ForEach-Object {
             (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + "  $($_.Name)" |
@@ -152,7 +152,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: octoterm-${{ matrix.target }}
+          name: gateterm-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 

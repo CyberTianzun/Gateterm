@@ -1,4 +1,4 @@
-//! Cloud HTTP API。错误码与 OctotermCloud 的 `{"error": "<code>"}` 一一对应。
+//! Cloud HTTP API。错误码与 GatetermCloud 的 `{"error": "<code>"}` 一一对应。
 
 use std::time::Duration;
 
@@ -148,7 +148,7 @@ pub struct Notify {
 /// 登录时给 Cloud 看的这台机器的名字。
 pub fn default_label() -> String {
     let name: String = gethostname::gethostname().to_string_lossy().trim().chars().take(64).collect();
-    if name.is_empty() { "octoterm".into() } else { name }
+    if name.is_empty() { "gateterm".into() } else { name }
 }
 
 pub struct CloudClient {

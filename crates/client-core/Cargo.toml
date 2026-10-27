@@ -1,5 +1,5 @@
 [package]
-name = "octoterm-client-core"
+name = "gateterm-client-core"
 version = "0.2.5"
 edition.workspace = true
 license.workspace = true

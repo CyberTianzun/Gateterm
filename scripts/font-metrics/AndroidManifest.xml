@@ -1,7 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="ai.eclosion.octoterm.diagnostics.fontmetrics">
+    package="ai.eclosion.gateterm.diagnostics.fontmetrics">
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
-    <application android:label="Octoterm font metrics probe" android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+    <application android:label="Gateterm font metrics probe" android:theme="@android:style/Theme.Material.Light.NoActionBar" />
     <instrumentation android:name=".FontMetricsProbe"
-        android:targetPackage="ai.eclosion.octoterm.diagnostics.fontmetrics" />
+        android:targetPackage="ai.eclosion.gateterm.diagnostics.fontmetrics" />
 </manifest>

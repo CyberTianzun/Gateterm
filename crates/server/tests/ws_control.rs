@@ -2,7 +2,7 @@ mod common;
 use common::{control, parse_server, start_test_server};
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
-use octoterm_protocol::{ClientMsg, ServerMsg, SessionEventKind, PROTO_VERSION};
+use gateterm_protocol::{ClientMsg, ServerMsg, SessionEventKind, PROTO_VERSION};
 
 async fn connect(url: &str) -> impl futures_util::Sink<tokio_tungstenite::tungstenite::Message, Error = tokio_tungstenite::tungstenite::Error>
        + futures_util::Stream<Item = Result<tokio_tungstenite::tungstenite::Message, tokio_tungstenite::tungstenite::Error>>

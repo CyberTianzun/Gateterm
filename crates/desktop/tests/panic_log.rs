@@ -12,19 +12,19 @@ use std::path::Path;
 use std::process::Command;
 
 /// 有这个环境变量的就是被拉起来的那一份,它负责去 panic。
-const CHILD: &str = "OCTOTERM_PANIC_LOG_CHILD";
+const CHILD: &str = "GATETERM_PANIC_LOG_CHILD";
 
 const MESSAGE: &str = "烟雾测试:炸给日志看";
 
 #[test]
 fn a_panic_lands_in_the_log_file() {
     if let Ok(log) = std::env::var(CHILD) {
-        octoterm_desktop::logs::install_panic_hook(Path::new(&log));
+        gateterm_desktop::logs::install_panic_hook(Path::new(&log));
         panic!("{MESSAGE}");
     }
 
     let dir = tempfile::tempdir().unwrap();
-    let log = dir.path().join("octoterm.log");
+    let log = dir.path().join("gateterm.log");
     let exe = std::env::current_exe().expect("拿不到测试二进制自己的路径");
     let out = Command::new(exe)
         // `--exact` 是必须的:子进程跑的是同一个测试二进制,不限定就会把这个文件里

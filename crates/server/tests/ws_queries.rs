@@ -4,7 +4,7 @@ mod common;
 
 use common::{connect, control, parse_server};
 use futures_util::{SinkExt, StreamExt};
-use octoterm_protocol::{ClientMsg, Frame, ServerMsg, TermColors};
+use gateterm_protocol::{ClientMsg, Frame, ServerMsg, TermColors};
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::Message;
 

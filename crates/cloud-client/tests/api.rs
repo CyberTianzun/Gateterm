@@ -1,7 +1,7 @@
 mod common;
 
 use common::FakeCloud;
-use octoterm_cloud_client::{ClientInfo, CloudClient, CloudError, CodePurpose, Notify};
+use gateterm_cloud_client::{ClientInfo, CloudClient, CloudError, CodePurpose, Notify};
 use serde_json::json;
 
 #[tokio::test]

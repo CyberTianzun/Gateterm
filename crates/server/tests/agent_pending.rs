@@ -5,8 +5,8 @@
 
 mod common;
 
-use octoterm_server::agent::store::hook_token;
-use octoterm_server::config::AgentsConfig;
+use gateterm_server::agent::store::hook_token;
+use gateterm_server::config::AgentsConfig;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -23,7 +23,7 @@ fn permission_request(addr: SocketAddr) -> reqwest::RequestBuilder {
     reqwest::Client::new()
         .post(format!("http://{addr}/hook/claude-code/permission-request"))
         .header("Authorization", format!("Bearer {}", hook_token()))
-        .header("X-Octoterm-Session", "1")
+        .header("X-Gateterm-Session", "1")
         .header("Content-Type", "application/json")
         .body(r#"{"session_id":"s1","tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#)
 }
@@ -174,7 +174,7 @@ async fn agent_disconnect_clears_the_pending_entry() {
     let req = client
         .post(format!("http://{addr}/hook/claude-code/permission-request"))
         .header("Authorization", format!("Bearer {}", hook_token()))
-        .header("X-Octoterm-Session", "1")
+        .header("X-Gateterm-Session", "1")
         .header("Content-Type", "application/json")
         .body(r#"{"session_id":"s1","tool_name":"Bash"}"#);
     let handle = tokio::spawn(async move { req.send().await });
@@ -206,7 +206,7 @@ async fn choice_answer_travels_as_updated_input() {
         reqwest::Client::new()
             .post(format!("http://{addr}/hook/claude-code/permission-request"))
             .header("Authorization", format!("Bearer {}", hook_token()))
-            .header("X-Octoterm-Session", "1")
+            .header("X-Gateterm-Session", "1")
             .header("Content-Type", "application/json")
             .body(
                 r#"{"session_id":"s1","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"用哪个数据库?","options":[{"label":"Postgres"},{"label":"SQLite"}]}]}}"#,

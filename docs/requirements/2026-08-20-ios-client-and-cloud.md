@@ -1,4 +1,4 @@
-# octoterm iOS 客户端与 Cloud 协同需求草案
+# gateterm iOS 客户端与 Cloud 协同需求草案
 
 日期:2026-08-20  
 状态:需求草案,等待 Review  
@@ -6,7 +6,7 @@
 
 ## 这份文档解决什么
 
-本文把当前关于 iOS 客户端、多个 octoterm server、原生终端渲染、coding agent
+本文把当前关于 iOS 客户端、多个 gateterm server、原生终端渲染、coding agent
 状态与远程反馈、后台通知以及未来 Cloud 协同的讨论落成一份可评审的需求基线。
 
 Review 完成后,再基于这里被确认的范围建立正式设计 spec、协议变更和实现计划。
@@ -15,7 +15,7 @@ Review 完成后,再基于这里被确认的范围建立正式设计 spec、协�
 ## 已确认的方向
 
 1. 增加一个原生 iOS 客户端,以 iPhone 使用为首要场景。
-2. iOS 客户端首先提供连接管理,可保存并连接多个 octoterm server。
+2. iOS 客户端首先提供连接管理,可保存并连接多个 gateterm server。
 3. 进入某个 server 后,会话能力参考 `clients/web`,但界面遵循移动端原生交互,
    不要求逐像素复刻 Web UI。
 4. 终端希望以 `libghostty` 获得高性能、正确的 VT 处理与原生 GPU 渲染效果。
@@ -23,7 +23,7 @@ Review 完成后,再基于这里被确认的范围建立正式设计 spec、协�
 6. 用户必须能从移动端对 agent 发出反馈,包括结构化授权/拒绝/选择题,以及必要时
    进入终端继续输入。
 7. Agent 等待用户时需要后台通知;不能把「App 前台保持 WebSocket」当作通知方案。
-8. 项目接受未来引入真正的 Octoterm Cloud。server 可以主动建立到 Cloud 的长连接,
+8. 项目接受未来引入真正的 Gateterm Cloud。server 可以主动建立到 Cloud 的长连接,
    经它发送事件、接收反馈与控制信息。
 9. server 继续保持终端客户端中立。iOS、Web、未来 Android 与 Cloud 都不能把自己的
    窗口、页面或导航语义塞进本地终端协议。
@@ -35,7 +35,7 @@ Review 完成后,再基于这里被确认的范围建立正式设计 spec、协�
 1. Cloud 首期只承载控制面与 Agent 事件,还是同时中继交互式终端数据。
 2. Cloud 是否必须对终端数据、工具入参和反馈内容做端到端加密,使 Cloud 只能看到
    路由元数据而不能读取内容。
-3. server 与手机如何建立所有权:Octoterm 账号、一次性配对码,还是两者并存。
+3. server 与手机如何建立所有权:Gateterm 账号、一次性配对码,还是两者并存。
 4. 锁屏通知只负责提醒并唤起 App,还是允许在通知上直接批准/拒绝。
 5. 首个正式版本的范围是 iPhone only,还是同一版本同时优化 iPad 分屏与硬件键盘。
 6. 首发渠道是 TestFlight/自用签名,还是直接以 App Store 审核要求为约束。
@@ -43,7 +43,7 @@ Review 完成后,再基于这里被确认的范围建立正式设计 spec、协�
 
 ## 背景与现有基础
 
-octoterm server 已经承担 PTY 生命周期、服务端权威 grid、断线恢复与会话管理。客户端
+gateterm server 已经承担 PTY 生命周期、服务端权威 grid、断线恢复与会话管理。客户端
 通过一条 WebSocket 连接,使用 channel 复用多个 session。非零 channel 是原始 VT
 字节流,channel 0 是 JSON 控制消息。
 
@@ -67,7 +67,7 @@ octoterm server 已经承担 PTY 生命周期、服务端权威 grid、断线恢
 ### G1. 多主机入口
 
 用户在一台 iPhone 上管理自己分布在桌面机、笔记本、家用服务器和云主机上的多个
-octoterm server,不需要记忆每台机器的 URL 与 token。
+gateterm server,不需要记忆每台机器的 URL 与 token。
 
 ### G2. 随时接管活着的终端
 
@@ -92,7 +92,7 @@ App 被挂起或手机锁屏时,Cloud 仍能从 server 收到 Agent 等待事件
 ### G6. 保持 server 克制
 
 多 server 导航、标签页、通知展示、iOS 场景恢复等属于客户端。Cloud 只增加远程可达
-与路由能力,不把 octoterm server 变成通用 IDE、文件管理器或 agent transcript 服务。
+与路由能力,不把 gateterm server 变成通用 IDE、文件管理器或 agent transcript 服务。
 
 ## 非目标
 
@@ -109,7 +109,7 @@ App 被挂起或手机锁屏时,Cloud 仍能从 server 收到 Agent 等待事件
 
 ## 领域术语
 
-**Local Server** — 当前运行在用户主机上的 `octoterm-server`,拥有 PTY、session、grid
+**Local Server** — 当前运行在用户主机上的 `gateterm-server`,拥有 PTY、session、grid
 与 agent hook 状态。
 
 **Cloud** — 可公网访问的协调系统。它接收 Local Server 的主动连接,登记设备,
@@ -118,7 +118,7 @@ App 被挂起或手机锁屏时,Cloud 仍能从 server 收到 Agent 等待事件
 **Server Profile** — iOS 中保存的一台 Local Server 的显示名、连接地址、信任策略、
 Cloud 绑定和凭据引用。token 本身不放普通偏好存储。
 
-**Hosted Session** — Local Server 托管的 PTY 会话,由 octoterm session id 标识。
+**Hosted Session** — Local Server 托管的 PTY 会话,由 gateterm session id 标识。
 
 **Agent Session** — coding agent 自己的逻辑会话,可以关联到一个 Hosted Session。
 同一个 Hosted Session 中可能先后或同时出现多个 Agent Session。
@@ -135,7 +135,7 @@ Cloud 绑定和凭据引用。token 本身不放普通偏好存储。
 建议的顶层导航:
 
 ```text
-Octoterm
+Gateterm
 ├── Servers
 │   ├── Server 列表
 │   └── Server 详情
@@ -279,7 +279,7 @@ server/session/agent 状态,不能各自维护一套最终会漂移的缓存。
 coding agent
     │ hook
     ▼
-Local Server ───── outbound secure connection ─────► Octoterm Cloud
+Local Server ───── outbound secure connection ─────► Gateterm Cloud
     │                                                    │
     │ owns PTY/grid/session                              ├── device registry
     │                                                    ├── event routing
@@ -484,9 +484,9 @@ Agent 反馈类型与 Android 共享客户端核心。
 
 ## 参考资料
 
-- [octoterm wire protocol](../protocol.md)
-- [octoterm v1 设计](../superpowers/specs/2026-08-16-octoterm-design.md)
-- [octoterm agent 集成设计](../superpowers/specs/2026-08-18-octoterm-agent-integration-design.md)
+- [gateterm wire protocol](../protocol.md)
+- [gateterm v1 设计](../superpowers/specs/2026-08-16-gateterm-design.md)
+- [gateterm agent 集成设计](../superpowers/specs/2026-08-18-gateterm-agent-integration-design.md)
 - [Ghostty internal embedder header](https://raw.githubusercontent.com/ghostty-org/ghostty/main/include/ghostty.h)
 - [Ghostty iOS / iPhone discussion](https://github.com/ghostty-org/ghostty/discussions/9285)
 - [Apple:Choosing the right networking API](https://developer.apple.com/documentation/technotes/tn3151-choosing-the-right-networking-api)

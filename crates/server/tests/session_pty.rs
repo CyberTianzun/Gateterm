@@ -1,5 +1,5 @@
-use octoterm_server::config::WindowSize;
-use octoterm_server::session::pty::{Launch, Session, SessionOutput};
+use gateterm_server::config::WindowSize;
+use gateterm_server::session::pty::{Launch, Session, SessionOutput};
 use std::time::Duration;
 
 // 延迟输出,保证测试先完成 subscribe(真实消费者 attach 时同样先订阅再快照)

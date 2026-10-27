@@ -9,7 +9,7 @@
  * (Solarized Light)和暗色主题用同一套公式都能得到合理的层次。
  */
 import type { ITheme } from "@xterm/xterm";
-import type { OctoConfig } from "./config";
+import type { GateConfig } from "./config";
 
 /** 这些变量由主题接管;关掉「界面跟随主题」时全部移除,让 style.css 的默认值生效。 */
 const VARS = ["--bg", "--panel", "--panel-2", "--line", "--text", "--dim", "--accent", "--danger"];
@@ -125,7 +125,7 @@ export function deriveUiColors(theme: ITheme): UiColors | null {
  * 只写 :root 的内联样式,不动 style.css —— 主题派生不出配色时(缺前景或背景)
  * 把这几个变量删掉就回到原样了,不需要维护一份「默认值」的副本。
  */
-export function applyUiColors(cfg: OctoConfig): void {
+export function applyUiColors(cfg: GateConfig): void {
   const root = document.documentElement.style;
   const derived = deriveUiColors(cfg.theme.colors);
   if (!derived) {

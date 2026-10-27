@@ -2,12 +2,12 @@
 //!
 //! 全部用 tempfile 造假 home,不碰真实的 `~/.pi`。
 
-use octoterm_server::agent::apply::{apply, ApplyError, ApplyOpts};
-use octoterm_server::agent::detect::DetectEnv;
-use octoterm_server::agent::edit::InstallCtx;
-use octoterm_server::agent::pi::extension_source;
-use octoterm_server::agent::transcript::{Block, Role};
-use octoterm_server::agent::{find, plan_purge, scan, Integration};
+use gateterm_server::agent::apply::{apply, ApplyError, ApplyOpts};
+use gateterm_server::agent::detect::DetectEnv;
+use gateterm_server::agent::edit::InstallCtx;
+use gateterm_server::agent::pi::extension_source;
+use gateterm_server::agent::transcript::{Block, Role};
+use gateterm_server::agent::{find, plan_purge, scan, Integration};
 use std::fs;
 use std::path::PathBuf;
 
@@ -22,7 +22,7 @@ fn env() -> Env {
 
 impl Env {
     fn ext(&self) -> PathBuf {
-        self.home.path().join(".pi/agent/extensions/octoterm.ts")
+        self.home.path().join(".pi/agent/extensions/gateterm.ts")
     }
     fn ctx(&self, port: u16) -> InstallCtx {
         InstallCtx { home: self.home.path().to_path_buf(), port, include_blocking: true }
@@ -68,7 +68,7 @@ fn port_change_is_stale_port_and_reinstall_fixes_it() {
     assert_eq!(e.integration(7683), Integration::Installed);
 }
 
-/// 端口对、内容旧(octoterm 升级改了扩展):要报出来,重装后对齐。
+/// 端口对、内容旧(gateterm 升级改了扩展):要报出来,重装后对齐。
 #[test]
 fn old_extension_content_is_outdated() {
     let e = env();

@@ -9,7 +9,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 
 const LATEST_RELEASE_API: &str =
-    "https://api.github.com/repos/CyberTianzun/Octoterm/releases/latest";
+    "https://api.github.com/repos/CyberTianzun/Gateterm/releases/latest";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReleaseUpdate {
@@ -84,7 +84,7 @@ where
             Ok(update) => {
                 monitor.record_success(update.clone());
                 if on_first.is_none() && let Some(update) = update {
-                    tracing::info!(version = %update.version, url = %update.url, "Octoterm update available");
+                    tracing::info!(version = %update.version, url = %update.url, "Gateterm update available");
                 }
             }
             // Preserve a known update during temporary network errors/rate limits.
@@ -120,7 +120,7 @@ impl Release {
         let url = reqwest::Url::parse(&self.html_url).context("invalid GitHub Release URL")?;
         anyhow::ensure!(url.scheme() == "https" && url.host_str() == Some("github.com") &&
             url.username().is_empty() && url.password().is_none() && url.port().is_none() &&
-            url.path().starts_with("/CyberTianzun/Octoterm/releases/"), "unexpected GitHub Release URL");
+            url.path().starts_with("/CyberTianzun/Gateterm/releases/"), "unexpected GitHub Release URL");
         Ok(Some(ReleaseUpdate {
             version: version.to_string(),
             url: url.to_string(),
@@ -132,7 +132,7 @@ impl Release {
 /// keep failures out of the normal startup path.
 pub async fn check_latest(current_version: &str) -> Result<Option<ReleaseUpdate>> {
     let client = Client::builder()
-        .user_agent(format!("octoterm/{current_version}"))
+        .user_agent(format!("gateterm/{current_version}"))
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(10))
         .build()?;
@@ -169,7 +169,7 @@ mod tests {
     fn release(tag: &str) -> Release {
         Release {
             tag_name: tag.into(),
-            html_url: format!("https://github.com/CyberTianzun/Octoterm/releases/tag/{tag}"),
+            html_url: format!("https://github.com/CyberTianzun/Gateterm/releases/tag/{tag}"),
             draft: false,
             prerelease: false,
         }
@@ -233,10 +233,10 @@ mod tests {
     #[test]
     fn rejects_links_outside_the_repository_release_pages() {
         let current = Version::parse("0.2.2").unwrap();
-        for url in ["javascript:alert(1)", "http://github.com/CyberTianzun/Octoterm/releases/tag/v1",
-            "https://example.com/CyberTianzun/Octoterm/releases/tag/v1",
+        for url in ["javascript:alert(1)", "http://github.com/CyberTianzun/Gateterm/releases/tag/v1",
+            "https://example.com/CyberTianzun/Gateterm/releases/tag/v1",
             "https://github.com/other/project/releases/tag/v1",
-            "https://user@github.com/CyberTianzun/Octoterm/releases/tag/v1"] {
+            "https://user@github.com/CyberTianzun/Gateterm/releases/tag/v1"] {
             let mut candidate = release("release-v0.3.0");
             candidate.html_url = url.into();
             assert!(candidate.newer_than(&current).is_err(), "{url}");
@@ -307,14 +307,14 @@ mod tests {
             "/latest",
             get(move |headers: axum::http::HeaderMap| async move {
                 assert_eq!(headers["accept"], "application/vnd.github+json");
-                assert_eq!(headers["user-agent"], "octoterm-test");
+                assert_eq!(headers["user-agent"], "gateterm-test");
                 (status, body)
             }),
         );
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let client = Client::builder()
             .no_proxy()
-            .user_agent("octoterm-test")
+            .user_agent("gateterm-test")
             .build()
             .unwrap();
         let result = check_latest_from(&client, &url, "0.2.2").await;
@@ -328,7 +328,7 @@ mod tests {
             StatusCode::OK,
             r#"{
             "tag_name": "release-v0.3.0",
-            "html_url": "https://github.com/CyberTianzun/Octoterm/releases/tag/release-v0.3.0",
+            "html_url": "https://github.com/CyberTianzun/Gateterm/releases/tag/release-v0.3.0",
             "draft": false,
             "prerelease": false
         }"#,

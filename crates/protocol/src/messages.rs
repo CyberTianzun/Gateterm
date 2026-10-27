@@ -104,7 +104,7 @@ pub enum ServerMsg {
         proto: u32,
         #[serde(default)]
         os: String,
-        /// 本机登录 Octoterm Cloud 后的 server_id。手机收到推送时用它找回本地保存的连接。
+        /// 本机登录 Gateterm Cloud 后的 server_id。手机收到推送时用它找回本地保存的连接。
         /// 新增可选字段,旧客户端忽略,不 bump proto。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cloud_server_id: Option<String>,
@@ -150,7 +150,7 @@ pub enum ServerMsg {
         agent_id: String,
         /// agent 自己的会话标识(它在 hook payload 里给的 `session_id`)
         agent_session_id: String,
-        /// 关联到的 octoterm 托管会话。目前恒有值 —— 拿不到关联的 hook 在鉴权那一层
+        /// 关联到的 gateterm 托管会话。目前恒有值 —— 拿不到关联的 hook 在鉴权那一层
         /// 就被挡掉了;留成 Option 是为了将来支持非托管会话时不必 bump proto(X4)。
         #[serde(default)]
         session: Option<u64>,

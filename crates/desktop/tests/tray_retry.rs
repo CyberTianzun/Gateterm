@@ -9,7 +9,7 @@
 
 use std::time::Duration;
 
-use octoterm_desktop::app::tray_retry_delay;
+use gateterm_desktop::app::tray_retry_delay;
 
 #[test]
 fn the_first_failure_is_retried_soon() {

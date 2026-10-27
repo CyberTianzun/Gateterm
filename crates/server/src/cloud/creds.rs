@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use octoterm_cloud_client::credentials::{self, Credentials};
+use gateterm_cloud_client::credentials::{self, Credentials};
 
 type Cached = Option<((SystemTime, u64), Credentials)>;
 
@@ -92,7 +92,8 @@ mod tests {
         };
         credentials::save(&path, &creds2).unwrap();
         // 把新内容的 mtime 强行拨回旧值,模拟低精度文件系统下两次写撞在同一个 tick 里。
-        std::fs::File::open(&path).unwrap().set_modified(mtime1).unwrap();
+        // Windows needs write access to update file timestamps.
+        std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap().set_modified(mtime1).unwrap();
 
         assert_eq!(shared.get(), Some(creds2), "内容变了但 mtime 没变时,缓存也该失效");
     }

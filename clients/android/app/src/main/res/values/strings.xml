@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Octoterm</string>
+    <string name="app_name">Gateterm</string>
     <string name="chat_load_older">加载更早消息</string>
     <string name="chat_loading_older">正在加载更早消息…</string>
     <string name="chat_older_failed">加载失败，点击重试</string>
@@ -18,7 +18,7 @@
     <string name="connection_disconnect">断开连接</string>
     <string name="connections_disconnect_all">全部断开</string>
     <string name="connections_channel">服务器连接</string>
-    <string name="connections_notification_title">Octoterm 服务器连接</string>
+    <string name="connections_notification_title">Gateterm 服务器连接</string>
     <string name="connections_notification_summary">%1$d 台已连接，%2$d 台连接或重连中</string>
     <string name="connections_notification_agents">Agent：%1$s</string>
     <string name="connections_notification_agent_count">%1$s %2$d</string>
@@ -237,8 +237,8 @@
     <string name="cloud_login_cancelled">已取消登录</string>
     <string name="cloud_browser_unavailable">无法打开浏览器，请安装或启用浏览器后重试</string>
     <string name="cloud_err_authorization_code">网页登录授权已失效，请重新登录</string>
-    <string name="cloud_connected_as">%1$s 已连接到 Octoterm Cloud</string>
-    <string name="cloud_not_connected">没有连接到 Octoterm Cloud</string>
+    <string name="cloud_connected_as">%1$s 已连接到 Gateterm Cloud</string>
+    <string name="cloud_not_connected">没有连接到 Gateterm Cloud</string>
     <string name="cloud_send_register_code">发送注册验证码</string>
     <string name="cloud_register">注册</string>
     <string name="cloud_send_reset_code">发送重置验证码</string>

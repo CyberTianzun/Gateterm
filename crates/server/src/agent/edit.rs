@@ -71,7 +71,7 @@ pub enum EditOp {
 
 /// 整文件托管时写在第一行的所有权标记。改它等于让所有旧安装变成「不是我们的」,
 /// 卸载和清空都会够不着 —— 不要改。
-pub const OWNED_MARKER: &str = "octoterm-managed";
+pub const OWNED_MARKER: &str = "gateterm-managed";
 
 /// 这段文本是不是我们整文件托管写出来的:只看第一行。
 pub fn is_owned_file(text: &str) -> bool {
@@ -134,7 +134,7 @@ pub fn apply_to_json(doc: &mut Value, op: &EditOp) -> Result<()> {
             if let Some(existing) = obj.get(key)
                 && !is_owned_value(existing)
             {
-                anyhow::bail!("`{key}` 已经存在,而且不是 octoterm 写的,拒绝覆盖");
+                anyhow::bail!("`{key}` 已经存在,而且不是 gateterm 写的,拒绝覆盖");
             }
             obj.insert(key.clone(), value.clone());
             Ok(())
@@ -307,7 +307,7 @@ fn our_url(hook: &Value) -> Option<OurUrl> {
 }
 
 /// 从命令串里挑出我们的 URL。命令串形如
-/// `"/path/to/octoterm-server" hook http://127.0.0.1:7683/hook/codex/stop`,
+/// `"/path/to/gateterm-server" hook http://127.0.0.1:7683/hook/codex/stop`,
 /// 按空白切开找那个 token 就够了 —— URL 里不会有空白。
 pub(crate) fn url_in_command(cmd: &str) -> Option<String> {
     let decoded = super::hook_cli::decode_windows_command(cmd);

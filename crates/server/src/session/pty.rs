@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use alacritty_terminal::vte::ansi::Rgb;
 use anyhow::{bail, Context, Result};
 use bytes::Bytes;
-use octoterm_protocol::{SessionInfo, TermColors};
+use gateterm_protocol::{SessionInfo, TermColors};
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use tokio::sync::broadcast;
 
@@ -226,14 +226,14 @@ impl Session {
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         // agent 集成的两把钥匙。装进 settings.json 的 hook 里写的是字面量
-        // `$OCTOTERM_SESSION_ID` / `$OCTOTERM_HOOK_TOKEN`,Claude Code 在 hook 触发时
+        // `$GATETERM_SESSION_ID` / `$GATETERM_HOOK_TOKEN`,Claude Code 在 hook 触发时
         // 从**它自己的环境**里插值 —— 而它的环境就是这里给的。于是「这个 agent 属于
         // 哪个托管会话」和「它有没有资格打进来」一次解决,不需要猜进程树。
         //
-        // 反过来也成立:在 octoterm 之外启动的 Claude 拿不到这两个变量,hook 照样触发
+        // 反过来也成立:在 gateterm 之外启动的 Claude 拿不到这两个变量,hook 照样触发
         // 但没有鉴权头,一律 401 —— 「只管托管会话」这条边界由机制保证。
-        cmd.env("OCTOTERM_SESSION_ID", id.to_string());
-        cmd.env("OCTOTERM_HOOK_TOKEN", crate::agent::store::hook_token());
+        cmd.env("GATETERM_SESSION_ID", id.to_string());
+        cmd.env("GATETERM_HOOK_TOKEN", crate::agent::store::hook_token());
 
         let mut child = pty
             .slave
@@ -516,7 +516,7 @@ mod tests {
     #[test]
     fn nonexistent_cwd_falls_back_instead_of_failing() {
         let launch =
-            Launch { command: None, cwd: Some("/definitely/not/a/real/dir/for/octoterm".into()) };
+            Launch { command: None, cwd: Some("/definitely/not/a/real/dir/for/gateterm".into()) };
         let session = Session::spawn(1, "t".into(), 80, 24, launch, 64, WindowSize::default())
             .expect("spawn should survive a bad cwd");
         session.kill();

@@ -11,10 +11,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
-use octoterm_server::app::{serve, AppState};
-use octoterm_server::config::{LauncherSpec, WindowSize};
-use octoterm_server::launcher::LauncherProvider;
-use octoterm_server::session::manager::SessionManager;
+use gateterm_server::app::{serve, AppState};
+use gateterm_server::config::{LauncherSpec, WindowSize};
+use gateterm_server::launcher::LauncherProvider;
+use gateterm_server::session::manager::SessionManager;
 use tokio::net::TcpListener;
 
 /// 端口刚被自己 abort 释放时,重试几次(见 `bind_with_retry`)。
@@ -31,13 +31,13 @@ pub struct Supervisor {
     manager: Arc<SessionManager>,
     launchers: Arc<Vec<Box<dyn LauncherProvider>>>,
     /// `[agents]` 配置。装 hook 的门控在这里,重建 HTTP 层时原样带过去。
-    agents: octoterm_server::config::AgentsConfig,
+    agents: gateterm_server::config::AgentsConfig,
     /// agent 会话表由 Supervisor 长期持有 —— 重建 HTTP 层不该把它清空,
     /// 就像 SessionManager 一样。
-    agent_sessions: Arc<octoterm_server::agent::store::AgentSessionStore>,
+    agent_sessions: Arc<gateterm_server::agent::store::AgentSessionStore>,
     /// Cloud 登录态。重建 HTTP 层不重新读取 —— `SharedCreds` 自己按 (mtime, 长度)
     /// 缓存并在每次 `get()` 时探测文件变化,不需要跟着 restart 的节奏走。
-    cloud: octoterm_server::cloud::creds::SharedCreds,
+    cloud: gateterm_server::cloud::creds::SharedCreds,
     running: Option<Running>,
 }
 
@@ -46,15 +46,15 @@ impl Supervisor {
         buffer_cap: usize,
         window_size: WindowSize,
         specs: &[LauncherSpec],
-        agents: octoterm_server::config::AgentsConfig,
+        agents: gateterm_server::config::AgentsConfig,
     ) -> Self {
         Self {
             manager: SessionManager::new(buffer_cap, window_size),
-            launchers: Arc::new(octoterm_server::launcher::providers(specs)),
+            launchers: Arc::new(gateterm_server::launcher::providers(specs)),
             agents,
-            agent_sessions: Arc::new(octoterm_server::agent::store::AgentSessionStore::new()),
-            cloud: octoterm_server::cloud::creds::SharedCreds::new(
-                octoterm_cloud_client::credentials::default_path(),
+            agent_sessions: Arc::new(gateterm_server::agent::store::AgentSessionStore::new()),
+            cloud: gateterm_server::cloud::creds::SharedCreds::new(
+                gateterm_cloud_client::credentials::default_path(),
             ),
             running: None,
         }
@@ -64,11 +64,11 @@ impl Supervisor {
         &self.manager
     }
 
-    pub fn agent_sessions(&self) -> &Arc<octoterm_server::agent::store::AgentSessionStore> {
+    pub fn agent_sessions(&self) -> &Arc<gateterm_server::agent::store::AgentSessionStore> {
         &self.agent_sessions
     }
 
-    pub fn cloud_creds(&self) -> &octoterm_server::cloud::creds::SharedCreds {
+    pub fn cloud_creds(&self) -> &gateterm_server::cloud::creds::SharedCreds {
         &self.cloud
     }
 
@@ -141,19 +141,19 @@ impl Supervisor {
             agent_sessions: self.agent_sessions.clone(),
             cloud: self.cloud.clone(),
         };
-        octoterm_server::agent::history::start_index(&state, false);
+        gateterm_server::agent::history::start_index(&state, false);
         let join = tokio::spawn(async move {
             if let Err(e) = serve(listener, state).await {
                 tracing::error!(error = %format!("{e:#}"), "http 层异常退出");
             }
         });
         tracing::info!(%actual, "http 层已就绪");
-        // 和 octoterm-server 启动时同一个自检。desktop 的端口能在设置里改,每次重建
+        // 和 gateterm-server 启动时同一个自检。desktop 的端口能在设置里改,每次重建
         // HTTP 层都可能让已装的 hook 失效,所以放在这里而不是只在进程启动时查一次。
         let port = actual.port();
         tokio::task::spawn_blocking(move || {
-            let env = octoterm_server::agent::detect::DetectEnv::current();
-            for w in octoterm_server::agent::startup_warnings(&env, port) {
+            let env = gateterm_server::agent::detect::DetectEnv::current();
+            for w in gateterm_server::agent::startup_warnings(&env, port) {
                 tracing::warn!("{w}");
             }
         });

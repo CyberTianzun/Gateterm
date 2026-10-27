@@ -1,6 +1,6 @@
-use octoterm_desktop::configfile::{save, Editable};
-use octoterm_desktop::configfile::load_language;
-use octoterm_desktop::i18n::LanguagePref;
+use gateterm_desktop::configfile::{save, Editable};
+use gateterm_desktop::configfile::load_language;
+use gateterm_desktop::i18n::LanguagePref;
 
 fn edit(listen: &str, token: Option<&str>) -> Editable {
     Editable { listen: listen.parse().unwrap(), token: token.map(String::from), language: Default::default() }
@@ -20,7 +20,7 @@ fn language_round_trips_without_losing_other_desktop_preferences() {
         assert!(text.contains("# keep this too"));
         assert!(text.contains("future_option = true"));
         // The shared server configuration must still load with desktop settings.
-        let config = octoterm_server::config::Config::load(Some(path.clone())).unwrap();
+        let config = gateterm_server::config::Config::load(Some(path.clone())).unwrap();
         assert_eq!(config.token.as_deref(), Some("fixed"));
     }
 }

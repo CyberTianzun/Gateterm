@@ -1,6 +1,6 @@
 //! Cloud account form and relay presets, independent of egui.
 
-use octoterm_cloud_client::Credentials;
+use gateterm_cloud_client::Credentials;
 use crate::i18n::Locale;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -24,9 +24,9 @@ impl RelayRegion {
 
     pub fn url(self) -> &'static str {
         match self {
-            Self::China => "https://octoterm.signal.top/",
-            Self::NorthAmerica => "https://octoterm.eclosion.ai/",
-            Self::Global => "https://global.octoterm.eclosion.ai/",
+            Self::China => "https://gateterm.signal.top/",
+            Self::NorthAmerica => "https://gateterm.eclosion.ai/",
+            Self::Global => "https://global.gateterm.eclosion.ai/",
         }
     }
 

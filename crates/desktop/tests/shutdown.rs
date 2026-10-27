@@ -7,9 +7,9 @@
 
 use std::time::Duration;
 
-use octoterm_desktop::app::shutdown;
-use octoterm_desktop::supervisor::Supervisor;
-use octoterm_server::config::WindowSize;
+use gateterm_desktop::app::shutdown;
+use gateterm_desktop::supervisor::Supervisor;
+use gateterm_server::config::WindowSize;
 
 /// 一个不会自己退出的会话,只能被 kill 收掉。
 fn long_lived_cmd() -> Option<Vec<String>> {

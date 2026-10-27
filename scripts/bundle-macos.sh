@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 把 octoterm-desktop 组装成一个 .app。
+# 把 gateterm-desktop 组装成一个 .app。
 # LSUIElement=1 是关键:没有它,一个托盘常驻程序会在 Dock 里留个图标、
 # 还会接管顶部菜单栏。
 set -euo pipefail
@@ -11,17 +11,17 @@ case "$(uname -m)" in
 esac
 TARGET="${1:-$HOST_TARGET}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$ROOT/target/bundle/octoterm.app"
-BIN="$ROOT/target/$TARGET/release/octoterm-desktop"
+APP="$ROOT/target/bundle/gateterm.app"
+BIN="$ROOT/target/$TARGET/release/gateterm-desktop"
 # 版本号只有一份事实来源:两处各写一个数字,升版本时必然忘掉其中一个
 VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$ROOT/crates/desktop/Cargo.toml" | head -1)"
 [ -n "$VERSION" ] || { echo "无法从 crates/desktop/Cargo.toml 读出 version" >&2; exit 1; }
 
-[ -f "$BIN" ] || { echo "找不到 $BIN,先跑 cargo build --release --target $TARGET -p octoterm-desktop" >&2; exit 1; }
+[ -f "$BIN" ] || { echo "找不到 $BIN,先跑 cargo build --release --target $TARGET -p gateterm-desktop" >&2; exit 1; }
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/octoterm-desktop"
+cp "$BIN" "$APP/Contents/MacOS/gateterm-desktop"
 cp "$ROOT/crates/desktop/assets/icon.icns" "$APP/Contents/Resources/icon.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
@@ -30,13 +30,13 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>octoterm</string>
+    <string>gateterm</string>
     <key>CFBundleDisplayName</key>
-    <string>octoterm</string>
+    <string>gateterm</string>
     <key>CFBundleIdentifier</key>
-    <string>com.octoterm.desktop</string>
+    <string>com.gateterm.desktop</string>
     <key>CFBundleExecutable</key>
-    <string>octoterm-desktop</string>
+    <string>gateterm-desktop</string>
     <key>CFBundleIconFile</key>
     <string>icon.icns</string>
     <key>CFBundlePackageType</key>

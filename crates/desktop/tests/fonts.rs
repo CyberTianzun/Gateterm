@@ -1,7 +1,7 @@
 //! 中文字体确实被挂上去了。这一条纯 CPU:egui::Context 不需要窗口也不需要 GPU,
 //! 所以「界面上的中文会不会变成豆腐块」这件事不用靠肉眼看。
 
-use octoterm_desktop::fonts;
+use gateterm_desktop::fonts;
 
 /// 设置界面里出现过的字,挑几个常用的。
 const SAMPLE: &str = "监听地址访问令牌开机自启保存并应用取消已生效个会话未受影响";

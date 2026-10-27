@@ -16,7 +16,7 @@ interface AttachState {
   colors: TermColors;
 }
 
-export class OctoClient {
+export class GateClient {
   private ws: WebSocket | null = null;
   private url = "";
   private token = "";
@@ -63,7 +63,7 @@ export class OctoClient {
       // token 不对)——重试没有意义,停止重连并让上层提示用户。
       if (!this.authOk && this.preHelloError !== null) {
         this.closed = true;
-        try { localStorage.removeItem("octoterm-token"); } catch { /* Storage can be disabled. */ }
+        try { localStorage.removeItem("gateterm-token"); } catch { /* Storage can be disabled. */ }
         this.onFatal(this.preHelloError);
         return;
       }
@@ -106,7 +106,7 @@ export class OctoClient {
       case "attached":
         // Attached.seq 只是"重放结束点"的信息量,不是锚点:重放模式下 lastSeq
         // 已经等于本端发出的 last_seq(重连恢复点),后续 noteData 按字节推进即可。
-        // 绝不能在这里用 msg.seq 覆盖 lastSeq —— 见 OctoClient 类上方的 seq 记账不变式注释。
+        // 绝不能在这里用 msg.seq 覆盖 lastSeq —— 见 GateClient 类上方的 seq 记账不变式注释。
         break;
       case "resync-end":
         this.trackSeq(msg.channel, msg.seq);

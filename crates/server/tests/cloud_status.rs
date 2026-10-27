@@ -1,7 +1,7 @@
 mod common;
 
-use octoterm_cloud_client::credentials::{self, Credentials};
-use octoterm_server::cloud::creds::SharedCreds;
+use gateterm_cloud_client::credentials::{self, Credentials};
+use gateterm_server::cloud::creds::SharedCreds;
 use serde_json::json;
 
 #[tokio::test]

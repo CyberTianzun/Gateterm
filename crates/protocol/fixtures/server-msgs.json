@@ -29,7 +29,7 @@
     "event": "created",
     "session": {
       "id": 2,
-      "name": "octoterm-2",
+      "name": "gateterm-2",
       "cols": 80,
       "rows": 24,
       "created_at": 1755300001

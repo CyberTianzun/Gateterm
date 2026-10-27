@@ -55,13 +55,13 @@ test('Sidebar ignores stale results and refreshes account, locale and logout on 
     globalThis.fetch = async () => ok({ connected: true, email: 'current@example.com' });
     ui.setOnline(true);
     await tick();
-    assert.equal(element.textContent, 'current@example.com connected to Octoterm Cloud');
+    assert.equal(element.textContent, 'current@example.com connected to Gateterm Cloud');
     setLocale('zh-CN');
-    assert.equal(element.textContent, 'current@example.com 已连接到 Octoterm Cloud');
+    assert.equal(element.textContent, 'current@example.com 已连接到 Gateterm Cloud');
     globalThis.fetch = async () => ok({ connected: false, email: null });
     window.dispatchEvent(new Event('focus'));
     await tick();
-    assert.equal(element.textContent, '没有连接到 Octoterm Cloud');
+    assert.equal(element.textContent, '没有连接到 Gateterm Cloud');
     assert.equal(element.dataset.connected, 'false');
   } finally {
     ui.dispose();

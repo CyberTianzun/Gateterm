@@ -46,7 +46,7 @@ export async function loadCatalog(): Promise<Record<string, ITheme>> {
       catalog = { ...BUILTIN_THEMES, ...data };
       return catalog;
     } catch (err) {
-      console.warn("octoterm: 主题目录加载失败,仅使用内置主题", err);
+      console.warn("gateterm: 主题目录加载失败,仅使用内置主题", err);
       return BUILTIN_THEMES;
     } finally {
       inflight = null;

@@ -1,12 +1,12 @@
 //! Codex 的 hook 信任门控:装了、但还没在 Codex 里 `/hooks` 审核过 —— Codex 会静默
-//! 跳过这些 hook,octoterm 什么都收不到。必须报成 `NeedsActivation`,而不是 `Installed`。
+//! 跳过这些 hook,gateterm 什么都收不到。必须报成 `NeedsActivation`,而不是 `Installed`。
 //!
 //! 全部用 tempfile 造假 home,不碰真实的 `~/.codex`。
 
-use octoterm_server::agent::apply::{apply, ApplyOpts};
-use octoterm_server::agent::detect::DetectEnv;
-use octoterm_server::agent::edit::InstallCtx;
-use octoterm_server::agent::{find, scan, startup_warnings, Integration};
+use gateterm_server::agent::apply::{apply, ApplyOpts};
+use gateterm_server::agent::detect::DetectEnv;
+use gateterm_server::agent::edit::InstallCtx;
+use gateterm_server::agent::{find, scan, startup_warnings, Integration};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;

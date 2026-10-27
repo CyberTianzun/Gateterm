@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use octoterm_server::config::Config;
-use octoterm_server::session::manager::SessionManager;
+use gateterm_server::config::Config;
+use gateterm_server::session::manager::SessionManager;
 use tokio::runtime::Runtime;
 use tokio::sync::broadcast::error::RecvError;
 use winit::application::ApplicationHandler;
@@ -36,7 +36,7 @@ pub enum UserEvent {
     SessionsChanged,
     /// 设置窗口发起的 Cloud 操作完成了(在 tokio 线程上跑,结果经 proxy 送回主线程)。
     CloudDone(u64, crate::settings::cloud::CloudAction, Result<String, String>),
-    UpdateAvailable(octoterm_server::update::ReleaseUpdate),
+    UpdateAvailable(gateterm_server::update::ReleaseUpdate),
 }
 
 /// 把监听地址的 IP 部分整理成用户能直接用的样子:`0.0.0.0` / `::` 这类「监听所有
@@ -147,7 +147,7 @@ impl App {
     fn build_view(&self) -> crate::settings::ui::View {
         use crate::settings::{state::Form, ui::View};
         let listen = self.sup.listen().unwrap_or_else(|| {
-            self.startup.config.listen.unwrap_or_else(octoterm_server::config::desktop_default_listen)
+            self.startup.config.listen.unwrap_or_else(gateterm_server::config::desktop_default_listen)
         });
         // 读不出来就当没开:这一项读失败不该阻止用户打开设置窗口
         let autostart = crate::autostart::is_enabled().unwrap_or(false);
@@ -191,9 +191,9 @@ impl App {
         }
     }
 
-    fn cloud_creds() -> Option<octoterm_cloud_client::Credentials> {
-        let path = octoterm_cloud_client::credentials::default_path()?;
-        octoterm_cloud_client::credentials::load(&path).ok().flatten()
+    fn cloud_creds() -> Option<gateterm_cloud_client::Credentials> {
+        let path = gateterm_cloud_client::credentials::default_path()?;
+        gateterm_cloud_client::credentials::load(&path).ok().flatten()
     }
 
     fn start_cloud(&mut self, action: crate::settings::cloud::CloudAction) {
@@ -219,7 +219,7 @@ impl App {
                 return;
             }
         };
-        let Some(path) = octoterm_cloud_client::credentials::default_path() else {
+        let Some(path) = gateterm_cloud_client::credentials::default_path() else {
             view.cloud_message = Some(Message::Err(self.locale.text("无法确定配置目录", "Cannot locate the configuration directory").into()));
             return;
         };
@@ -230,7 +230,7 @@ impl App {
         let generation = self.cloud_generation;
         let locale = self.locale;
         self.cloud_task = Some(self.rt.spawn(async move {
-            let result = crate::cloud_ops::run(job, path, octoterm_cloud_client::default_label(), locale).await;
+            let result = crate::cloud_ops::run(job, path, gateterm_cloud_client::default_label(), locale).await;
             let _ = proxy.send_event(UserEvent::CloudDone(generation, action, result));
         }));
     }
@@ -261,7 +261,7 @@ impl App {
             self.locale = locale;
             if let Some(tray) = self.tray.as_mut() { tray.set_language(locale); }
             if let Some(window) = &self.settings_window {
-                window.set_title(locale.text("octoterm 设置", "octoterm Settings"));
+                window.set_title(locale.text("gateterm 设置", "gateterm Settings"));
             }
             if let Some(view) = self.view.as_mut() { view.cloud_message = None; }
         }
@@ -326,13 +326,13 @@ impl App {
         match self.sup.listen() {
             Some(addr) => {
                 let n = self.sup.manager().list().len();
-                tr!(self.locale, "octoterm · {}:{} · {n} 个会话", "octoterm · {}:{} · {n} sessions", display_host(addr.ip()), addr.port())
+                tr!(self.locale, "gateterm · {}:{} · {n} 个会话", "gateterm · {}:{} · {n} sessions", display_host(addr.ip()), addr.port())
             }
             // 带上原因:托盘状态行是用户第一眼看到的东西,只说「未监听」等于
             // 让他去翻日志。
             None => match &self.startup.listen_error {
-                Some(e) => tr!(self.locale, "octoterm · 未监听({e})", "octoterm · Not listening ({e})"),
-                None => self.locale.text("octoterm · 未监听", "octoterm · Not listening").to_string(),
+                Some(e) => tr!(self.locale, "gateterm · 未监听({e})", "gateterm · Not listening ({e})"),
+                None => self.locale.text("gateterm · 未监听", "gateterm · Not listening").to_string(),
             },
         }
     }
@@ -363,7 +363,7 @@ impl App {
     fn check_for_updates(&self) {
         let proxy = self.proxy.clone();
         self.rt.spawn(async move {
-            octoterm_server::update::start_daily_checks(env!("CARGO_PKG_VERSION"), move |result| match result {
+            gateterm_server::update::start_daily_checks(env!("CARGO_PKG_VERSION"), move |result| match result {
                 Ok(Some(update)) => {
                     proxy.send_event(UserEvent::UpdateAvailable(update)).ok();
                 }
@@ -428,12 +428,12 @@ impl App {
                         shutdown(&mut self.sup);
                         event_loop.exit();
                         crate::dialog::fatal(
-                            self.locale.text("octoterm 无法启动", "octoterm could not start"),
+                            self.locale.text("gateterm 无法启动", "gateterm could not start"),
                             &tr!(self.locale,
                                 "无法创建托盘图标,重试 {} 次仍未成功。\n\n{reason}\n\n\
-                                 octoterm 只有托盘这一个界面,没有它就没法操作,现在退出。\
+                                 gateterm 只有托盘这一个界面,没有它就没法操作,现在退出。\
                                  稍后可以再启动一次。",
-                                "Could not create the tray icon after {} attempts.\n\n{reason}\n\noctoterm needs the tray menu to operate and will now exit. Please try starting it again later.",
+                                "Could not create the tray icon after {} attempts.\n\n{reason}\n\ngateterm needs the tray menu to operate and will now exit. Please try starting it again later.",
                                 self.tray_failures
                             ),
                         );
@@ -505,7 +505,7 @@ fn confirm_quit(sessions: usize, locale: Locale) -> bool {
     let quit_label = locale.text("退出", "Quit");
     let result = rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Warning)
-        .set_title(locale.text("退出 octoterm", "Quit octoterm"))
+        .set_title(locale.text("退出 gateterm", "Quit gateterm"))
         .set_description(tr!(locale,
             "还有 {sessions} 个会话正在运行。退出会终止它们,里面跑的程序都会被杀掉。",
             "There are {sessions} active sessions. Quitting will terminate them and all programs running inside them."
@@ -626,7 +626,7 @@ impl ApplicationHandler<UserEvent> for App {
                     // 每次开窗都重新读一遍当前生效值,而不是复用上次关窗时的表单:
                     // 期间监听地址可能已经被别处改过了。
                     self.view = Some(self.build_view());
-                    match EguiWindow::open(event_loop, self.locale.text("octoterm 设置", "octoterm Settings"), (560, 680)) {
+                    match EguiWindow::open(event_loop, self.locale.text("gateterm 设置", "gateterm Settings"), (560, 680)) {
                         Ok(w) => self.settings_window = Some(w),
                         Err(e) => {
                             tracing::error!(error = %format!("{e:#}"), "无法打开设置窗口");

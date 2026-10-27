@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use octoterm_cloud_client::ops::{self, OpsError};
+use gateterm_cloud_client::ops::{self, OpsError};
 
 use crate::settings::cloud::CloudJob;
 use crate::i18n::Locale;

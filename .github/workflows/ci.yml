@@ -29,7 +29,7 @@ jobs:
         run: |
           # desktop 只支持 Windows/macOS:autostart.rs 里有 compile_error!,Linux 上装什么依赖都编不过
           if [ "${{ runner.os }}" = "Linux" ]; then
-            cargo test --workspace --exclude octoterm-desktop
+            cargo test --workspace --exclude gateterm-desktop
           else
             cargo test --workspace
           fi
@@ -37,7 +37,7 @@ jobs:
         shell: bash
         run: |
           if [ "${{ runner.os }}" = "Linux" ]; then
-            cargo clippy --workspace --exclude octoterm-desktop -- -D warnings
+            cargo clippy --workspace --exclude gateterm-desktop -- -D warnings
           else
             cargo clippy --workspace -- -D warnings
           fi

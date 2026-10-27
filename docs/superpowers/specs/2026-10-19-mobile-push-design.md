@@ -2,7 +2,7 @@
 
 日期:2026-10-19
 状态:已与 hiro 逐段对齐,等待书面 Review
-上游:`~/online/eclosion/OctotermCloud/docs/specs/2026-10-19-octoterm-cloud-account-push-design.md`(下称「账号 spec」,已实现并合入两仓 dev)
+上游:`~/online/eclosion/GatetermCloud/docs/specs/2026-10-19-gateterm-cloud-account-push-design.md`(下称「账号 spec」,已实现并合入两仓 dev)
 
 ## 0. 一句话
 
@@ -20,24 +20,24 @@ agent 在等人时,手机收到一条系统通知;在别处处理掉后通知自
 | M10 | 点通知只进入对应会话的终端;审批面板另起 |
 | M6 | Android 只构建 arm64-v8a(只在真机测试) |
 | M7 | iOS/APNs 留口子:`apns` 平台继续走 stub,Apple 账号就绪后另起 spec |
-| M8 | Cloud 部署到 futures/ops,复用机上已有的 nginx(`ace-nginx`,host 网络);TLS 用复制到 `/opt/nginx/tls/signal.top/` 的 `*.signal.top` 证书;域名 `octoterm.signal.top` |
+| M8 | Cloud 部署到 futures/ops,复用机上已有的 nginx(`ace-nginx`,host 网络);TLS 用复制到 `/opt/nginx/tls/signal.top/` 的 `*.signal.top` 证书;域名 `gateterm.signal.top` |
 | M9 | 可迁移:Cloud 相关的一切在 git(compose、nginx 站点文件、文档),服务器上只有数据卷、stack 环境变量、证书文件、一个 nginx 站点文件 |
 
 ## 2. 数据流
 
 ```
- agent hook ─► octoterm-server notifier
+ agent hook ─► gateterm-server notifier
                  进入 waiting  → POST /v1/notify {kind: waiting|permission, expires_at?}
                  离开 waiting  → POST /v1/notify {kind: resolved}
                       │
                       ▼
-               OctotermCloud ─► FcmSender ─► FCM HTTP v1 ─► Android FirebaseMessagingService
+               GatetermCloud ─► FcmSender ─► FCM HTTP v1 ─► Android FirebaseMessagingService
                                 ApnsSender(stub)              ├ waiting/permission → 本地通知(tag = server_id:session:agent_id)
                                                               └ resolved → 按 tag 撤回
  用户点通知 ─► MainActivity(server_id, session) ─► 找 cloud_server_id 匹配的连接 ─► 连接 ─► 打开该会话的终端
 ```
 
-## 3. octoterm-server
+## 3. gateterm-server
 
 ### 3.1 `HelloOk.cloud_server_id`
 
@@ -57,7 +57,7 @@ agent 在等人时,手机收到一条系统通知;在别处处理掉后通知自
 - 「此前推送过」以通知器内存表为准:只有真的发过 `waiting/permission` 的会话才发 `resolved`,避免对从未通知过的会话发撤回。
 - `resolved` 不带 `tool_name`、`expires_at`。
 
-## 4. OctotermCloud
+## 4. GatetermCloud
 
 ### 4.1 `/v1/notify` 扩展
 
@@ -87,7 +87,7 @@ agent 在等人时,手机收到一条系统通知;在别处处理掉后通知自
 
 ### 4.3 备份子命令
 
-`octoterm-cloud backup <path>`:用 `VACUUM INTO` 生成一致性快照。用于迁移与定期备份。
+`gateterm-cloud backup <path>`:用 `VACUUM INTO` 生成一致性快照。用于迁移与定期备份。
 
 ## 5. `crates/cloud-ffi`(UniFFI)
 
@@ -101,7 +101,7 @@ agent 在等人时,手机收到一条系统通知;在别处处理掉后通知自
 
 ### 6.1 构建
 
-- Gradle 任务 `buildCloudFfi`:`cargo ndk -t arm64-v8a -o app/src/main/jniLibs build --release -p octoterm-cloud-ffi`,随后 `uniffi-bindgen generate --language kotlin` 输出到 `app/build/generated/uniffi`,加入 Kotlin 源集;`preBuild` 依赖它。NDK 路径取 `ANDROID_NDK_HOME`(本机 `/Users/hiro/frameworks/android-ndk-r30`)。
+- Gradle 任务 `buildCloudFfi`:`cargo ndk -t arm64-v8a -o app/src/main/jniLibs build --release -p gateterm-cloud-ffi`,随后 `uniffi-bindgen generate --language kotlin` 输出到 `app/build/generated/uniffi`,加入 Kotlin 源集;`preBuild` 依赖它。NDK 路径取 `ANDROID_NDK_HOME`(本机 `/Users/hiro/frameworks/android-ndk-r30`)。
 - 依赖:`net.java.dev.jna:jna:<ver>@aar`(UniFFI Kotlin 需要)、Firebase BoM + `firebase-messaging`(**不加 analytics**)、`com.google.gms.google-services` 4.5.0 插件。
 - `app/google-services.json` 列入 `.gitignore`;**文件不存在时不应用 google-services 插件**,开源构建照常可用,只是没有推送。本机文件来源:`~/online/google-services.json`。
 
@@ -117,7 +117,7 @@ agent 在等人时,手机收到一条系统通知;在别处处理掉后通知自
 
 ### 6.4 通知
 
-- `OctoMessagingService : FirebaseMessagingService`,渠道 `agent_waiting`(高重要度)。
+- `GateMessagingService : FirebaseMessagingService`,渠道 `agent_waiting`(高重要度)。
 - `waiting`/`permission`:`tag = "<server_id>:<session>:<agent_id>"`,同会话同 agent 覆盖(不同 agent 互不撤回);文案本地化生成(如「Claude Code 在等你」/「Claude Code 请求授权:Bash」);有 `expires_at` 时 `setTimeoutAfter(剩余毫秒)`。
 - `resolved`:`cancel(tag, id)`。
 - 文案生成、tag 规则、`server_id → 连接` 查找写成纯函数并单测。
@@ -139,20 +139,20 @@ agent 在等人时,手机收到一条系统通知;在别处处理掉后通知自
 
 ### 7.1 镜像
 
-- OctotermCloud 仓库(私有,`git@github.com:CyberTianzun/OctotermCloud.git`)加 GitHub Actions:构建 Dockerfile,推私有镜像仓库 `registry.hnminigames.fun/octoterm-cloud`(dev 分支 → `dev-<sha>`;`v*` tag → 同名 tag 与 `latest`)。本机无 docker,由 CI 首次验证镜像构建。
+- GatetermCloud 仓库(私有,`git@github.com:CyberTianzun/GatetermCloud.git`)加 GitHub Actions:构建 Dockerfile,推私有镜像仓库 `registry.hnminigames.fun/gateterm-cloud`(dev 分支 → `dev-<sha>`;`v*` tag → 同名 tag 与 `latest`)。本机无 docker,由 CI 首次验证镜像构建。
 - CI 登录凭据只放在 GitHub Actions secrets `REGISTRY_USERNAME` / `REGISTRY_PASSWORD`,不进仓库、不进 workflow 明文。
 - ops 上其它容器已从该 registry 拉镜像(Portainer 已有拉取凭据,部署时确认)。
 
 ### 7.2 Stack
 
-- `deploy/compose.yml`(入 git)。部署时由 Portainer API 在 endpoint 15 创建普通 stack `octoterm-cloud`,内容取自该文件:
-  - 服务 `octoterm-cloud`:镜像 `registry.hnminigames.fun/octoterm-cloud:${OCTOTERM_CLOUD_TAG}`;端口 `127.0.0.1:${OCTOTERM_CLOUD_PORT:-18090}:8080`;命名卷 `cloud-data:/data`;环境变量 `RESEND_API_KEY`、`MAIL_FROM`、`FCM_SERVICE_ACCOUNT_JSON`、`TRUST_PROXY=1` 在 stack 环境变量里设置。
-- nginx 站点 `/opt/nginx/conf.d/octoterm.signal.top.conf`(原文入 git:`deploy/nginx/octoterm.signal.top.conf`):
+- `deploy/compose.yml`(入 git)。部署时由 Portainer API 在 endpoint 15 创建普通 stack `gateterm-cloud`,内容取自该文件:
+  - 服务 `gateterm-cloud`:镜像 `registry.hnminigames.fun/gateterm-cloud:${GATETERM_CLOUD_TAG}`;端口 `127.0.0.1:${GATETERM_CLOUD_PORT:-18090}:8080`;命名卷 `cloud-data:/data`;环境变量 `RESEND_API_KEY`、`MAIL_FROM`、`FCM_SERVICE_ACCOUNT_JSON`、`TRUST_PROXY=1` 在 stack 环境变量里设置。
+- nginx 站点 `/opt/nginx/conf.d/gateterm.signal.top.conf`(原文入 git:`deploy/nginx/gateterm.signal.top.conf`):
 
 ```nginx
 server {
     listen 443 ssl;
-    server_name octoterm.signal.top;
+    server_name gateterm.signal.top;
     ssl_certificate     /etc/nginx/tls/signal.top/fullchain.pem;
     ssl_certificate_key /etc/nginx/tls/signal.top/privkey.pem;
     location / {
@@ -192,7 +192,7 @@ Portainer 不能直接写主机目录,且 `ace-nginx` 的挂载是只读的。�
 - **server**:`classify` 迁移表(含 `resolved` 与「从未推送不撤回」);`expires_at` 透传;`HelloOk` 在登录/未登录两种情况下的 `cloud_server_id`。
 - **cloud-ffi**:Rust 侧对导出对象做测试(对着假 Cloud:设备身份登录、登记 push target、401 吊销、错误码映射);生成的 Kotlin 绑定由 App 编译检查,行为由真机清单覆盖(JNA 的 aar 无法在纯 JVM 单测里加载)。
 - **Android**:纯函数单测(文案、tag、连接匹配);真机手工清单:登录 → 电脑触发 agent 等待 → 手机收到通知 → 电脑处理 → 手机通知消失 → 再次触发 → 点通知进入该会话的终端 → 拒绝通知权限时的提示。
-- **部署**:CI 镜像构建通过;部署后 `https://octoterm.signal.top/healthz` 返回 `ok`;用真实 FCM 发一条到测试机。
+- **部署**:CI 镜像构建通过;部署后 `https://gateterm.signal.top/healthz` 返回 `ok`;用真实 FCM 发一条到测试机。
 
 ## 10. 不在本期
 

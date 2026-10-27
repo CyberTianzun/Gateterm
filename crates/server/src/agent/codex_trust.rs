@@ -1,7 +1,7 @@
 //! 问 Codex 自己:我们的 hook 被它放行了没有。
 //!
 //! Codex 按 `trusted_hash` 逐条门控 hook,没审核过(或审核后内容变了)的一律**静默跳过**
-//! —— 不报错、不提示,octoterm 这边就是什么都收不到。哈希怎么算是 Codex 的内部细节,
+//! —— 不报错、不提示,gateterm 这边就是什么都收不到。哈希怎么算是 Codex 的内部细节,
 //! 我们不复算;它的 app-server 协议里有一个只读的 `hooks/list`,每条 hook 直接带
 //! `trustStatus`(`trusted` / `managed` / `untrusted` / `modified`),这是唯一权威的答案。
 //!
@@ -47,7 +47,7 @@ fn exchange(child: &mut std::process::Child) -> Option<Value> {
     let stdout = child.stdout.take()?;
     let requests = [
         json!({ "id": 1, "method": "initialize",
-                "params": { "clientInfo": { "name": "octoterm", "title": null, "version": env!("CARGO_PKG_VERSION") },
+                "params": { "clientInfo": { "name": "gateterm", "title": null, "version": env!("CARGO_PKG_VERSION") },
                             "capabilities": null } }),
         json!({ "method": "initialized" }),
         // cwd 只影响项目级 hook 的发现;我们装的是用户级的,给根目录即可
@@ -104,7 +104,7 @@ mod tests {
         json!({
             "sourcePath": path,
             "handlerType": "command",
-            "command": format!("\"/bin/octoterm-server\" hook http://127.0.0.1:{port}/hook/codex/stop"),
+            "command": format!("\"/bin/gateterm-server\" hook http://127.0.0.1:{port}/hook/codex/stop"),
             "trustStatus": status,
         })
     }

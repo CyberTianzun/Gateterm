@@ -6,8 +6,8 @@
 
 mod common;
 
-use octoterm_server::agent::store::hook_token;
-use octoterm_server::config::AgentsConfig;
+use gateterm_server::agent::store::hook_token;
+use gateterm_server::config::AgentsConfig;
 use std::net::SocketAddr;
 
 fn cfg(transcript: bool) -> AgentsConfig {
@@ -28,7 +28,7 @@ async fn seed(addr: SocketAddr, transcript: Option<&str>) {
     reqwest::Client::new()
         .post(format!("http://{addr}/hook/claude-code/session-start"))
         .header("Authorization", format!("Bearer {}", hook_token()))
-        .header("X-Octoterm-Session", "1")
+        .header("X-Gateterm-Session", "1")
         .header("Content-Type", "application/json")
         .body(body.to_string())
         .send()
@@ -123,7 +123,7 @@ async fn codex_without_a_locatable_file_says_no_path() {
     reqwest::Client::new()
         .post(format!("http://{addr}/hook/codex/session-start"))
         .header("Authorization", format!("Bearer {}", hook_token()))
-        .header("X-Octoterm-Session", "1")
+        .header("X-Gateterm-Session", "1")
         .header("Content-Type", "application/json")
         .body(r#"{"session_id":"s1"}"#)
         .send()

@@ -4,12 +4,12 @@
 //! 三种要跳过的记录类型、一个未来才有的未知块、一行坏 JSON)。合成数据在这里没有
 //! 价值 —— 真实风险全在「真文件里到底长什么样」,合成的只验证我对格式的想象。
 
-use octoterm_server::agent::claude_transcript::parse;
-use octoterm_server::agent::transcript::{Block, Role, MAX_BLOCK_BYTES};
+use gateterm_server::agent::claude_transcript::parse;
+use gateterm_server::agent::transcript::{Block, Role, MAX_BLOCK_BYTES};
 
 const FIXTURE: &str = include_str!("fixtures/claude-transcript.jsonl");
 
-fn parsed() -> Vec<octoterm_server::agent::transcript::Message> {
+fn parsed() -> Vec<gateterm_server::agent::transcript::Message> {
     parse(FIXTURE, 0)
 }
 

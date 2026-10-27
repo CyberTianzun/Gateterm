@@ -55,7 +55,7 @@ fn decode_icon() -> Result<Icon> {
 
 impl Tray {
     pub fn new(proxy: EventLoopProxy<UserEvent>, locale: Locale) -> Result<Self> {
-        let status = MenuItem::new(locale.text("octoterm — 启动中…", "octoterm — Starting…"), false, None);
+        let status = MenuItem::new(locale.text("gateterm — 启动中…", "gateterm — Starting…"), false, None);
         let [open_web, copy_url, settings, view_logs, quit] = labels(locale).map(|text| MenuItem::new(text, true, None));
 
         let ids: Vec<(MenuId, MenuAction)> = vec![
@@ -81,7 +81,7 @@ impl Tray {
 
         let builder = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
-            .with_tooltip("octoterm")
+            .with_tooltip("gateterm")
             .with_icon(decode_icon()?);
         // macOS 的菜单栏会随亮/暗色反转模板图;不设这个,暗色下就是一坨黑块
         #[cfg(target_os = "macos")]

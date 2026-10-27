@@ -5,7 +5,7 @@
 //!
 //! 1. **配置在 `~/.gemini/config/hooks.json`**,是几个 Antigravity 产品(CLI、2.0、IDE)
 //!    **共用**的文件,不能整份接管。它的顶层是**具名 hook**,事件挂在名字底下,所以我们
-//!    整块管理顶层的 `octoterm` 键([`EditOp::SetOwnedKey`])。
+//!    整块管理顶层的 `gateterm` 键([`EditOp::SetOwnedKey`])。
 //! 2. **事件有两种形状**:`PreToolUse` / `PostToolUse` 要包一层 `{matcher, hooks}`,
 //!    其余事件直接是处理器列表。只支持 command 型,所以和 Codex、Grok 一样经
 //!    [`super::hook_cli`] 转发。
@@ -28,12 +28,12 @@ use super::detect::{self, DetectEnv};
 use super::edit::{collect_hook_handlers, is_ours, ConfigEdit, EditOp, InstallCtx};
 use super::store::{Decision, Update};
 use super::{AgentAdapter, Confidence, Detected, Integration};
-use octoterm_protocol::AgentState;
+use gateterm_protocol::AgentState;
 
 pub struct Antigravity;
 
 /// 我们在共用 hooks.json 里占的顶层键。改它等于让旧安装变成「不是我们的」—— 不要改。
-const KEY: &str = "octoterm";
+const KEY: &str = "gateterm";
 
 /// 直接是处理器列表的事件
 const FLAT_EVENTS: &[&str] = &["SessionStart", "PreInvocation", "Stop"];

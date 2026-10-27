@@ -9,8 +9,21 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-// google-services.json 不入库:有文件才启用推送插件。开源构建照常可用,只是没有推送。
-if (file("google-services.json").exists()) {
+val applicationPackage = "ai.eclosion.gateterm.android"
+// Optional push credentials must belong to this app, not another installed package.
+val googleServicesFile = file("google-services.json")
+val matchingGoogleServices = if (googleServicesFile.isFile) {
+    val document = JsonSlurper().parse(googleServicesFile) as Map<*, *>
+    (document["client"] as? List<*>)?.any { client ->
+        val info = (client as? Map<*, *>)?.get("client_info") as? Map<*, *>
+        val android = info?.get("android_client_info") as? Map<*, *>
+        android?.get("package_name") == applicationPackage
+    } == true
+} else false
+if (googleServicesFile.isFile && !matchingGoogleServices) {
+    logger.warn("Firebase push disabled: google-services.json has no client for $applicationPackage. Download a matching Firebase configuration.")
+}
+if (matchingGoogleServices) {
     apply(plugin = libs.plugins.google.services.get().pluginId)
 }
 
@@ -21,17 +34,19 @@ val aliyunServicesFile = file("aliyun-emas-services.json")
 val aliyunConfig = if (aliyunServicesFile.isFile) {
     val document = JsonSlurper().parse(aliyunServicesFile) as Map<*, *>
     val config = document["config"] as Map<*, *>
-    require(config["emas.packageName"] == "ai.eclosion.octoterm.android") { "EMAS package name does not match Android applicationId" }
-    config
+    if (config["emas.packageName"] == applicationPackage) config else {
+        logger.warn("Aliyun push disabled: aliyun-emas-services.json is not registered for $applicationPackage. Download a matching EMAS configuration.")
+        emptyMap<Any, Any>()
+    }
 } else emptyMap<Any, Any>()
-// 签名文件放在仓库同级的 OctotermSecrets，其它机器保持这个相对位置即可（兼顾 .worktrees 子目录）。
+// 签名文件放在仓库同级的 GatetermSecrets，其它机器保持这个相对位置即可（兼顾 .worktrees 子目录）。
 val signingPropertiesFile = listOfNotNull(
-    File(repoRoot.parentFile, "OctotermSecrets/octoterm-release.signing.properties"),
-    repoRoot.parentFile?.parentFile?.parentFile?.let { File(it, "OctotermSecrets/octoterm-release.signing.properties") },
-).firstOrNull { it.isFile } ?: File(repoRoot.parentFile, "OctotermSecrets/octoterm-release.signing.properties")
+    File(repoRoot.parentFile, "GatetermSecrets/gateterm-release.signing.properties"),
+    repoRoot.parentFile?.parentFile?.parentFile?.let { File(it, "GatetermSecrets/gateterm-release.signing.properties") },
+).firstOrNull { it.isFile } ?: File(repoRoot.parentFile, "GatetermSecrets/gateterm-release.signing.properties")
 val signingProperties = Properties()
-val hasOctotermSigning = signingPropertiesFile.isFile
-if (hasOctotermSigning) {
+val hasGatetermSigning = signingPropertiesFile.isFile
+if (hasGatetermSigning) {
     signingPropertiesFile.inputStream().use { signingProperties.load(it) }
 }
 
@@ -42,6 +57,16 @@ val ffiKotlinDir = layout.buildDirectory.dir("generated/ffi/kotlin")
 val buildCloudFfi by tasks.registering(Exec::class) {
     description = "构建 cloud-ffi(arm64-v8a)并生成 Kotlin 绑定"
     workingDir = repoRoot
+    doFirst {
+        // This directory is wholly generated. Remove stale libraries after a
+        // crate/library rename or ABI change instead of shipping both versions.
+        val jniOutput = ffiJniDir.get().asFile.canonicalFile
+        val buildRoot = layout.buildDirectory.get().asFile.canonicalFile
+        require(jniOutput.toPath().startsWith(buildRoot.toPath()) && jniOutput != buildRoot) {
+            "Refusing to clear generated JNI output outside the Android build directory"
+        }
+        check(!jniOutput.exists() || jniOutput.deleteRecursively()) { "Could not clear $jniOutput" }
+    }
     // Windows 上的 System32\bash.exe 是 WSL，看不到 Windows 环境变量，也配不了本机 cargo。
     val gitBash = File("C:/Program Files/Git/bin/bash.exe")
     val bashExe = if (gitBash.isFile) gitBash.absolutePath else "bash"
@@ -63,13 +88,13 @@ val buildCloudFfi by tasks.registering(Exec::class) {
 tasks.named("preBuild") { dependsOn(buildCloudFfi) }
 
 android {
-    namespace = "ai.eclosion.octoterm.android"
+    namespace = applicationPackage
     compileSdk = 36
 
     defaultConfig {
         buildConfigField("String", "ALIYUN_APP_KEY", JsonOutput.toJson(aliyunConfig["emas.appKey"]?.toString() ?: ""))
         buildConfigField("String", "ALIYUN_APP_SECRET", JsonOutput.toJson(aliyunConfig["emas.appSecret"]?.toString() ?: ""))
-        applicationId = "ai.eclosion.octoterm.android"
+        applicationId = applicationPackage
         minSdk = 26
         targetSdk = 36
         versionCode = 6
@@ -81,8 +106,8 @@ android {
     sourceSets["main"].java.srcDir(ffiKotlinDir)
 
     signingConfigs {
-        if (hasOctotermSigning) {
-            create("octoterm") {
+        if (hasGatetermSigning) {
+            create("gateterm") {
                 val configuredStore = File(signingProperties.getProperty("storeFile"))
                 storeFile = if (configuredStore.isAbsolute) {
                     configuredStore
@@ -98,13 +123,13 @@ android {
 
     buildTypes {
         debug {
-            if (hasOctotermSigning) {
-                signingConfig = signingConfigs.getByName("octoterm")
+            if (hasGatetermSigning) {
+                signingConfig = signingConfigs.getByName("gateterm")
             }
         }
         release {
-            if (hasOctotermSigning) {
-                signingConfig = signingConfigs.getByName("octoterm")
+            if (hasGatetermSigning) {
+                signingConfig = signingConfigs.getByName("gateterm")
             }
             isMinifyEnabled = false
             proguardFiles(
@@ -130,7 +155,7 @@ android {
 
     testOptions {
         unitTests.all {
-            it.systemProperty("octoterm.fontAssets", file("src/main/assets/fonts").absolutePath)
+            it.systemProperty("gateterm.fontAssets", file("src/main/assets/fonts").absolutePath)
             val jnaPaths = listOfNotNull(
                 System.getenv("CARGO_TARGET_DIR")?.let { File(it, "debug").absolutePath },
                 File(repoRoot, "target/debug").absolutePath,

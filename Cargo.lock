@@ -1350,6 +1350,125 @@ dependencies = [
 ]
 
 [[package]]
+name = "gateterm-client-core"
+version = "0.2.5"
+dependencies = [
+ "alacritty_terminal",
+]
+
+[[package]]
+name = "gateterm-cloud-client"
+version = "0.2.5"
+dependencies = [
+ "axum",
+ "directories",
+ "gethostname",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "gateterm-cloud-ffi"
+version = "0.2.5"
+dependencies = [
+ "axum",
+ "gateterm-client-core",
+ "gateterm-cloud-client",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "uniffi",
+]
+
+[[package]]
+name = "gateterm-desktop"
+version = "0.2.5"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "axum",
+ "base64",
+ "directories",
+ "egui",
+ "egui-wgpu",
+ "egui-winit",
+ "embed-manifest",
+ "fs4",
+ "futures-util",
+ "gateterm-cloud-client",
+ "gateterm-protocol",
+ "gateterm-server",
+ "if-addrs",
+ "open",
+ "plist",
+ "png",
+ "pollster",
+ "qrcode",
+ "rfd",
+ "serde_json",
+ "sha2 0.10.9",
+ "sys-locale",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite 0.26.2",
+ "toml_edit 0.25.13+spec-1.1.0",
+ "tracing",
+ "tracing-subscriber",
+ "tray-icon",
+ "url",
+ "uuid",
+ "winit",
+ "winreg 0.56.0",
+]
+
+[[package]]
+name = "gateterm-protocol"
+version = "0.2.5"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "gateterm-server"
+version = "0.2.5"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "axum",
+ "base64",
+ "bytes",
+ "clap",
+ "directories",
+ "futures-util",
+ "gateterm-cloud-client",
+ "gateterm-protocol",
+ "if-addrs",
+ "mime_guess",
+ "plist",
+ "portable-pty",
+ "reqwest",
+ "rpassword",
+ "rust-embed",
+ "semver",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite 0.26.2",
+ "toml 0.8.2",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "gdk"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2923,125 +3042,6 @@ dependencies = [
  "objc2 0.5.2",
  "objc2-core-location",
  "objc2-foundation 0.2.2",
-]
-
-[[package]]
-name = "octoterm-client-core"
-version = "0.2.5"
-dependencies = [
- "alacritty_terminal",
-]
-
-[[package]]
-name = "octoterm-cloud-client"
-version = "0.2.5"
-dependencies = [
- "axum",
- "directories",
- "gethostname",
- "reqwest",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "octoterm-cloud-ffi"
-version = "0.2.5"
-dependencies = [
- "axum",
- "octoterm-client-core",
- "octoterm-cloud-client",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "uniffi",
-]
-
-[[package]]
-name = "octoterm-desktop"
-version = "0.2.5"
-dependencies = [
- "anyhow",
- "arboard",
- "axum",
- "base64",
- "directories",
- "egui",
- "egui-wgpu",
- "egui-winit",
- "embed-manifest",
- "fs4",
- "futures-util",
- "if-addrs",
- "octoterm-cloud-client",
- "octoterm-protocol",
- "octoterm-server",
- "open",
- "plist",
- "png",
- "pollster",
- "qrcode",
- "rfd",
- "serde_json",
- "sha2 0.10.9",
- "sys-locale",
- "tempfile",
- "tokio",
- "tokio-tungstenite 0.26.2",
- "toml_edit 0.25.13+spec-1.1.0",
- "tracing",
- "tracing-subscriber",
- "tray-icon",
- "url",
- "uuid",
- "winit",
- "winreg 0.56.0",
-]
-
-[[package]]
-name = "octoterm-protocol"
-version = "0.2.5"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "octoterm-server"
-version = "0.2.5"
-dependencies = [
- "alacritty_terminal",
- "anyhow",
- "axum",
- "base64",
- "bytes",
- "clap",
- "directories",
- "futures-util",
- "if-addrs",
- "mime_guess",
- "octoterm-cloud-client",
- "octoterm-protocol",
- "plist",
- "portable-pty",
- "reqwest",
- "rpassword",
- "rust-embed",
- "semver",
- "serde",
- "serde_json",
- "sysinfo",
- "tempfile",
- "tokio",
- "tokio-tungstenite 0.26.2",
- "toml 0.8.2",
- "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

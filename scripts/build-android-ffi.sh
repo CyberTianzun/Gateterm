@@ -38,11 +38,11 @@ fi
 if [ -n "${RUSTFLAGS:-}" ]; then
   echo "警告:检测到全局 RUSTFLAGS,会覆盖本脚本给 Android 目标设置的 rustflags(含 16KB 页对齐)" >&2
 fi
-cargo ndk -t arm64-v8a -o "$OUT_JNI" build --release -p octoterm-cloud-ffi
+cargo ndk -t arm64-v8a -o "$OUT_JNI" build --release -p gateterm-cloud-ffi
 
 # 绑定从本机 debug 构建生成:release 的 `strip` 会剥掉 .symtab,UniFFI 读不到元数据、
 # 静默生成空目录;接口元数据与目标平台无关,host 库生成的 Kotlin 与 arm64 .so 完全对应。
-cargo build -q -p octoterm-cloud-ffi
+cargo build -q -p gateterm-cloud-ffi
 if command -v python3 >/dev/null 2>&1; then
   PYTHON=python3
 elif command -v python >/dev/null 2>&1; then
@@ -55,14 +55,14 @@ TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | "$PYTHON" -c 'import
 TARGET_DIR="$(normalize_path "$TARGET_DIR")"
 HOST_LIB=""
 for f in \
-  "$TARGET_DIR/debug/liboctoterm_cloud_ffi.dylib" \
-  "$TARGET_DIR/debug/liboctoterm_cloud_ffi.so" \
-  "$TARGET_DIR/debug/liboctoterm_cloud_ffi.dll" \
-  "$TARGET_DIR/debug/octoterm_cloud_ffi.dll"
+  "$TARGET_DIR/debug/libgateterm_cloud_ffi.dylib" \
+  "$TARGET_DIR/debug/libgateterm_cloud_ffi.so" \
+  "$TARGET_DIR/debug/libgateterm_cloud_ffi.dll" \
+  "$TARGET_DIR/debug/gateterm_cloud_ffi.dll"
 do
   [ -f "$f" ] && { HOST_LIB="$f"; break; }
 done
-[ -n "$HOST_LIB" ] || { echo "找不到本机 debug 版 liboctoterm_cloud_ffi" >&2; exit 1; }
+[ -n "$HOST_LIB" ] || { echo "找不到本机 debug 版 libgateterm_cloud_ffi" >&2; exit 1; }
 
 # 只在看起来安全的路径下清空重建,避免传错路径时把不相关的目录整个删掉。
 case "$OUT_KT" in
@@ -72,7 +72,7 @@ case "$OUT_KT" in
     exit 1
     ;;
 esac
-cargo run -q -p octoterm-cloud-ffi --features cli --bin uniffi-bindgen -- \
+cargo run -q -p gateterm-cloud-ffi --features cli --bin uniffi-bindgen -- \
   generate --library "$HOST_LIB" --language kotlin --out-dir "$OUT_KT" --no-format
 # 空输出说明元数据没读到:必须失败,别让 Gradle 拿着空目录继续
 [ -n "$(find "$OUT_KT" -name '*.kt' -print -quit)" ] || { echo "UniFFI 没有生成任何 Kotlin 文件" >&2; exit 1; }

@@ -1,6 +1,6 @@
-use octoterm_server::config::WindowSize;
-use octoterm_protocol::{ServerMsg, SessionEventKind};
-use octoterm_server::session::manager::SessionManager;
+use gateterm_server::config::WindowSize;
+use gateterm_protocol::{ServerMsg, SessionEventKind};
+use gateterm_server::session::manager::SessionManager;
 use std::time::Duration;
 
 #[tokio::test]
@@ -66,6 +66,6 @@ async fn create_list_rename_kill() {
 async fn default_name_uses_id() {
     let m = SessionManager::new(1 << 20, WindowSize::default());
     let s = m.create(None, None, None).unwrap();
-    assert_eq!(m.list()[0].name, format!("octoterm-{}", s.id));
+    assert_eq!(m.list()[0].name, format!("gateterm-{}", s.id));
     m.kill(s.id);
 }

@@ -22,12 +22,12 @@ use super::detect::{self, DetectEnv};
 use super::edit::{is_owned_file, ConfigEdit, EditOp, InstallCtx};
 use super::store::{Decision, Update};
 use super::{AgentAdapter, Confidence, Detected, Integration};
-use octoterm_protocol::AgentState;
+use gateterm_protocol::AgentState;
 
 pub struct Pi;
 
 const TEMPLATE: &str = include_str!("pi_extension.ts");
-const BASE_PLACEHOLDER: &str = "__OCTOTERM_HOOK_BASE__";
+const BASE_PLACEHOLDER: &str = "__GATETERM_HOOK_BASE__";
 const HOOK_PREFIX: &str = "http://127.0.0.1:";
 
 fn agent_dir(home: &Path) -> PathBuf {
@@ -35,7 +35,7 @@ fn agent_dir(home: &Path) -> PathBuf {
 }
 
 fn extension_path(home: &Path) -> PathBuf {
-    agent_dir(home).join("extensions").join("octoterm.ts")
+    agent_dir(home).join("extensions").join("gateterm.ts")
 }
 
 /// 扩展文件全文。端口直接写进去,和另外两家一样:端口变了就是 `StalePort`,由启动
@@ -126,7 +126,7 @@ impl AgentAdapter for Pi {
             // 同名文件是用户的。不算装了,也不会被我们覆盖 —— 但要说出来,否则安装失败没头绪
             return (
                 Integration::NotInstalled,
-                vec![format!("{} 已存在且不是 octoterm 写的,安装会被拒绝", path.display())],
+                vec![format!("{} 已存在且不是 gateterm 写的,安装会被拒绝", path.display())],
             );
         }
         // 「端口对但内容旧」由 scan 里的通用自检降级成 Outdated
