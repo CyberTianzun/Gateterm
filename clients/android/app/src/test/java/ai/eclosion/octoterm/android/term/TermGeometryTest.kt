@@ -6,6 +6,14 @@ import org.junit.Test
 
 class TermGeometryTest {
     @Test
+    fun oddMarginsKeepRenderingAndHitTestingOnWholePixels() {
+        val (ox, oy) = TermGeometry.origin(101f, 41f, cols = 4, rows = 2, cellW = 10f, cellH = 10f)
+        assertEquals(30f, ox)
+        assertEquals(10f, oy)
+        assertEquals(0 to 0, TermGeometry.cellAt(ox, oy, ox, oy, 10f, 10f, 4, 2))
+    }
+
+    @Test
     fun cellAtUsesTheCenteredOrigin() {
         val (ox, oy) = TermGeometry.origin(100f, 40f, cols = 4, rows = 2, cellW = 10f, cellH = 10f)
         assertEquals(30f, ox)

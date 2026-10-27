@@ -130,6 +130,7 @@ android {
 
     testOptions {
         unitTests.all {
+            it.systemProperty("octoterm.fontAssets", file("src/main/assets/fonts").absolutePath)
             val jnaPaths = listOfNotNull(
                 System.getenv("CARGO_TARGET_DIR")?.let { File(it, "debug").absolutePath },
                 File(repoRoot, "target/debug").absolutePath,

@@ -220,6 +220,8 @@ interface ConnectionActions {
     fun copySelection()
     fun pasteClipboard()
     fun setFontSize(size: Float)
+    fun setLineHeight(value: Double)
+    fun setLetterSpacing(value: Double)
     fun setExtraKeyRows(rows: Int)
     fun setAgentKeyLayout(agentId: String, layout: AgentKeyLayout)
     fun setFont(kind: TermFontKind)
@@ -941,6 +943,8 @@ class ConnectionController(
     }
 
     override fun setFontSize(size: Float) = updateAppearance(_state.value.appearance.withFontSize(size))
+    override fun setLineHeight(value: Double) = updateAppearance(_state.value.appearance.withLineHeight(value))
+    override fun setLetterSpacing(value: Double) = updateAppearance(_state.value.appearance.withLetterSpacing(value))
 
     override fun setExtraKeyRows(rows: Int) {
         val next = rows.coerceIn(1, 2)

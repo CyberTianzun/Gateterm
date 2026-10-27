@@ -2,16 +2,19 @@ package ai.eclosion.octoterm.android.appearance
 
 import android.content.Context
 import android.graphics.Typeface
+import ai.eclosion.octoterm.android.term.FontAdvance
+
+data class LoadedTermFont(val typeface: Typeface, val advanceEm: Double)
 
 /**
  * 终端字体按需加载器：确保内存中同一时刻最多只保留一个内置字体实例。
  */
 object TermFontLoader {
     private var activeKind: TermFontKind? = null
-    private var activeTypeface: Typeface? = null
+    private var activeTypeface: LoadedTermFont? = null
 
     @Synchronized
-    fun load(context: Context, kind: TermFontKind): Typeface {
+    fun load(context: Context, kind: TermFontKind): LoadedTermFont {
         if (activeKind == kind && activeTypeface != null) {
             return activeTypeface!!
         }
@@ -21,11 +24,14 @@ object TermFontLoader {
 
         val assetPath = kind.assetPath
         val typeface = if (assetPath == null) {
-            Typeface.MONOSPACE
+            LoadedTermFont(Typeface.MONOSPACE, Double.NaN)
         } else {
             runCatching {
-                Typeface.createFromAsset(context.applicationContext.assets, assetPath)
-            }.getOrDefault(Typeface.MONOSPACE)
+                val assets = context.applicationContext.assets
+                val typeface = Typeface.createFromAsset(assets, assetPath)
+                val advance = runCatching { assets.open(assetPath).use(FontAdvance::readEm) }.getOrDefault(Double.NaN)
+                LoadedTermFont(typeface, advance)
+            }.getOrDefault(LoadedTermFont(Typeface.MONOSPACE, Double.NaN))
         }
         activeKind = kind
         activeTypeface = typeface

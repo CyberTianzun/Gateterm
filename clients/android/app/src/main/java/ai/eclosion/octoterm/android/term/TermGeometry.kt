@@ -1,11 +1,15 @@
 package ai.eclosion.octoterm.android.term
 
+import kotlin.math.floor
+
 /** 把触点和位移换成格子。画布和手势共用这一套，避免选区和画面差一格。 */
 object TermGeometry {
     fun origin(width: Float, height: Float, cols: Int, rows: Int, cellW: Float, cellH: Float): Pair<Float, Float> {
         if (cols <= 0 || rows <= 0 || cellW <= 0f || cellH <= 0f) return 0f to 0f
-        val ox = ((width - cols * cellW) / 2f).coerceAtLeast(0f)
-        val oy = ((height - rows * cellH) / 2f).coerceAtLeast(0f)
+        // Keep backgrounds and custom block glyphs on the same device-pixel grid.
+        // Drawing and hit testing share this origin, including odd spare margins.
+        val ox = floor(((width - cols * cellW) / 2f).coerceAtLeast(0f))
+        val oy = floor(((height - rows * cellH) / 2f).coerceAtLeast(0f))
         return ox to oy
     }
 

@@ -37,7 +37,6 @@ import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -99,11 +98,12 @@ fun TerminalScreen(
     val terminalHint = stringResource(R.string.term_keys_hint)
     val density = LocalDensity.current
     val touchSlop = LocalViewConfiguration.current.touchSlop
-    val textSizePx = with(density) { appearance.fontSizeSp.sp.toPx() }
-    val typeface = remember(context, appearance.font) {
+    val loadedFont = remember(context, appearance.font) {
         TermFontLoader.load(context, appearance.font)
     }
-    val paint = remember(textSizePx, typeface) { measureTerm(textSizePx, typeface) }
+    val paint = remember(appearance.fontSize, density.density, loadedFont, appearance.lineHeight, appearance.letterSpacing) {
+        measureTerm(appearance.fontSize, density.density, loadedFont.typeface, loadedFont.advanceEm, appearance.lineHeight, appearance.letterSpacing)
+    }
     fun clearModifiers() {
         ctrl = false; alt = false; shift = false
         termView?.softModifiers = KeyModifiers()

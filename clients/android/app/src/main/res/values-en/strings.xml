@@ -142,6 +142,9 @@
     <string name="appearance_theme">Theme</string>
     <string name="appearance_theme_system">Follow system (%1$s)</string>
     <string name="appearance_font_size">Font size %1$d</string>
+    <string name="appearance_font_size_hint">Terminal font size uses the same units as Web and is independent of system font size.</string>
+    <string name="appearance_line_height">Line height %1$.2f×</string>
+    <string name="appearance_letter_spacing">Letter spacing %1$.1f px</string>
     <string name="appearance_font">Font</string>
     <string name="appearance_font_mono">System Monospace</string>
 

@@ -4,15 +4,23 @@ import android.graphics.Typeface
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
 import ai.eclosion.octoterm.android.appearance.TermAppearance
 import ai.eclosion.octoterm.android.term.Attr
 import ai.eclosion.octoterm.android.term.TermFrame
 import ai.eclosion.octoterm.android.term.TermGeometry
 import ai.eclosion.octoterm.android.term.TermSelection
+import ai.eclosion.octoterm.android.term.TerminalFontMetrics
+import ai.eclosion.octoterm.android.term.TerminalBlockGlyphs
 
 class TermPaint(
     val text: android.graphics.Paint,
@@ -20,20 +28,18 @@ class TermPaint(
     val cellW: Float,
     val cellH: Float,
     val baseline: Float,
+    val charLeft: Float,
 )
 
-fun measureTerm(textSizePx: Float, typeface: Typeface): TermPaint {
-    val text = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        this.typeface = typeface
-        textSize = textSizePx
-    }
-    val fm = text.fontMetrics
+fun measureTerm(fontSize: Float, density: Float, typeface: Typeface, advanceEm: Double, lineHeight: Double, letterSpacing: Double): TermPaint {
+    val metrics = TerminalFontMetrics(fontSize, density, typeface, advanceEm, lineHeight, letterSpacing)
     return TermPaint(
-        text = text,
+        text = metrics.text,
         fill = android.graphics.Paint(),
-        cellW = text.measureText("M").coerceAtLeast(1f),
-        cellH = (fm.descent - fm.ascent + 2f).coerceAtLeast(1f),
-        baseline = -fm.ascent + 1f,
+        cellW = metrics.cell.width.toFloat(),
+        cellH = metrics.cell.height.toFloat(),
+        baseline = metrics.baseline,
+        charLeft = metrics.cell.charLeft.toFloat(),
     )
 }
 
@@ -48,19 +54,22 @@ fun TerminalCanvas(
 ) {
     val textPaint = remember(paint) { paint.text }
     val bgPaint = remember(paint) { paint.fill }
+    val blockGlyphs = remember { TerminalBlockGlyphs() }
     val cellW = paint.cellW
     val cellH = paint.cellH
     val baseline = paint.baseline
     val shown = frame
+    var viewport by remember { mutableStateOf(IntSize.Zero) }
+    val proposeSize by rememberUpdatedState(onProposeSize)
+    // A spacing/font change must resize the PTY even if the viewport did not change.
+    LaunchedEffect(viewport, cellW, cellH) {
+        val cols = (viewport.width / cellW).toInt()
+        val rows = (viewport.height / cellH).toInt()
+        if (cols >= 20 && rows >= 5) proposeSize(cols, rows)
+    }
 
     Canvas(
-        modifier.onSizeChanged { size ->
-            if (cellW <= 0f || cellH <= 0f) return@onSizeChanged
-            val cols = (size.width / cellW).toInt()
-            val rows = (size.height / cellH).toInt()
-            if (cols < 20 || rows < 5) return@onSizeChanged
-            onProposeSize(cols, rows)
-        },
+        modifier.onSizeChanged { viewport = it },
     ) {
         drawRect(androidx.compose.ui.graphics.Color(appearance.background or 0xFF000000.toInt()))
         val cols = shown.cols
@@ -95,7 +104,11 @@ fun TerminalCanvas(
                         textPaint.textSkewX = if (cell.attrs and Attr.ITALIC != 0) -0.2f else 0f
                         textPaint.isUnderlineText = cell.attrs and Attr.UNDERLINE != 0
                         textPaint.isStrikeThruText = cell.attrs and Attr.STRIKE != 0
-                        native.drawText(cell.glyphText(), left, top + baseline, textPaint)
+                        val glyph = cell.glyphText()
+                        val blockDrawn = glyph.length == 1 && blockGlyphs.draw(
+                            native, cell.codepoint, left, top, cellW * cell.width, cellH, textPaint.color,
+                        )
+                        if (!blockDrawn) native.drawText(glyph, left + paint.charLeft, top + baseline, textPaint)
                     }
                 }
             }

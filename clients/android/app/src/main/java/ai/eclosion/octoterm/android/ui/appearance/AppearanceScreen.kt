@@ -40,6 +40,7 @@ import ai.eclosion.octoterm.android.appearance.TermAppearance
 import ai.eclosion.octoterm.android.appearance.TermFontKind
 import ai.eclosion.octoterm.android.i18n.LocalePref
 import ai.eclosion.octoterm.android.term.AgentKeyLayout
+import kotlin.math.round
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,6 +50,8 @@ fun AppearanceScreen(
     onFollowSystem: () -> Unit,
     onBack: () -> Unit,
     onFontSize: (Float) -> Unit,
+    onLineHeight: (Double) -> Unit,
+    onLetterSpacing: (Double) -> Unit,
     onFont: (TermFontKind) -> Unit,
     onScrollback: (Int) -> Unit,
     onTheme: (String) -> Unit,
@@ -138,15 +141,32 @@ fun AppearanceScreen(
                 )
             }
             Text(
-                stringResource(R.string.appearance_font_size, appearance.fontSizeSp.toInt()),
+                stringResource(R.string.appearance_font_size, appearance.fontSize.toInt()),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(top = 20.dp),
             )
             Slider(
-                value = appearance.fontSizeSp,
+                value = appearance.fontSize,
                 onValueChange = onFontSize,
-                valueRange = 8f..32f,
+                valueRange = 6f..48f,
+                steps = 41,
                 modifier = Modifier.fillMaxWidth(),
+            )
+            Text(stringResource(R.string.appearance_font_size_hint), style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(stringResource(R.string.appearance_line_height, appearance.lineHeight),
+                style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp))
+            Slider(
+                value = appearance.lineHeight.toFloat(),
+                onValueChange = { onLineHeight(round(it * 20).toDouble() / 20.0) },
+                valueRange = 1f..3f, steps = 39, modifier = Modifier.fillMaxWidth(),
+            )
+            Text(stringResource(R.string.appearance_letter_spacing, appearance.letterSpacing),
+                style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp))
+            Slider(
+                value = appearance.letterSpacing.toFloat(),
+                onValueChange = { onLetterSpacing(round(it * 2).toDouble() / 2.0) },
+                valueRange = -5f..10f, steps = 29, modifier = Modifier.fillMaxWidth(),
             )
             Text(
                 stringResource(R.string.appearance_font),

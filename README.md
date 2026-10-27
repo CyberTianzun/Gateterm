@@ -192,6 +192,10 @@ For Windows servers, the keyboard adapter preserves key identity and modifiers
 for Shift+Enter, Ctrl+J, Alt+arrows and other combinations. The shortcut bar
 includes Esc, Ctrl+C, arrows, Home, End and PgUp/PgDn.
 
+Android terminal font sizes use logical pixels, matching the Web client rather than the system font-size preference.
+New configurations default to size 14. Settings also expose line height and letter spacing; both fields are preserved
+when importing/exporting the Web appearance JSON. The native character grid follows the default xterm WebGL renderer.
+
 Build with JDK 17 and Android SDK 36, or open `clients/android` in Android Studio:
 
 ```sh

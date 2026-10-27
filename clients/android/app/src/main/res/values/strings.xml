@@ -142,6 +142,9 @@
     <string name="appearance_theme">主题</string>
     <string name="appearance_theme_system">跟随系统（%1$s）</string>
     <string name="appearance_font_size">字号 %1$d</string>
+    <string name="appearance_font_size_hint">终端字号与 Web 使用相同单位，不随系统字体大小变化。</string>
+    <string name="appearance_line_height">行高 %1$.2f 倍</string>
+    <string name="appearance_letter_spacing">字距 %1$.1f px</string>
     <string name="appearance_font">字体</string>
     <string name="appearance_font_jetbrains_mono" translatable="false">JetBrains Mono</string>
     <string name="appearance_font_google_sans_code" translatable="false">Google Sans Code</string>

@@ -2,6 +2,7 @@ package ai.eclosion.octoterm.android.appearance
 
 import ai.eclosion.octoterm.android.term.Color
 import org.json.JSONObject
+import kotlin.math.floor
 
 enum class TermFontKind(val assetPath: String?) {
     JetBrainsMono("fonts/JetBrainsMono-Regular.ttf"),
@@ -11,7 +12,7 @@ enum class TermFontKind(val assetPath: String?) {
 }
 
 /**
- * 纯客户端外观。和 web 的 OctoConfig 同一份 JSON：颜色、字号、回滚行数。
+ * 纯客户端外观。和 web 的 OctoConfig 同一份 JSON：颜色、字号、行高、字距、回滚行数。
  * 导入的文本不可信，坏字段退回 [base]，整段不是 JSON 时返回 null。
  */
 data class TermAppearance(
@@ -21,9 +22,12 @@ data class TermAppearance(
     val cursor: Int,
     val selection: Int,
     val ansi: List<Int>,
-    val fontSizeSp: Float,
+    /** Logical pixels, like Web CSS pixels; terminal sizing is independent of system font scale. */
+    val fontSize: Float,
     val font: TermFontKind,
     val scrollback: Int,
+    val lineHeight: Double = 1.0,
+    val letterSpacing: Double = 0.0,
 ) {
     fun colorFor(index: Int, stored: Int, foreground: Boolean): Int {
         return when (index) {
@@ -35,16 +39,22 @@ data class TermAppearance(
         }
     }
 
-    fun withFontSize(size: Float): TermAppearance = copy(fontSizeSp = size.coerceIn(8f, 32f))
+    fun withFontSize(size: Float): TermAppearance = if (size.isFinite()) copy(fontSize = floor(size.toDouble() + 0.5).toFloat().coerceIn(6f, 48f)) else this
+
+    fun withLineHeight(value: Double): TermAppearance = if (value.isFinite()) copy(lineHeight = value.coerceIn(1.0, 3.0)) else this
+
+    fun withLetterSpacing(value: Double): TermAppearance = if (value.isFinite()) copy(letterSpacing = value.coerceIn(-5.0, 10.0)) else this
 
     fun withScrollback(lines: Int): TermAppearance = copy(scrollback = lines.coerceIn(0, 200_000))
 
     fun withFont(kind: TermFontKind): TermAppearance = copy(font = kind)
 
     fun withTheme(theme: TermAppearance): TermAppearance = theme.copy(
-        fontSizeSp = fontSizeSp,
+        fontSize = fontSize,
         font = font,
         scrollback = scrollback,
+        lineHeight = lineHeight,
+        letterSpacing = letterSpacing,
     )
 }
 
@@ -78,7 +88,9 @@ object AppearanceCodec {
             .put("colors", colors)
         val font = JSONObject()
             .put("family", fontFamily(appearance.font))
-            .put("size", appearance.fontSizeSp.toDouble())
+            .put("size", appearance.fontSize.toDouble())
+            .put("lineHeight", appearance.lineHeight)
+            .put("letterSpacing", appearance.letterSpacing)
         val terminal = JSONObject().put("scrollback", appearance.scrollback)
         return JSONObject()
             .put("version", VERSION)
@@ -101,13 +113,15 @@ object AppearanceCodec {
         val colors = theme?.optJSONObject("colors")
         var next = when {
             colors != null -> fromColors(name, colors, base)
-            named != null -> named.copy(fontSizeSp = base.fontSizeSp, font = base.font, scrollback = base.scrollback)
+            named != null -> base.withTheme(named)
             else -> base.copy(name = name)
         }
         val font = root.optJSONObject("font")
         if (font != null) {
-            if (font.has("size")) next = next.withFontSize(font.optDouble("size", next.fontSizeSp.toDouble()).toFloat())
+            if (font.has("size")) next = next.withFontSize(font.optDouble("size", next.fontSize.toDouble()).toFloat())
             if (font.has("family")) next = next.withFont(fontKind(font.optString("family")))
+            if (font.has("lineHeight")) next = next.withLineHeight(font.optDouble("lineHeight", next.lineHeight))
+            if (font.has("letterSpacing")) next = next.withLetterSpacing(font.optDouble("letterSpacing", next.letterSpacing))
         }
         val terminal = root.optJSONObject("terminal")
         if (terminal != null && terminal.has("scrollback")) {
@@ -147,7 +161,7 @@ object AppearanceCodec {
             0x565F89, 0xF7768E, 0x9ECE6A, 0xE0AF68,
             0x7AA2F7, 0xBB9AF7, 0x7DCFFF, 0xC0CAF5,
         ),
-        fontSizeSp = 12f,
+        fontSize = 14f,
         font = TermFontKind.JetBrainsMono,
         scrollback = 20_000,
     )
@@ -164,7 +178,7 @@ object AppearanceCodec {
             0x666666, 0xF14C4C, 0x23D18B, 0xF5F543,
             0x3B8EEA, 0xD670D6, 0x29B8DB, 0xE5E5E5,
         ),
-        fontSizeSp = 12f,
+        fontSize = 14f,
         font = TermFontKind.JetBrainsMono,
         scrollback = 20_000,
     )
@@ -181,7 +195,7 @@ object AppearanceCodec {
             0x666666, 0xCD3131, 0x14CE14, 0xB5BA00,
             0x0451A5, 0xBC05BC, 0x0598BC, 0xA5A5A5,
         ),
-        fontSizeSp = 12f,
+        fontSize = 14f,
         font = TermFontKind.JetBrainsMono,
         scrollback = 20_000,
     )

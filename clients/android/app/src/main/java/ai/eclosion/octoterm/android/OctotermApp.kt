@@ -152,6 +152,8 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                     onFollowSystem = viewModel::followSystemTheme,
                     onBack = viewModel::closeAppearance,
                     onFontSize = viewModel::setFontSize,
+                    onLineHeight = viewModel::setLineHeight,
+                    onLetterSpacing = viewModel::setLetterSpacing,
                     onFont = viewModel::setFont,
                     onScrollback = viewModel::setScrollback,
                     onTheme = viewModel::selectTheme,

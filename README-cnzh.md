@@ -156,6 +156,9 @@ WebSocket。离开终端、切换到聊天或进入后台时会 detach 终端视
 连接 Windows 服务端时,键盘适配层保留 Shift+Enter、Ctrl+J、Alt+方向键等组合键
 的身份与修饰状态。快捷栏包含 Esc、Ctrl+C、方向键、Home、End、PgUp/PgDn 等。
 
+Android 终端字号使用与 Web 一致的逻辑像素，不跟随系统字体大小；新配置默认字号为 14。
+设置中可调整行高和字距，导入、导出 Web 外观 JSON 时会保留这两项。字符格尺寸按 Web 默认的 xterm WebGL 渲染器对齐。
+
 使用 JDK 17 和 Android SDK 36 构建,或用 Android Studio 打开 `clients/android`:
 
 ```sh
