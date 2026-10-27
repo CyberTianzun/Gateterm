@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
@@ -150,6 +151,7 @@ fun ConnectionListScreen(
             ListItem(
                 headlineContent = { Text(stringResource(R.string.servers_add_manual)) },
                 supportingContent = { Text(stringResource(R.string.servers_add_manual_hint)) },
+                leadingContent = { Icon(Icons.Filled.Edit, contentDescription = null) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable(onClick = onAddManually),
