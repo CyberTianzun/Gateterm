@@ -1,4 +1,5 @@
 /target
+clients/desktop-client/target/
 /.worktrees/
 node_modules/
 clients/android/.gradle/

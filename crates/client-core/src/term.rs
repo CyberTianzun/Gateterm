@@ -390,6 +390,72 @@ impl ClientTerm {
         lines.join("\n")
     }
 
+    pub fn scroll_to_offset(&mut self, offset: usize) -> ClientTermState {
+        if self.is_alt_screen() {
+            return self.state();
+        }
+        self.scroll_offset = offset.min(self.history_size());
+        self.state()
+    }
+
+    pub fn search_substring(&self, query: &str) -> Vec<(usize, usize, usize)> {
+        let q = query.trim();
+        if q.is_empty() {
+            return Vec::new();
+        }
+        let q_lower: Vec<char> = q.to_lowercase().chars().collect();
+        if q_lower.is_empty() {
+            return Vec::new();
+        }
+        let hist = self.max_scroll_offset();
+        let rows = self.rows as usize;
+        let cols = self.cols as usize;
+        let total_lines = hist + rows;
+        let grid = self.term.grid();
+        let mut matches = Vec::new();
+
+        for abs_row in 0..total_lines {
+            let line_idx = Line(abs_row as i32 - hist as i32);
+            let row = &grid[line_idx];
+            let mut row_chars: Vec<(char, usize, usize)> = Vec::with_capacity(cols);
+            for x in 0..cols {
+                let cell = &row[Column(x)];
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
+                    || cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    continue;
+                }
+                let ch = if cell.c == '\0' { ' ' } else { cell.c };
+                let w = if cell.flags.contains(Flags::WIDE_CHAR) { 2 } else { 1 };
+                for lc in ch.to_lowercase() {
+                    row_chars.push((lc, x, (x + w).min(cols)));
+                }
+            }
+            if row_chars.len() < q_lower.len() {
+                continue;
+            }
+            let mut i = 0;
+            while i + q_lower.len() <= row_chars.len() {
+                let mut ok = true;
+                for j in 0..q_lower.len() {
+                    if row_chars[i + j].0 != q_lower[j] {
+                        ok = false;
+                        break;
+                    }
+                }
+                if ok {
+                    let col_start = row_chars[i].1;
+                    let col_end = row_chars[i + q_lower.len() - 1].2;
+                    matches.push((abs_row, col_start, col_end));
+                    i += q_lower.len();
+                } else {
+                    i += 1;
+                }
+            }
+        }
+        matches
+    }
+
     pub fn encode_paste(&self, text: &str) -> Vec<u8> {
         let raw = text.replace('\n', "\r");
         if self.term.mode().contains(TermMode::BRACKETED_PASTE) {

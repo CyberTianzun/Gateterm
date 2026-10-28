@@ -1,0 +1,134 @@
+[package]
+name = "gateterm-desktop-client"
+version = "0.2.5"
+edition = "2024"
+license = "MIT"
+description = "Gateterm Desktop GUI Client built with GPUI, gpui-component, and Alacritty"
+
+[lib]
+name = "gateterm_desktop_client"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gateterm-desktop-client"
+path = "src/main.rs"
+
+[workspace]
+resolver = "2"
+members = [
+    ".",
+    "crates/gpui-component/crates/ui",
+    "crates/gpui-component/crates/assets",
+    "crates/gpui-component/crates/macros",
+]
+
+[workspace.package]
+version = "0.2.5"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+# Core Gateterm crates
+gateterm-protocol = { path = "../../crates/protocol" }
+gateterm-client-core = { path = "../../crates/client-core" }
+gateterm-server = { path = "../../crates/server" }
+gateterm-cloud-client = { path = "../../crates/cloud-client" }
+
+# Terminal & Async
+alacritty_terminal = "0.25"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.26"
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "system-proxy"] }
+url = "2"
+directories = "5"
+toml = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+schemars = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+anyhow = "1.0"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "local-time"] }
+sys-locale = "0.3"
+base64 = "0.22"
+
+# GPUI & gpui-component
+gpui = { git = "https://github.com/zed-industries/zed", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5" }
+gpui_macros = { git = "https://github.com/zed-industries/zed", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui-component = { path = "./crates/gpui-component/crates/ui" }
+gpui-component-macros = { path = "./crates/gpui-component/crates/macros" }
+gpui-component-assets = { path = "./crates/gpui-component/crates/assets" }
+rust-embed = "8"
+
+# gpui-component required workspace dependencies
+sum-tree = { version = "0.2.0", package = "zed-sum-tree" }
+log = "0.4"
+lsp-types = { version = "0.97.0", features = ["proposed"] }
+notify = "7.0.0"
+ropey = { version = "=2.0.0-beta.1", features = ["metric_lines_lf", "metric_utf16"] }
+rust-i18n = "4"
+serde_repr = "0.1"
+smallvec = "1"
+smol = "2"
+
+[dependencies]
+gateterm-protocol = { workspace = true }
+gateterm-client-core = { workspace = true }
+gateterm-server = { workspace = true }
+gateterm-cloud-client = { workspace = true }
+alacritty_terminal = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+reqwest = { workspace = true }
+url = { workspace = true }
+directories = { workspace = true }
+toml = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+uuid = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+sys-locale = { workspace = true }
+base64 = { workspace = true }
+gpui = { workspace = true }
+gpui_platform = { workspace = true }
+gpui-component = { workspace = true }
+gpui-component-assets = { workspace = true }
+smallvec = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[workspace.lints.clippy]
+almost_complete_range = "allow"
+arc_with_non_send_sync = "allow"
+borrowed_box = "allow"
+dbg_macro = "deny"
+let_underscore_future = "allow"
+manual_is_multiple_of = "allow"
+map_entry = "allow"
+module_inception = "allow"
+non_canonical_partial_ord_impl = "allow"
+reversed_empty_ranges = "allow"
+single_range_in_vec_init = "allow"
+style = { level = "allow", priority = -1 }
+todo = "deny"
+type_complexity = "allow"
+
+[profile.dev.package]
+resvg = { opt-level = 3 }
+rustybuzz = { opt-level = 3 }
+taffy = { opt-level = 3 }
+ttf-parser = { opt-level = 3 }
+smol = { opt-level = 3 }
+gpui = { opt-level = 3 }
+gpui_platform = { opt-level = 3 }
+gpui_macros = { opt-level = 3 }
+alacritty_terminal = { opt-level = 3 }
