@@ -62,6 +62,7 @@ fun TerminalScreen(
     activeId: Long,
     reconnecting: Boolean,
     serverOs: String,
+    win32InputMode: Boolean,
     term: AlacrittyTerm,
     frame: TermFrame,
     generation: Long,
@@ -90,7 +91,7 @@ fun TerminalScreen(
     var ctrl by remember(activeId) { mutableStateOf(false) }
     var alt by remember(activeId) { mutableStateOf(false) }
     var shift by remember(activeId) { mutableStateOf(false) }
-    val keyboard = remember(activeId, serverOs) { TerminalKeyboard(serverOs) }
+    val keyboard = remember(activeId, serverOs, win32InputMode) { TerminalKeyboard(serverOs, win32InputMode) }
     var termView by remember { mutableStateOf<TerminalView?>(null) }
     var viewport by remember { mutableStateOf(IntSize.Zero) }
     val context = LocalContext.current

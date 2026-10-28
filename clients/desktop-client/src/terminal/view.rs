@@ -32,6 +32,7 @@ pub struct TerminalView {
     pub session_name: String,
     pub channel: u32,
     pub server_os: String,
+    pub win32_input_mode: bool,
     pub term: ClientTerm,
     pub focus_handle: FocusHandle,
     pub font_family: SharedString,
@@ -67,6 +68,7 @@ impl TerminalView {
         session_name: String,
         channel: u32,
         server_os: String,
+        win32_input_mode: bool,
         font_family: impl Into<SharedString>,
         font_size: f32,
         line_height_mul: f32,
@@ -79,6 +81,7 @@ impl TerminalView {
             session_name,
             channel,
             server_os,
+            win32_input_mode,
             term: ClientTerm::new(80, 24, max_scrollback),
             focus_handle: cx.focus_handle(),
             font_family: font_family.into(),
@@ -408,7 +411,7 @@ impl TerminalView {
         }
 
         let state = self.term.state();
-        if let Some(bytes) = encode_keystroke(ks, &state, &self.server_os, self.has_selection()) {
+        if let Some(bytes) = encode_keystroke(ks, &state, &self.server_os, self.has_selection(), self.win32_input_mode) {
             self.term.scroll_to_bottom();
             self.clear_selection();
             self.send_bytes(&bytes, cx);

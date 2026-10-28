@@ -13,6 +13,7 @@ async fn good_token_gets_hello_ok() {
     assert_eq!(msg, ServerMsg::HelloOk {
             proto: PROTO_VERSION,
             os: std::env::consts::OS.to_string(),
+            win32_input_mode: gateterm_server::keyboard::win32_input_mode(),
             cloud_server_id: None,
         });
 }

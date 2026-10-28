@@ -5,5 +5,6 @@ pub mod cloud;
 pub mod config;
 pub mod conn;
 pub mod launcher;
+pub mod keyboard;
 pub mod session;
 pub mod update;

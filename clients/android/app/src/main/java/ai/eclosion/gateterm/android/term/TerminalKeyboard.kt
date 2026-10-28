@@ -106,7 +106,7 @@ data class KeyStroke(
 )
 
 /** One instance per session. Physical key-up uses the identity saved at key-down. */
-class TerminalKeyboard(val serverOs: String) {
+class TerminalKeyboard(val serverOs: String, val win32InputMode: Boolean = false) {
     private data class Pressed(val stroke: KeyStroke, val win32: Boolean, val character: Int)
     private val pressed = linkedMapOf<Long, Pressed>()
 
@@ -118,7 +118,7 @@ class TerminalKeyboard(val serverOs: String) {
         applicationCursor: Boolean = false,
         modifyOtherKeys: Int = 0,
     ): ByteArray {
-        val win32 = serverOs == "windows" && stroke.codePoint in 0..127
+        val win32 = serverOs == "windows" && win32InputMode && stroke.codePoint in 0..127
         pressed[id] = Pressed(stroke, win32, character(stroke))
         return if (win32) packet(stroke, true) else legacy(stroke, applicationCursor, modifyOtherKeys)
     }
@@ -131,7 +131,7 @@ class TerminalKeyboard(val serverOs: String) {
     }
 
     fun tap(stroke: KeyStroke, applicationCursor: Boolean = false, modifyOtherKeys: Int = 0): ByteArray =
-        if (serverOs == "windows" && stroke.codePoint in 0..127) {
+        if (serverOs == "windows" && win32InputMode && stroke.codePoint in 0..127) {
             packet(stroke, true) + packet(stroke, false)
         } else legacy(stroke, applicationCursor, modifyOtherKeys)
 

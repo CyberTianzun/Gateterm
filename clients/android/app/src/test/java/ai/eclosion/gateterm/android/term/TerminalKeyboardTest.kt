@@ -11,8 +11,20 @@ class TerminalKeyboardTest {
     private fun ByteArray.text() = toString(Charsets.UTF_8)
 
     @Test
-    fun windowsShortcutsMatchNativeConptyProbeRecords() {
+    fun windowsWithoutPreciseInputSupportUsesOrdinaryVt() {
         val keyboard = TerminalKeyboard("windows")
+        assertEquals("a", keyboard.keyDown(1, KeyStroke(TerminalKey.A)).text())
+        assertEquals("", keyboard.keyUp(1, KeyModifiers())!!.text())
+        assertEquals("\r", keyboard.tap(KeyStroke(TerminalKey.Enter)).text())
+        assertEquals("\u001b[A", keyboard.tap(KeyStroke(TerminalKey.Up)).text())
+        assertEquals("\u0003", keyboard.tap(KeyStroke(TerminalKey.C, modifiers = KeyModifiers(ctrl = true))).text())
+        assertEquals("\n", keyboard.committedText("j", KeyModifiers(ctrl = true)).text())
+        assertEquals("", keyboard.releaseAll().text())
+    }
+
+    @Test
+    fun windowsShortcutsMatchNativeConptyProbeRecords() {
+        val keyboard = TerminalKeyboard("windows", win32InputMode = true)
         val cases = listOf(
             KeyStroke(TerminalKey.Enter, modifiers = KeyModifiers(shift = true)) to "13;28;13;1;16;1_",
             KeyStroke(TerminalKey.J, modifiers = KeyModifiers(ctrl = true)) to "74;36;10;1;8;1_",
@@ -33,7 +45,7 @@ class TerminalKeyboardTest {
             TerminalKey.End, TerminalKey.Delete, TerminalKey.F12)
         for (key in keys) for (mask in 0..7) {
             val modifiers = KeyModifiers(shift = mask and 1 != 0, ctrl = mask and 2 != 0, alt = mask and 4 != 0)
-            val parts = TerminalKeyboard("windows").keyDown(1, KeyStroke(key, modifiers = modifiers))
+            val parts = TerminalKeyboard("windows", win32InputMode = true).keyDown(1, KeyStroke(key, modifiers = modifiers))
                 .text().removePrefix("\u001b[").removeSuffix("_").split(';').map(String::toInt)
             assertEquals(key.vk, parts[0])
             assertEquals(key.scan, parts[1])
@@ -44,7 +56,7 @@ class TerminalKeyboardTest {
 
     @Test
     fun actualKeyUpKeepsControlCharacterAfterCtrlWasReleased() {
-        val keyboard = TerminalKeyboard("windows")
+        val keyboard = TerminalKeyboard("windows", win32InputMode = true)
         assertEquals("\u001b[74;36;10;1;8;1_", keyboard.keyDown(1, KeyStroke(TerminalKey.J, modifiers = KeyModifiers(ctrl = true))).text())
         assertEquals("\u001b[74;36;10;0;0;1_", keyboard.keyUp(1, KeyModifiers())!!.text())
         assertNull(keyboard.keyUp(1, KeyModifiers()))
@@ -52,7 +64,7 @@ class TerminalKeyboardTest {
 
     @Test
     fun repeatsSendOnlyDownUntilTheRealUp() {
-        val keyboard = TerminalKeyboard("windows")
+        val keyboard = TerminalKeyboard("windows", win32InputMode = true)
         repeat(3) { assertEquals("\u001b[65;30;97;1;0;1_", keyboard.keyDown(1, KeyStroke(TerminalKey.A)).text()) }
         assertEquals("\u001b[65;30;97;0;0;1_", keyboard.keyUp(1, KeyModifiers())!!.text())
         assertEquals("", keyboard.releaseAll().text())
@@ -60,7 +72,7 @@ class TerminalKeyboardTest {
 
     @Test
     fun focusLossReleasesPressedKeysAndDisconnectResetSendsNothing() {
-        val keyboard = TerminalKeyboard("windows")
+        val keyboard = TerminalKeyboard("windows", win32InputMode = true)
         keyboard.keyDown(1, KeyStroke(TerminalKey.AltLeft, modifiers = KeyModifiers(alt = true)))
         keyboard.keyDown(2, KeyStroke(TerminalKey.Up, modifiers = KeyModifiers(alt = true)))
         assertEquals("\u001b[18;56;0;0;0;1_\u001b[38;72;0;0;256;1_", keyboard.releaseAll().text())
@@ -73,7 +85,7 @@ class TerminalKeyboardTest {
 
     @Test
     fun screenTapSendsPairedRecordsWithoutKeepingKeysPressed() {
-        val keyboard = TerminalKeyboard("windows")
+        val keyboard = TerminalKeyboard("windows", win32InputMode = true)
         assertEquals("\u001b[67;46;3;1;8;1_\u001b[67;46;3;0;8;1_",
             keyboard.tap(KeyStroke(TerminalKey.C, modifiers = KeyModifiers(ctrl = true))).text())
         assertEquals("", keyboard.releaseAll().text())
@@ -84,7 +96,7 @@ class TerminalKeyboardTest {
         val term = AlacrittyTerm()
         term.write("\u001b[?2004h".toByteArray())
         assertTrue(term.bracketedPaste)
-        val keyboard = TerminalKeyboard("windows")
+        val keyboard = TerminalKeyboard("windows", win32InputMode = true)
         assertEquals("j", keyboard.committedText("j").text())
         assertEquals("你好😀", keyboard.committedText("你好😀").text())
         assertEquals("\u001b[74;36;10;1;8;1_\u001b[74;36;10;0;8;1_",
@@ -94,7 +106,7 @@ class TerminalKeyboardTest {
 
     @Test
     fun softReturnAndShiftReturnRemainDistinctOnWindows() {
-        val keyboard = TerminalKeyboard("windows")
+        val keyboard = TerminalKeyboard("windows", win32InputMode = true)
         assertEquals("\u001b[13;28;13;1;0;1_\u001b[13;28;13;0;0;1_", keyboard.committedText("\n").text())
         assertEquals("\u001b[13;28;13;1;16;1_\u001b[13;28;13;0;16;1_",
             keyboard.committedText("\n", KeyModifiers(shift = true)).text())
@@ -153,21 +165,21 @@ class TerminalKeyboardTest {
 
     @Test
     fun windowsIgnoresModifyOtherKeys() {
-        val keyboard = TerminalKeyboard("windows")
+        val keyboard = TerminalKeyboard("windows", win32InputMode = true)
         assertEquals("\u001b[13;28;13;1;16;1_\u001b[13;28;13;0;16;1_",
             keyboard.tap(KeyStroke(TerminalKey.Enter, modifiers = KeyModifiers(shift = true)), modifyOtherKeys = 2).text())
     }
 
     @Test
     fun unicodeHardwareTextDoesNotCreateAnOrphanWindowsKeyUp() {
-        val keyboard = TerminalKeyboard("windows")
+        val keyboard = TerminalKeyboard("windows", win32InputMode = true)
         assertEquals("é", keyboard.keyDown(1, KeyStroke(TerminalKey.E, 'é'.code)).text())
         assertEquals("", keyboard.keyUp(1, KeyModifiers())!!.text())
     }
 
     @Test
     fun rightModifiersLocksAndLayoutArePreserved() {
-        val keyboard = TerminalKeyboard("windows")
+        val keyboard = TerminalKeyboard("windows", win32InputMode = true)
         val modifiers = KeyModifiers(ctrl = true, alt = true, leftCtrl = true, rightCtrl = true,
             rightAlt = true, capsLock = true, numLock = true, scrollLock = true)
         assertEquals("\u001b[38;72;0;1;493;1_", keyboard.keyDown(1, KeyStroke(TerminalKey.Up, modifiers = modifiers)).text())

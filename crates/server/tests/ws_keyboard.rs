@@ -10,6 +10,10 @@ use tokio_tungstenite::tungstenite::Message;
 
 #[tokio::test]
 async fn win32_keyboard_records_survive_websocket_and_conpty() {
+    if !gateterm_server::keyboard::win32_input_mode() {
+        eprintln!("system ConPTY uses legacy VT input; precise records are unsupported");
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let probe = dir.path().join("windows-key-probe.exe");
     let source = dir.path().join("windows-key-probe.rs");

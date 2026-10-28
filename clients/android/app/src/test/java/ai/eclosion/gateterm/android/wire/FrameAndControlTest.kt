@@ -49,6 +49,14 @@ class FrameAndControlTest {
     }
 
     @Test
+    fun helloOkInputCapabilityDefaultsToVtAndAcceptsExplicitSupport() {
+        for (field in listOf("", ",\"win32_input_mode\":false", ",\"win32_input_mode\":true")) {
+            val msg = ControlJson.parse("""{"type":"hello-ok","proto":1,"os":"windows"$field}""".toByteArray()) as ServerMsg.HelloOk
+            assertEquals(field.endsWith("true"), msg.win32InputMode)
+        }
+    }
+
+    @Test
     fun parseSessionsAndResized() {
         val sessions = ControlJson.parse(
             """{"type":"sessions","sessions":[{"id":2,"name":"zsh","cols":80,"rows":24,"created_at":1}]}""".toByteArray(),

@@ -193,15 +193,22 @@ Launcher { id:str, provider:str, name:str, detail:str, command:[str], cwd:str? }
 ## 5. Handshake and authentication [H]
 
 - **H1** The first frame after the socket opens MUST be control `hello`.
-- **H2** On match the server replies `hello-ok{proto,os}`; the connection is then
+- **H2** On match the server replies `hello-ok{proto,os,win32_input_mode}`; the connection is then
   authenticated. No other message is processed before this point. `os` is the
   server's `std::env::consts::OS` (`windows`, `macos`, `linux`, …). Clients use
-  it to pick a key encoding: on Windows the pty is ConPTY, which rebuilds key
-  events from the input bytes. Clients MAY encode physical keyboard events with
+  it with the optional boolean `win32_input_mode` (default **false**) to pick a key
+  encoding: on Windows the pty is ConPTY, which rebuilds key events from input
+  bytes. Only when `os` is `windows` and `win32_input_mode` is explicitly true
+  MAY clients encode physical keyboard events with
   win32-input-mode (`CSI Vk;Sc;Uc;Kd;Cs;Rc _`) to retain the virtual key, scan
   code, character, press/release state, modifiers and repeat count. In particular,
   plain VT loses Enter modifiers and can reconstruct Ctrl+J as Ctrl+Enter.
-  The web client uses this encoding for mapped physical keys on Windows, before
+  The server conservatively advertises this capability for system ConPTY on
+  Windows build 22000 or later. Windows 10, older Windows Server builds and
+  unknown builds use ordinary VT input. Installing Windows Terminal does not
+  replace the system ConPTY used by portable-pty. New clients connecting to old
+  servers also use ordinary VT; old clients must be updated to honor this field.
+  The web client uses this encoding for mapped physical keys when supported, before
   xterm's VT encoding and Alt-arrow remapping. Keydown/repeats and keyup are
   separate events; blur/detach releases tracked keys. IME/dead-key/AltGr text,
   non-ASCII text, paste and terminal replies retain xterm's byte input path.
@@ -282,7 +289,7 @@ runs as the user who started the daemon. The bearer token is the only boundary
 
 | type | fields | when |
 | --- | --- | --- |
-| `hello-ok` | `proto:u32`, `os:str` | handshake accepted (H2) |
+| `hello-ok` | `proto:u32`, `os:str`, `win32_input_mode:bool=false` | handshake accepted (H2); precise Windows input requires explicit support |
 | `error` | `message:str`, `channel:u32?` | §9 |
 | `sessions` | `sessions:[SessionInfo]` | reply to `list-sessions`, sorted by id |
 | `session-event` | `event:SessionEventKind`, `session:SessionInfo` | broadcast on create/rename/close |

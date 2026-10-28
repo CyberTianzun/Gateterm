@@ -3,7 +3,8 @@
  *
  * - Windows:ConPTY 从字节重建 INPUT_RECORD,再由 conhost 按程序的要求编码。
  *   xterm 会丢掉 Ctrl+J 的 J、Enter 的修饰键,还会把 Alt+方向键改成 Ctrl+方向键,
- *   所以一律转成 win32-input-mode(CSI Vk;Sc;Uc;Kd;Cs;Rc _)把按键原样交给 conhost。
+ *   支持时转成 win32-input-mode(CSI Vk;Sc;Uc;Kd;Cs;Rc _)把按键原样交给 conhost。
+ *   Windows 10 等未声明支持的服务端保留 xterm 的普通 VT 输入。
  * - 其他:PTY 不转换,浏览器就是编码器。程序用 `CSI > 4 ; Pv m` 打开 modifyOtherKeys
  *   后(Claude Code 就会这样做),把传统编码丢修饰键的组合编成 CSI 27;mod;code ~,
  *   例如 Shift+Enter;没打开时保持 xterm 行为。
@@ -134,8 +135,8 @@ export class KeyboardAdapter {
   setModifyOtherKeys(level: number): void { this.modifyOtherKeys = level; }
 
   /** null = 交给 xterm;字符串 = 原样发 PTY 并取消事件;空串 = 只取消事件。 */
-  encode(ev: KeyLike, serverOs: ServerOs, hasSelection = false): string | null {
-    if (serverOs === "windows") return this.encodeWindows(ev, hasSelection);
+  encode(ev: KeyLike, serverOs: ServerOs, hasSelection = false, win32InputMode = false): string | null {
+    if (serverOs === "windows" && win32InputMode) return this.encodeWindows(ev, hasSelection);
     if (ev.type === "keyup") { this.modified.delete(ev.code); return null; }
     if (ev.type === "keypress") return this.modified.has(ev.code) ? "" : null;
     if (ev.type !== "keydown" || !this.modifyOtherKeys || !this.intercepts(ev, hasSelection)) return null;

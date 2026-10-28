@@ -19,7 +19,22 @@ const decode = seq => {
   const [vk, scan, char, down, state, repeat] = seq.slice(2, -1).split(";").map(Number);
   return {vk, scan, char, down, state, repeat};
 };
-const encode = (ev, adapter = new KeyboardAdapter()) => adapter.encode(key(ev), "windows");
+const encode = (ev, adapter = new KeyboardAdapter()) => adapter.encode(key(ev), "windows", false, true);
+
+test("Windows 10 without win32 input capability keeps xterm's ordinary input path", () => {
+  const adapter = new KeyboardAdapter();
+  for (const ev of [
+    {key:"a",code:"KeyA"}, {}, {key:"ArrowUp",code:"ArrowUp"},
+    {key:"c",code:"KeyC",ctrlKey:true},
+  ]) {
+    assert.equal(adapter.encode(key(ev), "windows", false, false), null);
+  }
+  assert.equal(adapter.releaseAll(), "");
+});
+
+test("servers without an input capability safely keep ordinary input", () => {
+  assert.equal(new KeyboardAdapter().encode(key({key:"a",code:"KeyA"}), "windows"), null);
+});
 
 test("Shift+Enter 的真实按下和松开分别转发,不在按下时提前松开", () => {
   const adapter = new KeyboardAdapter();
@@ -95,7 +110,7 @@ test("字母虚拟键取实际布局字符,扫描码取物理位置;CapsLock 字
 test("Ctrl+C 无选区时中断;有选区及复制/粘贴/Meta/浏览器命令交给浏览器", () => {
   const copy = key({key:"c",code:"KeyC",ctrlKey:true});
   assert.equal(decode(encode(copy)).char, 3);
-  assert.equal(new KeyboardAdapter().encode(copy, "windows", true), null);
+  assert.equal(new KeyboardAdapter().encode(copy, "windows", true, true), null);
   assert.equal(browserShortcut(copy, true), true);
   for (const ev of [
     {key:"v",code:"KeyV",ctrlKey:true}, {key:"V",code:"KeyV",ctrlKey:true,shiftKey:true},

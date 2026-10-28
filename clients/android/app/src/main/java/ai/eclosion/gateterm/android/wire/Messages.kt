@@ -49,7 +49,7 @@ data class TermColors(val fg: String, val bg: String) {
 }
 
 sealed class ServerMsg {
-    data class HelloOk(val proto: Int, val os: String = "", val cloudServerId: String? = null) : ServerMsg()
+    data class HelloOk(val proto: Int, val os: String = "", val cloudServerId: String? = null, val win32InputMode: Boolean = false) : ServerMsg()
     data class Error(val message: String, val channel: Int?) : ServerMsg()
     data class Sessions(val sessions: List<SessionInfo>) : ServerMsg()
     data class SessionEvent(val event: SessionEventKind, val session: SessionInfo) : ServerMsg()

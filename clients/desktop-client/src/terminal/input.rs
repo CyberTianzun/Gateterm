@@ -12,6 +12,7 @@ pub fn encode_keystroke(
     term_state: &ClientTermState,
     server_os: &str,
     has_selection: bool,
+    win32_input_mode: bool,
 ) -> Option<Vec<u8>> {
     let m = &ks.modifiers;
 
@@ -33,7 +34,7 @@ pub fn encode_keystroke(
     let xterm_mod = 1 + u32::from(m.shift) + 2 * u32::from(m.alt) + 4 * u32::from(m.control);
 
     // Windows ConPTY special chords (Shift+Enter, Ctrl+J, Ctrl+Enter) via win32-input-mode
-    if server_os.eq_ignore_ascii_case("windows") {
+    if server_os.eq_ignore_ascii_case("windows") && win32_input_mode {
         if key == "enter" && m.shift && !m.control && !m.alt {
             // VK_RETURN=13, Scan=28, Char=13, Kd=1/0, SHIFT_PRESSED=0x10 (16)
             return Some(b"\x1b[13;28;13;1;16;1_\x1b[13;28;13;0;16;1_".to_vec());
@@ -264,9 +265,9 @@ mod tests {
             key: "up".into(),
             key_char: None,
         };
-        assert_eq!(encode_keystroke(&ks, &st, "linux", false).unwrap(), b"\x1b[A");
+        assert_eq!(encode_keystroke(&ks, &st, "linux", false, false).unwrap(), b"\x1b[A");
         st.application_cursor = true;
-        assert_eq!(encode_keystroke(&ks, &st, "linux", false).unwrap(), b"\x1bOA");
+        assert_eq!(encode_keystroke(&ks, &st, "linux", false, false).unwrap(), b"\x1bOA");
     }
 
     #[test]
@@ -281,15 +282,29 @@ mod tests {
             key_char: None,
         };
         assert_eq!(
-            encode_keystroke(&ks, &st, "windows", false).unwrap(),
+            encode_keystroke(&ks, &st, "windows", false, true).unwrap(),
             b"\x1b[13;28;13;1;16;1_\x1b[13;28;13;0;16;1_"
         );
 
         st.modify_other_keys = 1;
         assert_eq!(
-            encode_keystroke(&ks, &st, "linux", false).unwrap(),
+            encode_keystroke(&ks, &st, "linux", false, false).unwrap(),
             b"\x1b[27;2;13~"
         );
+    }
+
+    #[test]
+    fn windows_without_precise_input_capability_uses_vt() {
+        let st = dummy_state();
+        let mut ks = Keystroke {
+            modifiers: Modifiers { shift: true, ..Default::default() },
+            key: "enter".into(),
+            key_char: None,
+        };
+        assert_eq!(encode_keystroke(&ks, &st, "windows", false, false).unwrap(), b"\r");
+        ks.modifiers = Modifiers { control: true, ..Default::default() };
+        ks.key = "j".into();
+        assert_eq!(encode_keystroke(&ks, &st, "windows", false, false).unwrap(), b"\n");
     }
 
     #[test]
@@ -303,7 +318,7 @@ mod tests {
             key: "c".into(),
             key_char: None,
         };
-        assert_eq!(encode_keystroke(&ks, &st, "linux", false), Some(vec![3]));
-        assert_eq!(encode_keystroke(&ks, &st, "linux", true), None);
+        assert_eq!(encode_keystroke(&ks, &st, "linux", false, false), Some(vec![3]));
+        assert_eq!(encode_keystroke(&ks, &st, "linux", true, false), None);
     }
 }

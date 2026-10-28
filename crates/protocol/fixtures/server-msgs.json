@@ -4,6 +4,18 @@
     "proto": 1
   },
   {
+    "type": "hello-ok",
+    "proto": 1,
+    "os": "windows",
+    "win32_input_mode": false
+  },
+  {
+    "type": "hello-ok",
+    "proto": 1,
+    "os": "windows",
+    "win32_input_mode": true
+  },
+  {
     "type": "error",
     "message": "bad token"
   },

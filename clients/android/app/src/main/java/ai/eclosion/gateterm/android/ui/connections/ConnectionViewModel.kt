@@ -154,6 +154,7 @@ data class ConnectionUiState(
     val attachedId: Long? = null,
     val reconnecting: Boolean = false,
     val serverOs: String = "",
+    val win32InputMode: Boolean = false,
     val pendingRename: SessionInfo? = null,
     val renameDraft: String = "",
     val termGeneration: Long = 0,
@@ -496,7 +497,7 @@ class ConnectionController(
             screen = if (connected || link.sessions.isNotEmpty() || it.screen is AppScreen.Server) AppScreen.Server(link.connection.id) else AppScreen.List,
             connectingId = if (connected) null else link.connection.id,
             sessions = link.sessions, agents = link.agents, transcriptEnabled = link.transcriptEnabled,
-            serverOs = link.os, reconnecting = !connected,
+            serverOs = link.os, win32InputMode = link.win32InputMode, reconnecting = !connected,
         ) }
     }
 
@@ -554,6 +555,7 @@ class ConnectionController(
             when (msg) {
                 is ServerMsg.HelloOk -> {
                     link.os = msg.os
+                    link.win32InputMode = msg.win32InputMode
                     CloudLink.record(_state.value.connections, connection.id, msg.cloudServerId)?.let { updated ->
                         persist(updated); _state.update { it.copy(connections = updated) }
                     }
@@ -569,7 +571,7 @@ class ConnectionController(
                 else -> Unit
             }
             if (client === next && selectedServerId == connection.id) {
-                _state.update { it.copy(serverOs = link.os, agents = link.agents, transcriptEnabled = link.transcriptEnabled) }
+                _state.update { it.copy(serverOs = link.os, win32InputMode = link.win32InputMode, agents = link.agents, transcriptEnabled = link.transcriptEnabled) }
                 handleServer(msg)
             }
         } }
@@ -601,7 +603,7 @@ class ConnectionController(
         httpOrigin = null; httpToken = null
         _state.update { it.copy(
             screen = AppScreen.List, sessions = emptyList(), agents = emptyMap(), connectingId = null,
-            attachedId = null, openSessionIds = emptyList(), reconnecting = false, serverOs = "",
+            attachedId = null, openSessionIds = emptyList(), reconnecting = false, serverOs = "", win32InputMode = false,
             transcriptEnabled = false, chat = ChatUiState(), pendingRename = null,
             launcherMenu = LauncherMenuState(), selection = null, scrollOffset = 0, mouseTracking = false,
         ) }
@@ -1522,6 +1524,7 @@ private class LiveServerConnection(
     var agents: Map<String, AgentSession> = emptyMap()
     var transcriptEnabled = false
     var os = ""
+    var win32InputMode = false
     var agentJob: Job? = null
     var agentAgain = false
     var agentRevision = 0L

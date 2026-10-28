@@ -160,6 +160,7 @@ async fn handshake(socket: &mut WebSocket, state: &AppState) -> bool {
             let _ = socket.send(control_msg(&ServerMsg::HelloOk {
                 proto: PROTO_VERSION,
                 os: std::env::consts::OS.to_string(),
+                win32_input_mode: crate::keyboard::win32_input_mode(),
                 cloud_server_id: state.cloud.server_id(),
             })).await;
             true

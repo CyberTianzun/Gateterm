@@ -58,6 +58,7 @@ object ControlJson {
                 obj.optInt("proto", PROTO_VERSION),
                 obj.optString("os").takeUnless { it == "null" }.orEmpty(),
                 obj.optString("cloud_server_id").takeUnless { it.isEmpty() || it == "null" },
+                obj.optBoolean("win32_input_mode", false),
             )
             "error" -> ServerMsg.Error(
                 message = obj.optString("message"),

@@ -98,12 +98,15 @@ pub struct TermColors {
 pub enum ServerMsg {
     /// `os` 是服务端的 `std::env::consts::OS`("windows" / "macos" / "linux" …)。
     /// 客户端需要它来决定键盘编码:Windows 上中间隔着 ConPTY,传统 VT 字节会
-    /// 丢掉按键身份/修饰键,物理键盘应采用 win32-input-mode 序列。旧服务端不发
+    /// 丢掉按键身份/修饰键。只有 win32_input_mode 为 true 时才能采用精确按键序列。旧服务端不发
     /// 这个字段,按缺省空串解析,客户端视为"未知"、维持原有编码。
     HelloOk {
         proto: u32,
         #[serde(default)]
         os: String,
+        /// Windows 10 的系统 ConPTY 不支持精确按键包;缺省 false,安全回退普通 VT。
+        #[serde(default)]
+        win32_input_mode: bool,
         /// 本机登录 Gateterm Cloud 后的 server_id。手机收到推送时用它找回本地保存的连接。
         /// 新增可选字段,旧客户端忽略,不 bump proto。
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -187,10 +190,19 @@ mod tests {
     }
 
     #[test]
+    fn hello_ok_roundtrips_disabled_input_capability() {
+        let msg: ServerMsg = serde_json::from_str(
+            r#"{"type":"hello-ok","proto":1,"os":"windows","win32_input_mode":false}"#,
+        ).unwrap();
+        let json = serde_json::to_value(msg).unwrap();
+        assert_eq!(json["win32_input_mode"], false);
+    }
+
+    #[test]
     fn hello_ok_accepts_old_servers_and_reports_os() {
         let old: ServerMsg = serde_json::from_str(r#"{"type":"hello-ok","proto":1}"#).unwrap();
-        assert_eq!(old, ServerMsg::HelloOk { proto: 1, os: String::new(), cloud_server_id: None });
-        let current = ServerMsg::HelloOk { proto: 1, os: "windows".into(), cloud_server_id: None };
+        assert_eq!(old, ServerMsg::HelloOk { proto: 1, os: String::new(), win32_input_mode: false, cloud_server_id: None });
+        let current = ServerMsg::HelloOk { proto: 1, os: "windows".into(), win32_input_mode: true, cloud_server_id: None };
         let json = serde_json::to_value(&current).unwrap();
         assert_eq!(json["os"], "windows");
         assert_eq!(serde_json::from_value::<ServerMsg>(json).unwrap(), current);
@@ -198,9 +210,9 @@ mod tests {
 
     #[test]
     fn hello_ok_cloud_server_id_is_optional() {
-        let none = ServerMsg::HelloOk { proto: 1, os: "macos".into(), cloud_server_id: None };
+        let none = ServerMsg::HelloOk { proto: 1, os: "macos".into(), win32_input_mode: false, cloud_server_id: None };
         assert!(serde_json::to_value(&none).unwrap().get("cloud_server_id").is_none());
-        let some = ServerMsg::HelloOk { proto: 1, os: "macos".into(), cloud_server_id: Some("srv".into()) };
+        let some = ServerMsg::HelloOk { proto: 1, os: "macos".into(), win32_input_mode: false, cloud_server_id: Some("srv".into()) };
         let json = serde_json::to_value(&some).unwrap();
         assert_eq!(json["cloud_server_id"], "srv");
         assert_eq!(serde_json::from_value::<ServerMsg>(json).unwrap(), some);

@@ -70,6 +70,7 @@ pub struct ServerConnection {
     pub profile: ServerProfile,
     pub state: WsConnectionState,
     pub server_os: String,
+    pub win32_input_mode: bool,
     pub cloud_server_id: Option<String>,
     pub cmd_tx: Option<mpsc::UnboundedSender<WsCommand>>,
     pub http: Option<GateHttpClient>,
@@ -89,6 +90,7 @@ impl ServerConnection {
             profile,
             state: WsConnectionState::Disconnected,
             server_os: String::new(),
+            win32_input_mode: false,
             cloud_server_id: None,
             cmd_tx: None,
             http: None,
@@ -480,11 +482,13 @@ impl GatetermWorkbench {
             }
             WsEvent::Connected {
                 os,
+                win32_input_mode,
                 cloud_server_id,
             } => {
                 if let Some(conn) = self.servers.get_mut(&server_id) {
                     conn.state = WsConnectionState::Connected;
                     conn.server_os = os.clone();
+                    conn.win32_input_mode = win32_input_mode;
                     conn.cloud_server_id = cloud_server_id;
                 }
                 for ((srv, _), view) in &self.channel_views {
@@ -492,6 +496,7 @@ impl GatetermWorkbench {
                         let os_clone = os.clone();
                         view.update(cx, |v, _| {
                             v.server_os = os_clone;
+                            v.win32_input_mode = win32_input_mode;
                         });
                     }
                 }
@@ -808,6 +813,7 @@ impl GatetermWorkbench {
             .map(|s| s.name.clone())
             .unwrap_or_else(|| format!("session-{session_id}"));
         let server_os = conn.server_os.clone();
+        let win32_input_mode = conn.win32_input_mode;
 
         let channel = self.next_channel_id;
         self.next_channel_id = self.next_channel_id.wrapping_add(1).max(1);
@@ -845,6 +851,7 @@ impl GatetermWorkbench {
                 session_name,
                 channel,
                 server_os,
+                win32_input_mode,
                 font_family,
                 font_size,
                 line_height,

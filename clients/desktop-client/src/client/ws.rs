@@ -68,6 +68,7 @@ pub enum WsEvent {
     Connecting,
     Connected {
         os: String,
+        win32_input_mode: bool,
         cloud_server_id: Option<String>,
     },
     Reconnecting,
@@ -223,11 +224,12 @@ pub fn spawn_ws_worker(
                                                     pre_hello_error = Some(message.clone());
                                                 }
                                             }
-                                            ServerMsg::HelloOk { os, cloud_server_id, .. } => {
+                                            ServerMsg::HelloOk { os, win32_input_mode, cloud_server_id, .. } => {
                                                 auth_ok = true;
                                                 backoff.reset();
                                                 let _ = ev_tx.send(WsEvent::Connected {
                                                     os: os.clone(),
+                                                    win32_input_mode: *win32_input_mode,
                                                     cloud_server_id: cloud_server_id.clone(),
                                                 });
                                                 // Request session list and re-attach all channels

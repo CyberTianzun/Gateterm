@@ -61,6 +61,7 @@ let sessions: any[] = [];
 let attachedId: number | null = null;
 /** hello-ok 报来的服务端系统,决定部分按键的编码(见 keys.ts)。 */
 let serverOs: ServerOs = "";
+let win32InputMode = false;
 let keyboard: KeyboardAdapter | null = null;
 let term: Terminal | null = null;
 let fit: FitAddon | null = null;
@@ -410,7 +411,7 @@ function openTerminal(id: number) {
   });
   terminal.attachCustomKeyEventHandler((ev) => {
     const selected = terminal.hasSelection();
-    const seq = adapter.encode(ev, serverOs, selected);
+    const seq = adapter.encode(ev, serverOs, selected, win32InputMode);
     if (seq === null) {
       // 复制/粘贴/浏览器命令要保留默认动作,也不能再让 xterm 发 Ctrl+V 等字节。
       return serverOs !== "windows" || !browserShortcut(ev, selected);
@@ -1131,7 +1132,9 @@ client.onChannelData = (channel, payload) => {
 client.onControl = (msg) => {
   switch (msg.type) {
     case "hello-ok":
+      keyboard?.reset();
       serverOs = typeof msg.os === "string" ? msg.os : "";
+      win32InputMode = msg.win32_input_mode === true;
       break;
     case "sessions":
       sessions = msg.sessions;

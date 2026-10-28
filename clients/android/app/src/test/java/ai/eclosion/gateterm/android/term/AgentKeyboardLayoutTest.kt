@@ -68,7 +68,7 @@ class AgentKeyboardLayoutTest {
 
     @Test
     fun displayedShortcutsStillEncodeTheOriginalKeyCombinations() {
-        val keyboard = TerminalKeyboard("windows")
+        val keyboard = TerminalKeyboard("windows", win32InputMode = true)
         assertEquals("\u001b[74;36;10;1;8;1_\u001b[74;36;10;0;8;1_", keyboard.tap(KeyboardShortcut.CtrlJ.stroke!!).toString(Charsets.UTF_8))
         assertEquals("\u001b[13;28;13;1;16;1_\u001b[13;28;13;0;16;1_", keyboard.tap(KeyboardShortcut.ShiftEnter.stroke!!).toString(Charsets.UTF_8))
         assertEquals(TerminalKey.PageUp, KeyboardShortcut.PageUp.stroke!!.key)

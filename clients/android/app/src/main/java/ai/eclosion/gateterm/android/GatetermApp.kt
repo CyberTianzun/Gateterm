@@ -228,6 +228,7 @@ fun GatetermApp(viewModel: ConnectionViewModel) {
                         activeId = activeId,
                         reconnecting = state.reconnecting,
                         serverOs = state.serverOs,
+                        win32InputMode = state.win32InputMode,
                         term = term,
                         frame = viewModel.painted,
                         generation = state.termGeneration,
