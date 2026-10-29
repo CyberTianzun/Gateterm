@@ -94,7 +94,7 @@ GATETERM_SKIP_WEB_BUILD=1 cargo run --release
 - <kbd>Ctrl+Shift+M</kbd>：切换「VT 终端视图」与「Agent 结构化对话视图」
 - <kbd>Ctrl+Shift+H</kbd>：浏览与恢复宿主机 Agent 历史会话
 
-完整说明见 [`clients/desktop-client/README.md`](clients/desktop-client/README.md)。
+完整说明见 [`clients/desktop-client/README-cnzh.md`](clients/desktop-client/README-cnzh.md)（英文版：[`clients/desktop-client/README.md`](clients/desktop-client/README.md)）。
 
 ### 方式二：运行独立守护进程 (`gateterm-server`)
 
