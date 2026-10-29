@@ -36,13 +36,18 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             version="${GITHUB_REF_NAME#release-}"
             expected="${version#v}"
-            for f in crates/*/Cargo.toml; do
+            for f in crates/*/Cargo.toml clients/desktop-client/Cargo.toml; do
               actual="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$f" | head -1)"
               if [ "$actual" != "$expected" ]; then
                 echo "::error file=$f::version 是 $actual,而 tag 是 $GITHUB_REF_NAME(期望 $expected)"
                 exit 1
               fi
             done
+            android_version="$(sed -n 's/^[[:space:]]*versionName *= *"\([^"]*\)"/\1/p' clients/android/app/build.gradle.kts | head -1)"
+            if [ "$android_version" != "$expected" ]; then
+              echo "::error file=clients/android/app/build.gradle.kts::versionName 是 $android_version,而 tag 是 $GITHUB_REF_NAME(期望 $expected)"
+              exit 1
+            fi
           else
             version="dev-${GITHUB_SHA::7}"
           fi
@@ -156,11 +161,156 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  android:
+    name: Android arm64-v8a
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      ANDROID_NDK_VERSION: "29.0.14206865"
+      ANDROID_BUILD_TOOLS_VERSION: "36.0.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK and NDK
+        run: |
+          sdkmanager "platforms;android-36" "build-tools;$ANDROID_BUILD_TOOLS_VERSION" "ndk;$ANDROID_NDK_VERSION"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-arm64-v8a
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Restore Android push configuration
+        env:
+          ANDROID_GOOGLE_SERVICES_JSON: ${{ secrets.ANDROID_GOOGLE_SERVICES_JSON }}
+          ANDROID_ALIYUN_SERVICES_JSON: ${{ secrets.ANDROID_ALIYUN_SERVICES_JSON }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          package = "ai.eclosion.gateterm.android"
+          configs = (
+              ("ANDROID_GOOGLE_SERVICES_JSON", "google-services.json"),
+              ("ANDROID_ALIYUN_SERVICES_JSON", "aliyun-emas-services.json"),
+          )
+          def android_package(client):
+              if not isinstance(client, dict):
+                  return None
+              info = client.get("client_info")
+              if not isinstance(info, dict):
+                  return None
+              android = info.get("android_client_info")
+              return android.get("package_name") if isinstance(android, dict) else None
+
+          pending = []
+          for name, filename in configs:
+              raw = os.environ.get(name, "").strip()
+              if not raw:
+                  print(f"{name} is not configured; this push provider stays disabled")
+                  continue
+              try:
+                  data = json.loads(raw)
+              except json.JSONDecodeError:
+                  raise SystemExit(f"{name} must contain the complete JSON file")
+              if not isinstance(data, dict):
+                  raise SystemExit(f"{name} must contain a JSON object")
+              if filename == "google-services.json":
+                  clients = data.get("client", [])
+                  matches = isinstance(clients, list) and any(
+                      android_package(client) == package for client in clients
+                  )
+                  if not matches:
+                      raise SystemExit(f"{name} must be an Android client configuration for {package}, not an Admin service-account key")
+              else:
+                  config = data.get("config", {})
+                  if not isinstance(config, dict) or config.get("emas.packageName") != package:
+                      raise SystemExit(f"{name} must be downloaded for package {package}")
+                  if not config.get("emas.appKey") or not config.get("emas.appSecret"):
+                      raise SystemExit(f"{name} is missing the EMAS appKey or appSecret")
+              pending.append((filename, raw))
+          # Validate both providers before writing either file.
+          for filename, raw in pending:
+              path = Path("clients/android/app") / filename
+              with path.open("x", encoding="utf-8") as stream:
+                  path.chmod(0o600)
+                  stream.write(raw)
+          PY
+
+      # 构建时不提供正式签名凭据;只在最后的签名步骤读取 Repository Secrets。
+      - name: Build Android release APK
+        working-directory: clients/android
+        run: bash ./gradlew --no-daemon assembleRelease
+
+      - name: Remove Android push configuration
+        if: always()
+        run: |
+          rm -f -- clients/android/app/google-services.json clients/android/app/aliyun-emas-services.json
+
+      - name: Sign and verify Android APK
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          keystore="$RUNNER_TEMP/gateterm-release.keystore"
+          trap 'rm -f -- "$keystore"' EXIT
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          required = ("ANDROID_KEYSTORE_BASE64", "ANDROID_STORE_PASSWORD",
+                      "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD")
+          missing = [name for name in required if not os.environ.get(name)]
+          if missing:
+              raise SystemExit("Missing Android signing secrets: " + ", ".join(missing))
+          encoded = "".join(os.environ["ANDROID_KEYSTORE_BASE64"].split())
+          data = base64.b64decode(encoded, validate=True)
+          if not data:
+              raise SystemExit("Android signing keystore is empty")
+          path = Path(os.environ["RUNNER_TEMP"]) / "gateterm-release.keystore"
+          with path.open("xb") as stream:
+              path.chmod(0o600)
+              stream.write(data)
+          PY
+          tools="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS_VERSION"
+          unsigned="clients/android/app/build/outputs/apk/release/app-release-unsigned.apk"
+          mkdir -p dist
+          apk="gateterm-android-${VERSION}-arm64-v8a.apk"
+          "$tools/apksigner" sign \
+            --ks "$keystore" --ks-key-alias "$ANDROID_KEY_ALIAS" \
+            --ks-pass env:ANDROID_STORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD \
+            --v4-signing-enabled false --out "dist/$apk" "$unsigned"
+          "$tools/apksigner" verify --verbose --print-certs "dist/$apk"
+          "$tools/zipalign" -c -P 16 4 "dist/$apk"
+          (cd dist && sha256sum "$apk" > "$apk.sha256")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gateterm-android-arm64-v8a
+          path: |
+            dist/*.apk
+            dist/*.sha256
+          if-no-files-found: error
+
   # 只在一个 job 里创建 Release:多个 matrix job 并发调用 action-gh-release
   # 会抢着建同一个 release,偶发出现重复的草稿或上传失败
   release:
-    if: github.ref_type == 'tag'
-    needs: [prepare, build]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [prepare, build, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
