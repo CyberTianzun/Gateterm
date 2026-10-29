@@ -2405,14 +2405,14 @@ dependencies = [
 
 [[package]]
 name = "gateterm-client-core"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "alacritty_terminal",
 ]
 
 [[package]]
 name = "gateterm-cloud-client"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "directories",
  "gethostname",
@@ -2423,7 +2423,7 @@ dependencies = [
 
 [[package]]
 name = "gateterm-desktop-native"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -2468,7 +2468,7 @@ dependencies = [
 
 [[package]]
 name = "gateterm-protocol"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -2477,7 +2477,7 @@ dependencies = [
 
 [[package]]
 name = "gateterm-server"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
