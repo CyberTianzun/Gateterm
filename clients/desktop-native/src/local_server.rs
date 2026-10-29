@@ -1,8 +1,8 @@
-//! Embedded local `gateterm-server` supervisor for `clients/gateterm-desktop-native`.
+//! Embedded local `gateterm-server` supervisor for `clients/desktop-native`.
 //!
 //! Holds `SessionManager` and `AgentSessionStore` across HTTP listener restarts so
 //! active local PTY sessions survive port/token reconfigurations, and spawns the Cloud
-//! push notifier and Agent transcript indexer just like `clients/gateterm-desktop-web`.
+//! push notifier and Agent transcript indexer just like `clients/desktop-web`.
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;

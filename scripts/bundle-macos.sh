@@ -11,13 +11,13 @@ case "$(uname -m)" in
 esac
 TARGET="${1:-$HOST_TARGET}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ICON="$ROOT/clients/gateterm-desktop-web/assets/icon.icns"
+ICON="$ROOT/clients/desktop-web/assets/icon.icns"
 
 # 1. gateterm-desktop-web.app
 WEB_APP="$ROOT/target/bundle/gateterm-desktop-web.app"
 WEB_BIN="$ROOT/target/$TARGET/release/gateterm-desktop-web"
-WEB_VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$ROOT/clients/gateterm-desktop-web/Cargo.toml" | head -1)"
-[ -n "$WEB_VERSION" ] || { echo "无法从 clients/gateterm-desktop-web/Cargo.toml 读出 version" >&2; exit 1; }
+WEB_VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$ROOT/clients/desktop-web/Cargo.toml" | head -1)"
+[ -n "$WEB_VERSION" ] || { echo "无法从 clients/desktop-web/Cargo.toml 读出 version" >&2; exit 1; }
 [ -f "$WEB_BIN" ] || { echo "找不到 $WEB_BIN,先跑 cargo build --release --target $TARGET -p gateterm-desktop-web" >&2; exit 1; }
 
 rm -rf "$WEB_APP"
@@ -55,10 +55,10 @@ echo "$WEB_APP"
 
 # 2. gateterm-desktop-native.app
 NATIVE_APP="$ROOT/target/bundle/gateterm-desktop-native.app"
-NATIVE_BIN="$ROOT/clients/gateterm-desktop-native/target/$TARGET/release/gateterm-desktop-native"
-NATIVE_VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$ROOT/clients/gateterm-desktop-native/Cargo.toml" | head -1)"
-[ -n "$NATIVE_VERSION" ] || { echo "无法从 clients/gateterm-desktop-native/Cargo.toml 读出 version" >&2; exit 1; }
-[ -f "$NATIVE_BIN" ] || { echo "找不到 $NATIVE_BIN,先跑 cargo build --release --target $TARGET --manifest-path clients/gateterm-desktop-native/Cargo.toml -p gateterm-desktop-native" >&2; exit 1; }
+NATIVE_BIN="$ROOT/clients/desktop-native/target/$TARGET/release/gateterm-desktop-native"
+NATIVE_VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$ROOT/clients/desktop-native/Cargo.toml" | head -1)"
+[ -n "$NATIVE_VERSION" ] || { echo "无法从 clients/desktop-native/Cargo.toml 读出 version" >&2; exit 1; }
+[ -f "$NATIVE_BIN" ] || { echo "找不到 $NATIVE_BIN,先跑 cargo build --release --target $TARGET --manifest-path clients/desktop-native/Cargo.toml -p gateterm-desktop-native" >&2; exit 1; }
 
 rm -rf "$NATIVE_APP"
 mkdir -p "$NATIVE_APP/Contents/MacOS" "$NATIVE_APP/Contents/Resources"

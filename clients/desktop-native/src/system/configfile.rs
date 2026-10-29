@@ -1,5 +1,5 @@
 //! Reads and updates `gateterm`'s shared `config.toml` (preserving user comments via `toml_edit`),
-//! aligned with `clients/gateterm-desktop-web/src/configfile.rs`.
+//! aligned with `clients/desktop-web/src/configfile.rs`.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};

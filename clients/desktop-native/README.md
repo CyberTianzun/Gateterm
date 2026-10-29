@@ -1,6 +1,6 @@
 <div align="center">
 
-### Gateterm Desktop (`clients/gateterm-desktop-native`)
+### Gateterm Desktop (`clients/desktop-native`)
 
 **A native GPU-accelerated terminal workbench: integrated virtual title bar, N-ary equal split panes, multi-server remote connections, and native AI Coding Agent awareness.**
 
@@ -21,7 +21,7 @@
 
 ## Why a Native Desktop Client
 
-Gateterm's core boundary is that **a background `gateterm-server` owns your PTY processes and screen state — not a window or browser tab**. Building on that foundation, `clients/gateterm-desktop-native` draws inspiration from [`l0ng-ai/tty7`](https://github.com/l0ng-ai/tty7) and `clients/web` to deliver a **zero-browser-overhead native GPU desktop workbench**:
+Gateterm's core boundary is that **a background `gateterm-server` owns your PTY processes and screen state — not a window or browser tab**. Building on that foundation, `clients/desktop-native` draws inspiration from [`l0ng-ai/tty7`](https://github.com/l0ng-ai/tty7) and `clients/web` to deliver a **zero-browser-overhead native GPU desktop workbench**:
 
 - **Integrated GPUI Virtual Title Bar (`TitleBar`)** — Uses `gpui-component`'s `TitleBar::title_bar_options()` for a frameless/integrated title bar with no redundant horizontal tab strip. The left sidebar header keeps `gateterm`, Session History, and `+` (New Session), while the title bar houses the sidebar toggle, the active session breadcrumb (in a dedicated window-drag region), and a clean icon-only toolbar on the top right (in-terminal search, horizontal/vertical equal splits, multi-pane zoom, Structured Chat View toggle, and Settings).
 - **GPU-Accelerated Terminal Rendering** — Custom `TerminalElement` built on Zed's `gpui` and `alacritty_terminal` batch-renders background quads, ligature-disabled monospace glyphs (with automatic CJK wide-character cell spanning), text selections, search highlights, and cursor shapes directly in the GPU scene.
@@ -47,7 +47,7 @@ Gateterm's core boundary is that **a background `gateterm-server` owns your PTY 
 ## Quick Start
 
 ```powershell
-cd clients/gateterm-desktop-native
+cd clients/desktop-native
 
 # Skip rebuilding clients/web if web static assets are already built or not needed:
 $env:GATETERM_SKIP_WEB_BUILD="1"
@@ -78,7 +78,7 @@ cargo run --release
 ## Directory Structure
 
 ```text
-clients/gateterm-desktop-native/
+clients/desktop-native/
 ├── Cargo.toml                   # Standalone Cargo workspace reusing crates/{protocol,client-core,server,cloud-client}
 ├── src/
 │   ├── main.rs                  # GPUI entry point, virtual TitleBar configuration, keybindings & window initialization

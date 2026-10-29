@@ -1,5 +1,5 @@
 //! Short-lived PKCE loopback OAuth listener for Gateterm Cloud desktop sign-in,
-//! aligned with `clients/gateterm-desktop-web/src/browser_login.rs`.
+//! aligned with `clients/desktop-web/src/browser_login.rs`.
 
 use std::future::IntoFuture;
 use std::path::Path;

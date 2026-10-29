@@ -1,6 +1,6 @@
 //! Cloud account form, relay region presets, and async Cloud operations (`Login`, `Logout`,
-//! `SendDeleteCode`, `DeleteAccount`), aligned with `clients/gateterm-desktop-web/src/settings/cloud.rs`
-//! and `clients/gateterm-desktop-web/src/cloud_ops.rs`.
+//! `SendDeleteCode`, `DeleteAccount`), aligned with `clients/desktop-web/src/settings/cloud.rs`
+//! and `clients/desktop-web/src/cloud_ops.rs`.
 
 use std::path::PathBuf;
 

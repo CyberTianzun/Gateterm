@@ -6,13 +6,13 @@ set TARGET=%1
 if "%TARGET%"=="" set TARGET=x86_64-pc-windows-msvc
 set ROOT=%~dp0..
 set WEB_BIN=%ROOT%\target\%TARGET%\release\gateterm-desktop-web.exe
-set NATIVE_BIN=%ROOT%\clients\gateterm-desktop-native\target\%TARGET%\release\gateterm-desktop-native.exe
+set NATIVE_BIN=%ROOT%\clients\desktop-native\target\%TARGET%\release\gateterm-desktop-native.exe
 if not exist "%WEB_BIN%" (
   echo 找不到 %WEB_BIN%,先跑 cargo build --release --target %TARGET% -p gateterm-desktop-web 1>&2
   exit /b 1
 )
 if not exist "%NATIVE_BIN%" (
-  echo 找不到 %NATIVE_BIN%,先跑 cargo build --release --target %TARGET% --manifest-path clients/gateterm-desktop-native/Cargo.toml -p gateterm-desktop-native 1>&2
+  echo 找不到 %NATIVE_BIN%,先跑 cargo build --release --target %TARGET% --manifest-path clients/desktop-native/Cargo.toml -p gateterm-desktop-native 1>&2
   exit /b 1
 )
 if not exist "%ROOT%\target\bundle" mkdir "%ROOT%\target\bundle"

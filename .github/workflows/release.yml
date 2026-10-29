@@ -39,7 +39,7 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             version="${GITHUB_REF_NAME#release-}"
             expected="${version#v}"
-            for f in crates/*/Cargo.toml clients/gateterm-desktop-web/Cargo.toml clients/gateterm-desktop-native/Cargo.toml; do
+            for f in crates/*/Cargo.toml clients/desktop-web/Cargo.toml clients/desktop-native/Cargo.toml; do
               actual="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$f" | head -1)"
               if [ "$actual" != "$expected" ]; then
                 echo "::error file=$f::version 是 $actual,而 tag 是 $GITHUB_REF_NAME(期望 $expected)"
@@ -118,7 +118,7 @@ jobs:
         if: matrix.desktop
         run: |
           cargo build --release --target ${{ matrix.target }} -p gateterm-desktop-web
-          cargo build --release --target ${{ matrix.target }} --manifest-path clients/gateterm-desktop-native/Cargo.toml -p gateterm-desktop-native
+          cargo build --release --target ${{ matrix.target }} --manifest-path clients/desktop-native/Cargo.toml -p gateterm-desktop-native
 
       - name: Bundle desktop (macOS)
         if: matrix.desktop && runner.os == 'macOS'

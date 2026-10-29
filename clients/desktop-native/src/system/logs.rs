@@ -1,5 +1,5 @@
-//! File-backed logging and panic hook for `clients/gateterm-desktop-native`,
-//! aligned with `clients/gateterm-desktop-web/src/logs.rs`.
+//! File-backed logging and panic hook for `clients/desktop-native`,
+//! aligned with `clients/desktop-web/src/logs.rs`.
 
 use std::any::Any;
 use std::io::Write;

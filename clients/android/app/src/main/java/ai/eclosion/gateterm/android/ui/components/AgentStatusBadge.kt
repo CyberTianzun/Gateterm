@@ -55,7 +55,7 @@ private fun agentBrand(agentId: String): AgentBrand {
 
 /**
  * Compact 20×20dp agent brand + status icon badge placed to the left of session titles,
- * aligned 1:1 with `clients/web` and `clients/gateterm-desktop-native`.
+ * aligned 1:1 with `clients/web` and `clients/desktop-native`.
  */
 @Composable
 fun AgentStatusBadge(agent: AgentSession, modifier: Modifier = Modifier) {

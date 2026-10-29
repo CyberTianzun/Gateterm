@@ -1,5 +1,5 @@
 //! Start-at-login registration (macOS LaunchAgent plist / Windows HKCU Run registry key),
-//! aligned with `clients/gateterm-desktop-web/src/autostart.rs`.
+//! aligned with `clients/desktop-web/src/autostart.rs`.
 
 use anyhow::{Context, Result};
 

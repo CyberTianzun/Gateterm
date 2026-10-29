@@ -9,7 +9,7 @@
 <br />
 
 [![Rust](https://img.shields.io/badge/Rust-2024%20Edition-orange)](#)
-[![Desktop](https://img.shields.io/badge/Desktop-GPUI%20%2B%20Alacritty-3FDD8C)](clients/gateterm-desktop-web-native)
+[![Desktop](https://img.shields.io/badge/Desktop-GPUI%20%2B%20Alacritty-3FDD8C)](clients/desktop-native)
 [![Clients](https://img.shields.io/badge/Clients-Desktop%20%C2%B7%20Web%20%C2%B7%20Android-blue)](#)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE.md)
 
@@ -29,7 +29,7 @@
 
 - **Memory-frugal & persistent** — A tiny single-binary daemon hosts your PTY sessions. Quit the desktop app, close the browser tab, or switch away on your phone — your shells and coding agents keep running.
 - **Window management belongs to the client** — Not a tmux wrapper: Gateterm extracts the kernel of what tmux does (process + IO + screen-state hosting + byte-accurate `seq` ledger) and exposes it over a client-neutral binary WebSocket protocol.
-- **Native GPU Desktop Workbench (`clients/gateterm-desktop-web-native`)** — Inspired by [`tty7`](https://github.com/l0ng-ai/tty7) and built with Rust, `gpui-component`, and `alacritty_terminal`: integrated virtual `TitleBar`, embedded local server out of the box, multi-server remote management, N-ary equal split panes, and in-terminal scrollback search (<kbd>Ctrl+F</kbd>).
+- **Native GPU Desktop Workbench (`clients/desktop-native`)** — Inspired by [`tty7`](https://github.com/l0ng-ai/tty7) and built with Rust, `gpui-component`, and `alacritty_terminal`: integrated virtual `TitleBar`, embedded local server out of the box, multi-server remote management, N-ary equal split panes, and in-terminal scrollback search (<kbd>Ctrl+F</kbd>).
 - **Agent-aware** — First-class integration with Claude Code, Codex, Gemini CLI, OpenCode, pi, Grok, and Antigravity CLI: live status badges, remote tool permission approval, read-only Structured Chat View, and past session browsing & resume.
 - **Take over from any device** — Start an agent in the GPU desktop client or browser on your workstation, then check its progress or approve a tool call from the native Android client or Gateterm Cloud notifications.
 
@@ -37,7 +37,7 @@
 
 | Area | Capabilities |
 | :--- | :--- |
-| **GPU Desktop Workbench (`clients/gateterm-desktop-web-native`)** | Built on Zed's `gpui` + `alacritty_terminal` · Integrated virtual `TitleBar` with icon toolbar · Embedded `gateterm-server` started automatically · Multi-server connections · N-ary equal horizontal/vertical splits · <kbd>Ctrl+F</kbd> in-terminal scrollback search · 5 built-in color palettes · IME & Windows ConPTY `win32-input-mode` |
+| **GPU Desktop Workbench (`clients/desktop-native`)** | Built on Zed's `gpui` + `alacritty_terminal` · Integrated virtual `TitleBar` with icon toolbar · Embedded `gateterm-server` started automatically · Multi-server connections · N-ary equal horizontal/vertical splits · <kbd>Ctrl+F</kbd> in-terminal scrollback search · 5 built-in color palettes · IME & Windows ConPTY `win32-input-mode` |
 | **Agent Awareness & Remote Approval** | Per-session live status dots (`Waiting` / `Working` / `Thinking` / `Error` / `Idle`) · Top approval banner when an agent blocks on a tool call (**Allow** / **Deny** / focus session) · One-click hook install, uninstall & purge |
 | **Structured Chat View (`Chat View`)** | <kbd>Ctrl+Shift+M</kbd> switches any agent session between its raw VT screen and a structured message stream · Renders `Thinking` blocks, `ToolUse` inputs, and `ToolResult` outputs · Read-only, never cached, never written |
 | **Agent Session History & Resume** | <kbd>Ctrl+Shift+H</kbd> browses host-side Claude Code / Codex / pi / Grok / Antigravity records (including sessions started outside Gateterm) · Filter by agent, search titles/directories, preview transcripts, and resume in one click |
@@ -74,17 +74,17 @@ A memory-frugal Swiss Army knife — and it stays that way:
 
 ## Quick start
 
-### Option 1: Native GPU Desktop Workbench (`clients/gateterm-desktop-web-native`)
+### Option 1: Native GPU Desktop Workbench (`clients/desktop-native`)
 
-`clients/gateterm-desktop-web-native` automatically starts an embedded local `gateterm-server` in-process and opens an interactive terminal tab out of the box, while also letting you connect to any number of remote `gateterm-server` hosts:
+`clients/desktop-native` automatically starts an embedded local `gateterm-server` in-process and opens an interactive terminal tab out of the box, while also letting you connect to any number of remote `gateterm-server` hosts:
 
 ```sh
-cd clients/gateterm-desktop-web-native
+cd clients/desktop-native
 # Set GATETERM_SKIP_WEB_BUILD=1 to skip rebuilding clients/web if only running the native GUI
 GATETERM_SKIP_WEB_BUILD=1 cargo run --release
 ```
 
-See [DESIGN.md](DESIGN.md#native-gpu-desktop-workbench) for keyboard shortcuts and [`clients/gateterm-desktop-web-native/README.md`](clients/gateterm-desktop-web-native/README.md) for client-specific notes.
+See [DESIGN.md](DESIGN.md#native-gpu-desktop-workbench) for keyboard shortcuts and [`clients/desktop-native/README.md`](clients/desktop-native/README.md) for client-specific notes.
 
 ### Option 2: Standalone Daemon (`gateterm-server`)
 
@@ -138,14 +138,14 @@ Wire protocol: [`docs/protocol.md`](docs/protocol.md) — the normative spec, an
 - `crates/protocol` — frame and message definitions (single source of truth)
 - `crates/server` — the daemon: pty hosting, server-side grid, WebSocket
 - `crates/client-core` — reusable logic for Rust clients (`ClientTerm`, `ResumeTracker`, `Backoff`)
-- `clients/gateterm-desktop-web-web` — tray-resident server host with native settings window (Windows / macOS)
-- `clients/gateterm-desktop-web-native` — native GPU-accelerated desktop terminal workbench (Rust + `gpui` + `gpui-component` + `alacritty_terminal`)
+- `clients/desktop-web-web` — tray-resident server host with native settings window (Windows / macOS)
+- `clients/desktop-native` — native GPU-accelerated desktop terminal workbench (Rust + `gpui` + `gpui-component` + `alacritty_terminal`)
 - `clients/web` — browser client (TypeScript + `xterm.js`)
 - `clients/android` — native Android terminal client (Kotlin + Jetpack Compose)
 
 ## Roadmap
 
-1. **More terminal capability, more clients.** Deepen core terminal features across the GPU Desktop client (`clients/gateterm-desktop-web-native`), Web, and Android, and bring the same protocol to iOS and other platforms.
+1. **More terminal capability, more clients.** Deepen core terminal features across the GPU Desktop client (`clients/desktop-native`), Web, and Android, and bring the same protocol to iOS and other platforms.
 2. **Agent integration.** Extend live status, remote approval, chat and session resume across clients and supported agents.
 3. **No file manager.** File management is very unlikely to ever be added — that's what the shell in your session is for.
 

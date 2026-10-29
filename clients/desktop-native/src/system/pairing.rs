@@ -1,5 +1,5 @@
 //! Network interface discovery and QR code pairing matrix for connecting Android/Web
-//! clients to the embedded `gateterm-server`, aligned with `clients/gateterm-desktop-web/src/settings/pairing.rs`.
+//! clients to the embedded `gateterm-server`, aligned with `clients/desktop-web/src/settings/pairing.rs`.
 
 use std::net::{IpAddr, SocketAddr};
 

@@ -1,6 +1,6 @@
 <div align="center">
 
-### Gateterm Desktop (`clients/gateterm-desktop-native`)
+### Gateterm Desktop (`clients/desktop-native`)
 
 **原生 GPU 加速终端工作台：虚拟标题栏、N 叉等分分屏、多节点远程连接、原生支持 AI Coding Agent。**
 
@@ -21,7 +21,7 @@
 
 ## 为什么构建原生桌面端
 
-Gateterm 的核心设计是 **「后台常驻的 `gateterm-server` 持有你的 PTY 与屏幕状态，而不是窗口本身」**。在此基础上，`clients/gateterm-desktop-native` 参考 [`l0ng-ai/tty7`](https://github.com/l0ng-ai/tty7) 与 `clients/web` 的交互细节，将原本运行在浏览器中的体验升级为**零浏览器开销的原生 GPU 桌面工作台**：
+Gateterm 的核心设计是 **「后台常驻的 `gateterm-server` 持有你的 PTY 与屏幕状态，而不是窗口本身」**。在此基础上，`clients/desktop-native` 参考 [`l0ng-ai/tty7`](https://github.com/l0ng-ai/tty7) 与 `clients/web` 的交互细节，将原本运行在浏览器中的体验升级为**零浏览器开销的原生 GPU 桌面工作台**：
 
 - **沉浸式 GPUI 虚拟标题栏 (`TitleBar`)** — 采用 `gpui-component` 的 `TitleBar::title_bar_options()` 自绘无边框/融合标题栏，去除多余的顶部水平标签栏；左侧边栏头部保留 `gateterm`、历史会话与 `+` 新建会话，标题栏保留侧边栏折叠、当前会话面包屑（独立拖拽区）以及右上角纯图标按钮（终端内搜索、左右/上下均分分屏、多窗格缩放、结构化对话切换、设置），职责清晰不冗余。
 - **极致渲染性能** — 基于 Zed 的 `gpui` 与 `alacritty_terminal` 状态机自定义 `TerminalElement`，在 GPU 场景中批量绘制背景块、禁连字等宽字形（自动识别 CJK 宽字符）、选区、搜索匹配高亮与光标。
@@ -47,7 +47,7 @@ Gateterm 的核心设计是 **「后台常驻的 `gateterm-server` 持有你的 
 ## 快速开始
 
 ```powershell
-cd clients/gateterm-desktop-native
+cd clients/desktop-native
 
 # 若前端 clients/web/dist 已存在或无需重新构建 web 静态资源，可设置跳过 npm 构建加速编译：
 $env:GATETERM_SKIP_WEB_BUILD="1"
@@ -78,7 +78,7 @@ cargo run --release
 ## 目录结构
 
 ```text
-clients/gateterm-desktop-native/
+clients/desktop-native/
 ├── Cargo.toml                   # 独立 Cargo Workspace，通过 path 依赖复用 crates/{protocol,client-core,server,cloud-client}
 ├── src/
 │   ├── main.rs                  # GPUI 应用入口、虚拟标题栏配置、全局快捷键绑定与窗口初始化

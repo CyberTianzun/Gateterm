@@ -9,7 +9,7 @@
 <br />
 
 [![Rust](https://img.shields.io/badge/Rust-2024%20Edition-orange)](#)
-[![Desktop](https://img.shields.io/badge/Desktop-GPUI%20%2B%20Alacritty-3FDD8C)](clients/gateterm-desktop-web-native)
+[![Desktop](https://img.shields.io/badge/Desktop-GPUI%20%2B%20Alacritty-3FDD8C)](clients/desktop-native)
 [![Clients](https://img.shields.io/badge/Clients-Desktop%20%C2%B7%20Web%20%C2%B7%20Android-blue)](#)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE.md)
 
@@ -29,7 +29,7 @@
 
 - **极致轻量与常驻** — 单一静态二进制守护进程托管 PTY 会话；关掉桌面窗口、刷新浏览器或切走手机 App，后台任务与 Agent 照常运行。
 - **把窗口管理还给客户端** — 它不是 tmux 的包装，而是把 tmux 的内核（进程 + IO + 屏幕状态托管 + 精确字节序号 `seq` 账本）独立出来，通过统一的二进制 WebSocket 协议暴露给任意客户端。
-- **原生 GPU 桌面工作台 (`clients/gateterm-desktop-web-native`)** — 参考 [`tty7`](https://github.com/l0ng-ai/tty7) 架构，使用 Rust + `gpui-component` + `alacritty_terminal` 构建：沉浸式 GPUI 虚拟标题栏、内置本地服务端自动拉起、多远程节点管理、N 叉等分分屏、终端内回滚搜索（<kbd>Ctrl+F</kbd>）。
+- **原生 GPU 桌面工作台 (`clients/desktop-native`)** — 参考 [`tty7`](https://github.com/l0ng-ai/tty7) 架构，使用 Rust + `gpui-component` + `alacritty_terminal` 构建：沉浸式 GPUI 虚拟标题栏、内置本地服务端自动拉起、多远程节点管理、N 叉等分分屏、终端内回滚搜索（<kbd>Ctrl+F</kbd>）。
 - **AI Coding Agent 深度感知** — 原生感知 Claude Code、Codex、Gemini CLI、OpenCode、pi、Grok 与 Antigravity CLI：实时状态徽章、远程工具调用权限审批、只读结构化对话视图（Chat View）以及宿主机历史会话检索与一键恢复。
 - **全平台随时接管** — 在电脑上用原生 GPU 桌面端或浏览器开跑任务，出门用 Android 原生客户端或 Gateterm Cloud 推送随时查看状态、审批工具调用。
 
@@ -37,7 +37,7 @@
 
 | 模块 | 核心能力 |
 | :--- | :--- |
-| **原生 GPU 桌面端 (`clients/gateterm-desktop-web-native`)** | 基于 Zed `gpui` + `alacritty_terminal` · 虚拟标题栏与纯图标工具栏 · 内置本地 `gateterm-server` 开箱即用 · 多远程服务器并行连接 · 水平/垂直 N 叉等分分屏 · <kbd>Ctrl+F</kbd> 终端内回滚搜索 · 5 套主题调色板 · IME 输入法与 ConPTY `win32-input-mode` 精确按键 |
+| **原生 GPU 桌面端 (`clients/desktop-native`)** | 基于 Zed `gpui` + `alacritty_terminal` · 虚拟标题栏与纯图标工具栏 · 内置本地 `gateterm-server` 开箱即用 · 多远程服务器并行连接 · 水平/垂直 N 叉等分分屏 · <kbd>Ctrl+F</kbd> 终端内回滚搜索 · 5 套主题调色板 · IME 输入法与 ConPTY `win32-input-mode` 精确按键 |
 | **Agent 感知与远程审批** | 逐会话实时状态点 (`Waiting` / `Working` / `Thinking` / `Error` / `Idle`) · 工具调用阻塞时顶部弹出审批横幅（一键 **允许** / **拒绝** / 跳转会话） · 在设置内一键安装/卸载/清理各 Agent 钩子 |
 | **结构化对话视图 (`Chat View`)** | <kbd>Ctrl+Shift+M</kbd> 将正在运行 Agent 的终端切换为结构化消息流 · 独立渲染 `Thinking` 思考过程、`ToolUse` 工具参数与 `ToolResult` 结果 · 只读解析、不缓存、不落盘 |
 | **Agent 历史会话与恢复** | <kbd>Ctrl+Shift+H</kbd> 检索宿主机已有的 Claude Code / Codex / pi / Grok / Antigravity 记录（含在 Gateterm 之外启动的对话） · 关键词与工作目录搜索 · 预览最近对话 · 一键在原目录恢复会话 |
@@ -74,12 +74,12 @@ Gateterm **不包装、不代理任何 Agent**——你在终端里启动的就�
 
 ## 快速开始
 
-### 方式一：启动原生 GPU 桌面工作台 (`clients/gateterm-desktop-web-native`)
+### 方式一：启动原生 GPU 桌面工作台 (`clients/desktop-native`)
 
-`clients/gateterm-desktop-web-native` 启动时默认自动在进程内拉起内置本地 `gateterm-server` 并打开第一个终端会话，同时支持连接任意远程 `gateterm-server` 节点：
+`clients/desktop-native` 启动时默认自动在进程内拉起内置本地 `gateterm-server` 并打开第一个终端会话，同时支持连接任意远程 `gateterm-server` 节点：
 
 ```sh
-cd clients/gateterm-desktop-web-native
+cd clients/desktop-native
 # 若无需重新构建 web 前端静态资源，可设置 GATETERM_SKIP_WEB_BUILD=1 加速编译
 GATETERM_SKIP_WEB_BUILD=1 cargo run --release
 ```
@@ -94,7 +94,7 @@ GATETERM_SKIP_WEB_BUILD=1 cargo run --release
 - <kbd>Ctrl+Shift+M</kbd>：切换「VT 终端视图」与「Agent 结构化对话视图」
 - <kbd>Ctrl+Shift+H</kbd>：浏览与恢复宿主机 Agent 历史会话
 
-完整说明见 [`clients/gateterm-desktop-web-native/README-cnzh.md`](clients/gateterm-desktop-web-native/README-cnzh.md)（英文版：[`clients/gateterm-desktop-web-native/README.md`](clients/gateterm-desktop-web-native/README.md)）。
+完整说明见 [`clients/desktop-native/README-cnzh.md`](clients/desktop-native/README-cnzh.md)（英文版：[`clients/desktop-native/README.md`](clients/desktop-native/README.md)）。
 
 ### 方式二：运行独立守护进程 (`gateterm-server`)
 
@@ -150,7 +150,7 @@ server 启动时及每隔 24 小时会在后台检查 GitHub 最新正式 Releas
 
 ## 托盘服务端宿主 (`gateterm-desktop-web`，Windows / macOS)
 
-除了完整渲染终端的 `clients/gateterm-desktop-web-native` 外，仓库还提供极简托盘宿主 `gateterm-desktop-web`：把同一套 server 内嵌进一个托盘常驻进程，配一个小巧的原生设置窗口（终端在浏览器或移动端打开）。
+除了完整渲染终端的 `clients/desktop-native` 外，仓库还提供极简托盘宿主 `gateterm-desktop-web`：把同一套 server 内嵌进一个托盘常驻进程，配一个小巧的原生设置窗口（终端在浏览器或移动端打开）。
 
 ```sh
 cargo run -p gateterm-desktop-web
@@ -172,7 +172,7 @@ desktop 启动后及每隔 24 小时也会在后台检查最新正式 Release。
 
 **默认监听 `0.0.0.0:7683`（全网卡），与 `gateterm-server` 不同。** desktop 的存在理由就是「从手机/平板连回自己这台机器」，只回环等于开箱即不可用。敢这么定的前提是两条硬边界都在：空 token 进不到监听层（release 构建也拦），`/hook/*` 无条件只认回环。剩下的残余风险是实打实的 —— 同一局域网里拿到 token 的人就能用你的终端，所以在不可信网络里请到设置窗口改回 `127.0.0.1`，或自己套一层网络层安全（Tailscale / 反代 + TLS）。
 
-`gateterm-desktop-web` 托盘宿主不支持 Linux（Linux 桌面端请使用 `clients/gateterm-desktop-web-native`）。
+`gateterm-desktop-web` 托盘宿主不支持 Linux（Linux 桌面端请使用 `clients/desktop-native`）。
 
 ## Android 客户端 (`clients/android`)
 
@@ -196,7 +196,7 @@ Windows 使用 `gradlew.bat`。安装后添加服务端地址和 token，也可�
 
 ## Agent 会话历史
 
-桌面工作台（`clients/gateterm-desktop-web-native`）、Web 侧栏的历史按钮、Android 服务端页面的「Agent 会话历史」可浏览宿主机已有的 Claude Code、Codex、pi、Grok 和 Antigravity CLI 记录，包括在 Gateterm 之外开始的对话。支持按 Agent、标题、原工作目录和会话 ID 搜索，并预览最近的对话。
+桌面工作台（`clients/desktop-native`）、Web 侧栏的历史按钮、Android 服务端页面的「Agent 会话历史」可浏览宿主机已有的 Claude Code、Codex、pi、Grok 和 Antigravity CLI 记录，包括在 Gateterm 之外开始的对话。支持按 Agent、标题、原工作目录和会话 ID 搜索，并预览最近的对话。
 
 已关联到运行中 Gateterm 终端的记录可直接进入终端；其他记录在原工作目录中启动一个新的 Gateterm 终端并恢复。需要服务端 PATH 中有对应 CLI、原目录仍存在且记录包含恢复所需信息。pi 使用原会话文件恢复。恢复请求在服务端合并，多端同时点击也不会重复启动。
 
@@ -243,14 +243,14 @@ Desktop 用户在「设置…」窗口底部的「Cloud 账号」区选择中继
 - `crates/protocol` — 帧与消息定义（协议唯一事实来源）
 - `crates/server` — daemon：pty、服务端 grid、WebSocket
 - `crates/client-core` — Rust 客户端复用逻辑（`ClientTerm`、`ResumeTracker`、`Backoff`）
-- `clients/gateterm-desktop-web-web` — 内嵌 server 的托盘常驻宿主（Windows / macOS）
-- `clients/gateterm-desktop-web-native` — 原生 GPU 加速桌面终端工作台（Rust + `gpui` + `gpui-component` + `alacritty_terminal`）
+- `clients/desktop-web-web` — 内嵌 server 的托盘常驻宿主（Windows / macOS）
+- `clients/desktop-native` — 原生 GPU 加速桌面终端工作台（Rust + `gpui` + `gpui-component` + `alacritty_terminal`）
 - `clients/web` — 浏览器客户端（TS + `xterm.js`）
 - `clients/android` — Android 原生终端客户端（Kotlin + Jetpack Compose）
 
 ## 路线图
 
-1. **更多终端能力、更多客户端**：持续完善 GPU 桌面端（`clients/gateterm-desktop-web-native`）、Web 与 Android 客户端，并把同一套协议带到 iOS 等平台；
+1. **更多终端能力、更多客户端**：持续完善 GPU 桌面端（`clients/desktop-native`）、Web 与 Android 客户端，并把同一套协议带到 iOS 等平台；
 2. **Agent 集成**：让被托管的会话可以在任何设备上接管 AI 的提示、回答它的选择、查看它的状态。**Claude Code 已可用**（装 hook、会话状态、远程授权、聊天视图）；**Codex** 也已支持（状态、授权、聊天视图；hook 要在 Codex 里用 `/hooks` 审核一次）；**pi** 通过生成的扩展 `~/.pi/agent/extensions/gateterm.ts` 支持（状态与聊天视图；pi 本身没有授权审批，所以没有远程授权可做）；**Grok**（xAI 的 `grok`）通过 `~/.grok/hooks/gateterm.json` 支持（状态与聊天视图；它同样没有授权审批事件）；**Antigravity CLI**（Google 的 `agy`）通过共用的 `~/.gemini/config/hooks.json` 里的 `gateterm` 条目支持（状态与聊天视图；不接管它的授权确认）。该适配针对独立的 Antigravity CLI，与 Gemini CLI 和 Antigravity IDE 分开处理。从旧 Windows 版本升级后，需要在设置中重新安装 Antigravity 集成，再重启正在运行的 `agy`，替换旧 hook 命令。聊天视图读取 Antigravity 的步骤日志，包含新版 CLI 的思考内容。
 3. **不做文件管理**：文件管理基本不可能加——那是会话里 shell 自己的事。
 

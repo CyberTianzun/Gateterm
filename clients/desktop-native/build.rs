@@ -6,7 +6,7 @@ fn main() {
         compile_windows_icon();
     }
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=../gateterm-desktop-web/assets/icon.ico");
+    println!("cargo:rerun-if-changed=../desktop-web/assets/icon.ico");
 }
 
 fn compile_windows_icon() {
@@ -15,9 +15,9 @@ fn compile_windows_icon() {
         std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"),
     );
     let ico_path = manifest_dir
-        .join("../gateterm-desktop-web/assets/icon.ico")
+        .join("../desktop-web/assets/icon.ico")
         .canonicalize()
-        .unwrap_or_else(|_| manifest_dir.join("../gateterm-desktop-web/assets/icon.ico"));
+        .unwrap_or_else(|_| manifest_dir.join("../desktop-web/assets/icon.ico"));
     if !ico_path.is_file() {
         return;
     }

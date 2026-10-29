@@ -1,4 +1,4 @@
-//! System tray icon and menu for `clients/gateterm-desktop-native`, aligned with `clients/gateterm-desktop-web/src/tray.rs`
+//! System tray icon and menu for `clients/desktop-native`, aligned with `clients/desktop-web/src/tray.rs`
 //! plus a "Show Main Window" action and left-click tray restoration.
 
 use anyhow::{Context, Result};
@@ -59,9 +59,9 @@ fn decode_png_icon(bytes: &[u8]) -> Result<Icon> {
 
 fn decode_icon() -> Result<Icon> {
     #[cfg(target_os = "macos")]
-    let bytes = include_bytes!("../../../gateterm-desktop-web/assets/tray-macos-template.png");
+    let bytes = include_bytes!("../../../desktop-web/assets/tray-macos-template.png");
     #[cfg(not(target_os = "macos"))]
-    let bytes = include_bytes!("../../../gateterm-desktop-web/assets/icon.png");
+    let bytes = include_bytes!("../../../desktop-web/assets/icon.png");
     decode_png_icon(bytes)
 }
 
