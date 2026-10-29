@@ -1,5 +1,5 @@
 /target
-clients/desktop-client/target/
+clients/gateterm-desktop-native/target/
 /.worktrees/
 node_modules/
 clients/android/.gradle/

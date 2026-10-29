@@ -1385,7 +1385,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gateterm-desktop"
+name = "gateterm-desktop-web"
 version = "0.2.7"
 dependencies = [
  "anyhow",

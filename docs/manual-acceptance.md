@@ -215,9 +215,9 @@ curl -s -X POST -H "Authorization: Bearer labtok" \
 - [ ] `GET /api/agents` 里 codex 那条的 `activation` 是 `"codex-hooks-review"`
 
 Windows Codex 使用 PowerShell,命令应为 `& '…\gateterm-server.exe' hook http://…`。
-从桌面设置安装时指向 `gateterm-desktop.exe`,它也必须在日志、单实例锁和 GUI
+从桌面设置安装时指向 `gateterm-desktop-web.exe`,它也必须在日志、单实例锁和 GUI
 初始化之前处理 `hook` 子命令。路径中的单引号必须转写为两个单引号。
-回归测试: `cargo test -p gateterm-desktop --test hook_cli`。
+回归测试: `cargo test -p gateterm-desktop-web --test hook_cli`。
 
 旧版本生成过缺少 `&` 的 Windows 命令,会报 `hook exited with code 1`。
 更新程序并完全退出、重开 Gateterm 后,在「设置 → AI 集成」重新安装即可替换;

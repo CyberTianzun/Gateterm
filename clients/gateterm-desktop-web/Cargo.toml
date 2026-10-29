@@ -1,0 +1,62 @@
+[package]
+name = "gateterm-desktop-web"
+version = "0.2.7"
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "gateterm_desktop_web"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gateterm-desktop-web"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+arboard = "3"
+axum = "0.8"
+base64 = "0.22"
+directories = "5"
+egui = "0.36"
+egui-wgpu = { version = "0.36", features = ["winit"] }
+# 关掉默认特性是为了不把 X11 / Wayland / accesskit 拉进来;`clipboard` 必须留着,
+# 否则 egui 文本框的复制粘贴只在本进程内生效,拷不出去也贴不进来。
+egui-winit = { version = "0.36", default-features = false, features = ["clipboard"] }
+fs4 = { version = "1", features = ["sync"] }
+if-addrs = { version = "0.15", features = ["link-local"] }
+gateterm-cloud-client = { path = "../../crates/cloud-client" }
+gateterm-server = { path = "../../crates/server" }
+open = "5"
+# 版本与 crates/server/Cargo.toml 保持一致,不要升级(那边已经在用它解析 iTerm2 的偏好设置)。
+plist = "1"
+png = "0.18"
+qrcode = { version = "0.14.1", default-features = false }
+pollster = "0.4"
+rfd = { version = "0.15", default-features = false, features = ["common-controls-v6"] }
+sha2 = "0.10"
+sys-locale = "0.3"
+url = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "sync"] }
+toml_edit = "0.25"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tray-icon = "0.24"
+# 版本与 crates/server/Cargo.toml 保持一致:「重新生成 token」要和 server 的
+# resolve_token 产出同一种格式。
+uuid = { version = "1", features = ["v4"] }
+winit = "0.30.13"
+
+[dev-dependencies]
+futures-util = "0.3"
+gateterm-protocol = { path = "../../crates/protocol" }
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["full", "test-util"] }
+tokio-tungstenite = "0.26"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+
+[build-dependencies]
+embed-manifest = "1.5"

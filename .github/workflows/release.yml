@@ -39,7 +39,7 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             version="${GITHUB_REF_NAME#release-}"
             expected="${version#v}"
-            for f in crates/*/Cargo.toml clients/desktop-client/Cargo.toml; do
+            for f in crates/*/Cargo.toml clients/gateterm-desktop-web/Cargo.toml clients/gateterm-desktop-native/Cargo.toml; do
               actual="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$f" | head -1)"
               if [ "$actual" != "$expected" ]; then
                 echo "::error file=$f::version 是 $actual,而 tag 是 $GITHUB_REF_NAME(期望 $expected)"
@@ -116,7 +116,9 @@ jobs:
       # desktop 只支持 Windows/macOS
       - name: Build desktop
         if: matrix.desktop
-        run: cargo build --release --target ${{ matrix.target }} -p gateterm-desktop
+        run: |
+          cargo build --release --target ${{ matrix.target }} -p gateterm-desktop-web
+          cargo build --release --target ${{ matrix.target }} --manifest-path clients/gateterm-desktop-native/Cargo.toml -p gateterm-desktop-native
 
       - name: Bundle desktop (macOS)
         if: matrix.desktop && runner.os == 'macOS'
@@ -136,9 +138,11 @@ jobs:
           server="gateterm-server-${VERSION}-${{ matrix.target }}.tar.gz"
           tar -czf "dist/$server" -C "target/${{ matrix.target }}/release" gateterm-server
           if [ "${{ matrix.desktop }}" = "true" ]; then
-            desktop="gateterm-desktop-${VERSION}-${{ matrix.target }}.zip"
+            desktop_web="gateterm-desktop-web-${VERSION}-${{ matrix.target }}.zip"
+            desktop_native="gateterm-desktop-native-${VERSION}-${{ matrix.target }}.zip"
             # ditto 保留 .app 的权限位和扩展属性,比 zip -r 可靠
-            ditto -c -k --keepParent target/bundle/gateterm.app "dist/$desktop"
+            ditto -c -k --keepParent target/bundle/gateterm-desktop-web.app "dist/$desktop_web"
+            ditto -c -k --keepParent target/bundle/gateterm-desktop-native.app "dist/$desktop_native"
           fi
           cd dist && for f in *; do shasum -a 256 "$f" > "$f.sha256"; done
 
@@ -150,8 +154,10 @@ jobs:
           Compress-Archive -Path "target/${{ matrix.target }}/release/gateterm-server.exe" `
             -DestinationPath "dist/gateterm-server-$env:VERSION-${{ matrix.target }}.zip"
           if ("${{ matrix.desktop }}" -eq "true") {
-            Compress-Archive -Path "target/bundle/gateterm-desktop.exe" `
-              -DestinationPath "dist/gateterm-desktop-$env:VERSION-${{ matrix.target }}.zip"
+            Compress-Archive -Path "target/bundle/gateterm-desktop-web.exe" `
+              -DestinationPath "dist/gateterm-desktop-web-$env:VERSION-${{ matrix.target }}.zip"
+            Compress-Archive -Path "target/bundle/gateterm-desktop-native.exe" `
+              -DestinationPath "dist/gateterm-desktop-native-$env:VERSION-${{ matrix.target }}.zip"
           }
           Get-ChildItem dist -File | ForEach-Object {
             (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + "  $($_.Name)" |

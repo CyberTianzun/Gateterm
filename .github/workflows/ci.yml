@@ -27,17 +27,19 @@ jobs:
       - name: Rust tests
         shell: bash
         run: |
-          # desktop 只支持 Windows/macOS:autostart.rs 里有 compile_error!,Linux 上装什么依赖都编不过
+          # gateterm-desktop-web / gateterm-desktop-native 依赖系统托盘与平台自启,仅支持 Windows/macOS
           if [ "${{ runner.os }}" = "Linux" ]; then
-            cargo test --workspace --exclude gateterm-desktop
+            cargo test --workspace --exclude gateterm-desktop-web
           else
             cargo test --workspace
+            cargo test --manifest-path clients/gateterm-desktop-native/Cargo.toml -p gateterm-desktop-native
           fi
       - name: Clippy
         shell: bash
         run: |
           if [ "${{ runner.os }}" = "Linux" ]; then
-            cargo clippy --workspace --exclude gateterm-desktop -- -D warnings
+            cargo clippy --workspace --exclude gateterm-desktop-web -- -D warnings
           else
             cargo clippy --workspace -- -D warnings
+            cargo clippy --manifest-path clients/gateterm-desktop-native/Cargo.toml -p gateterm-desktop-native -- -D warnings
           fi

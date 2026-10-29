@@ -12,7 +12,7 @@ This document describes client behavior, server configuration and agent session 
 
 ## Native GPU desktop workbench
 
-`clients/desktop-client` starts an embedded local `gateterm-server` in-process and opens an interactive terminal tab. It can also connect to remote Gateterm servers.
+`clients/gateterm-desktop-web-native` starts an embedded local `gateterm-server` in-process and opens an interactive terminal tab. It can also connect to remote Gateterm servers.
 
 Key shortcuts:
 
@@ -25,7 +25,7 @@ Key shortcuts:
 - <kbd>Ctrl+Shift+M</kbd>: Toggle between **Terminal View** and **Structured Agent Chat View**
 - <kbd>Ctrl+Shift+H</kbd>: Browse & resume host Agent Session History
 
-See [`clients/desktop-client/README.md`](clients/desktop-client/README.md) for full details.
+See [`clients/gateterm-desktop-web-native/README.md`](clients/gateterm-desktop-web-native/README.md) for full details.
 
 ## Standalone server
 
@@ -76,10 +76,10 @@ At startup and every 24 hours, the server checks the latest stable GitHub Releas
 
 ## Tray server host
 
-Alongside the full GPU terminal workbench (`clients/desktop-client`), `gateterm-desktop` runs the server embedded in a lightweight tray-resident process with a small native settings window (terminals open in the browser or mobile app).
+Alongside the full GPU terminal workbench (`clients/gateterm-desktop-web-native`), `gateterm-desktop-web` runs the server embedded in a lightweight tray-resident process with a small native settings window (terminals open in the browser or mobile app).
 
 ```sh
-cargo run -p gateterm-desktop
+cargo run -p gateterm-desktop-web
 ```
 
 The desktop interface supports English and Simplified Chinese. On first launch it follows the OS display language (Chinese for `zh` locales, English otherwise). Choose **Settings → Language** and save to override it or return to **Follow system**. This updates the window and tray immediately and saves the preference as `[desktop].language` (`auto`, `en`, or `zh-CN`) in `config.toml`.
@@ -98,7 +98,7 @@ That is a separate switch from installing hooks on purpose: hooks let gateterm s
 
 **It listens on `0.0.0.0:7683` by default — unlike `gateterm-server`.** Reaching your machine from a phone or tablet is the whole point of the desktop app, and a loopback-only default makes it unusable out of the box. Two hard boundaries make that defensible: an empty token cannot reach the listener (enforced in release builds too), and `/hook/*` accepts loopback peers only, whatever the main listen address is. The residual risk is real — anyone on your LAN who has the token has your terminal — so on an untrusted network set it back to `127.0.0.1` in the settings window, or put your own network-layer security in front of it.
 
-`gateterm-desktop` does not support Linux (use `clients/desktop-client` on Linux).
+`gateterm-desktop-web` does not support Linux (use `clients/gateterm-desktop-web-native` on Linux).
 
 ## Android client
 
@@ -114,7 +114,7 @@ For build and installation commands, see [README.md](README.md#android-client-cl
 
 ## Agent session history
 
-Use <kbd>Ctrl+Shift+H</kbd> in the native desktop client (`clients/desktop-client`), the history button in the web sidebar, or **Agent session history** on the Android server screen to browse host-side Claude Code, Codex, pi, Grok and Antigravity CLI records, including conversations started outside Gateterm. Filter by agent or search titles, working directories and session IDs, and preview recent messages.
+Use <kbd>Ctrl+Shift+H</kbd> in the native desktop client (`clients/gateterm-desktop-web-native`), the history button in the web sidebar, or **Agent session history** on the Android server screen to browse host-side Claude Code, Codex, pi, Grok and Antigravity CLI records, including conversations started outside Gateterm. Filter by agent or search titles, working directories and session IDs, and preview recent messages.
 
 An associated live Gateterm terminal opens directly. Otherwise, resuming creates a new Gateterm terminal in the original directory. The corresponding CLI must be on the server PATH, the directory must exist, and the record must contain the required metadata. pi resumes using its original session file. Concurrent resume requests share the same terminal.
 
