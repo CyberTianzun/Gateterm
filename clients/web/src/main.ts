@@ -144,6 +144,66 @@ function fmtTime(unixSecs: number): string {
   return new Date(unixSecs * 1000).toLocaleString(localeTag());
 }
 
+function shortCwd(cwd: string | null | undefined): string {
+  if (!cwd) return "";
+  const trimmed = cwd.trim().replace(/[\\/]+$/, "");
+  if (!trimmed) return "";
+  const parts = trimmed.split(/[\\/]+/).filter(Boolean);
+  if (parts.length === 0) return trimmed;
+  if (parts.length === 1) return parts[0];
+  return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
+}
+
+function agentBrandLabel(agentId: string): string {
+  switch (agentId.toLowerCase()) {
+    case "claude":
+    case "claude-code":
+      return "Claude";
+    case "codex":
+      return "Codex";
+    case "gemini":
+    case "gemini-cli":
+      return "Gemini";
+    case "opencode":
+      return "OpenCode";
+    case "pi":
+      return "pi";
+    case "grok":
+      return "Grok";
+    case "agy":
+    case "antigravity":
+      return "AGY";
+    default:
+      return agentId;
+  }
+}
+
+function agentBrandIconSvg(agentId: string): string {
+  const lower = agentId.toLowerCase();
+  if (lower.includes("claude")) {
+    return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M8 2v12M2 8h12M3.76 3.76l8.48 8.48M12.24 3.76L3.76 12.24"/></svg>`;
+  }
+  if (lower.includes("codex")) {
+    return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.75L13.5 4.9v6.2L8 14.25 2.5 11.1V4.9L8 1.75Z"/><path d="M5.75 6.25L7.75 8l-2 1.75M8.5 9.75h2"/></svg>`;
+  }
+  if (lower.includes("gemini")) {
+    return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.5C8 5.1 10.9 8 14.5 8 10.9 8 8 10.9 8 14.5 8 10.9 5.1 8 1.5 8 5.1 8 8 5.1 8 1.5Z"/></svg>`;
+  }
+  if (lower.includes("opencode")) {
+    return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.25 4.75L2 8l3.25 3.25M10.75 4.75L14 8l-3.25 3.25M9.25 3.5l-2.5 9"/></svg>`;
+  }
+  if (lower === "pi" || lower.startsWith("pi-")) {
+    return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4.5h10M6.25 4.5v7.25M10.25 4.5v5.75a1.5 1.5 0 0 0 1.5 1.5"/></svg>`;
+  }
+  if (lower.includes("grok")) {
+    return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="4.75"/><path d="M3 13L13 3"/></svg>`;
+  }
+  if (lower.includes("agy") || lower.includes("antigravity")) {
+    return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.25L13.5 13H10.6L8 7.75 5.4 13H2.5L8 2.25Z"/><path d="M5.5 10.5h5"/></svg>`;
+  }
+  return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="10" height="8" rx="2"/><path d="M8 2v2.5M6 8.25h.01M10 8.25h.01M6 10.5h4"/></svg>`;
+}
+
 /* ---------- 多语言 ---------- */
 
 /**
@@ -282,7 +342,12 @@ function renderSidebar() {
       // 所以做成有底色的胶囊,`waiting` 用最扎眼的一档(见 style.css)。
       row.querySelector(".sname")!.prepend(agentBadge(agent));
     }
-    row.querySelector(".smeta")!.textContent = `${s.cols}×${s.rows} · ${fmtTime(s.created_at)}`;
+    const smeta = row.querySelector<HTMLElement>(".smeta")!;
+    const cwdShort = shortCwd(s.cwd);
+    smeta.textContent = cwdShort
+      ? `${cwdShort} · ${s.cols}×${s.rows}`
+      : `${s.cols}×${s.rows} · ${fmtTime(s.created_at)}`;
+    if (s.cwd) smeta.title = s.cwd;
     row.addEventListener("click", (ev) => {
       const act = (ev.target as Element).closest<HTMLButtonElement>("button[data-act]")?.dataset.act;
       if (act === "view-toggle") {
@@ -508,6 +573,40 @@ function refit() {
 
 window.addEventListener("resize", refit);
 window.visualViewport?.addEventListener("resize", refit);
+$("terminal-wrap").addEventListener(
+  "paste",
+  (ev: ClipboardEvent) => {
+    if (attachedId === null || !term || !ev.clipboardData) return;
+    if (ev.clipboardData.getData("text/plain")) return;
+    const imgItem = Array.from(ev.clipboardData.items).find(
+      (item) => item.kind === "file" && item.type.startsWith("image/"),
+    );
+    const file = imgItem?.getAsFile();
+    if (!file) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    void (async () => {
+      try {
+        const buf = await file.arrayBuffer();
+        const resp = await fetch("/api/paste-image", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token()}` },
+          body: buf,
+        });
+        if (!resp.ok) return;
+        const data = (await resp.json()) as { path?: string };
+        if (!data.path) return;
+        const quoted = /[\s"'&()[\]$;]/.test(data.path)
+          ? `"${data.path.replace(/"/g, '\\"')}" `
+          : `${data.path} `;
+        client.sendInput(TERM_CHANNEL, new TextEncoder().encode(quoted));
+      } catch (err) {
+        console.warn("gateterm: image paste upload failed", err);
+      }
+    })();
+  },
+  true,
+);
 $("menu").addEventListener("click", () => setDrawer(true));
 $("sidebar-position").addEventListener("click", () => {
   setSidebarPosition(config.ui.sidebarPosition === "left" ? "right" : "hidden");
@@ -747,12 +846,16 @@ function renderChat(prepend = false) {
   renderMessages(box, chatMessages, JSON.stringify([chatScope, chatEpoch]), box, { prepend, header });
 }
 
-/** 状态胶囊。列表页和侧边栏共用同一个,保证两处看到的是一回事。 */
+/** 状态图标徽章。列表页和侧边栏共用同一个,排在会话标题左边,悬停提示完整状态。 */
 function agentBadge(a: AgentSession): HTMLElement {
   const pill = document.createElement("span");
   pill.className = `apill a-${a.state}`;
-  pill.textContent = stateText(a);
-  pill.title = stateText(a);
+  pill.dataset.agent = a.agent_id.toLowerCase();
+  const brand = agentBrandLabel(a.agent_id);
+  const label = `${brand} · ${stateText(a)}`;
+  pill.innerHTML = `${agentBrandIconSvg(a.agent_id)}<i class="apill-dot"></i>`;
+  pill.title = label;
+  pill.setAttribute("aria-label", label);
   return pill;
 }
 
@@ -782,15 +885,19 @@ function renderSessionList() {
     card.className = "scard";
     const head = document.createElement("div");
     head.className = "scard-head";
+    const agent = forSession(agents, s.id);
+    if (agent) head.appendChild(agentBadge(agent));
     const name = document.createElement("span");
     name.className = "scard-name";
     name.textContent = s.name;
     head.appendChild(name);
-    const agent = forSession(agents, s.id);
-    if (agent) head.appendChild(agentBadge(agent));
     const meta = document.createElement("div");
     meta.className = "scard-meta";
-    meta.textContent = `${s.cols}×${s.rows} · ${fmtTime(s.created_at)}`;
+    const cwdShort = shortCwd(s.cwd);
+    meta.textContent = cwdShort
+      ? `${cwdShort} · ${s.cols}×${s.rows} · ${fmtTime(s.created_at)}`
+      : `${s.cols}×${s.rows} · ${fmtTime(s.created_at)}`;
+    if (s.cwd) meta.title = s.cwd;
     const open = document.createElement("button");
     open.className = "scard-open";
     open.textContent = t("session.open");

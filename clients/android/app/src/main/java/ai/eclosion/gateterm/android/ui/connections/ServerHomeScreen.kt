@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -45,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ai.eclosion.gateterm.android.R
 import ai.eclosion.gateterm.android.ui.components.AppBarTitle
@@ -295,6 +297,19 @@ private fun EmptySessions(modifier: Modifier, onNewSession: () -> Unit) {
     }
 }
 
+internal fun shortCwd(cwd: String?): String? {
+    val trimmed = cwd?.trim().orEmpty()
+    if (trimmed.isEmpty()) return null
+    val normalized = trimmed.replace('\\', '/').trimEnd('/')
+    if (normalized.isEmpty()) return "/"
+    val parts = normalized.split('/').filter { it.isNotEmpty() }
+    return when (parts.size) {
+        0 -> "/"
+        1 -> parts[0]
+        else -> "${parts[parts.size - 2]}/${parts[parts.size - 1]}"
+    }
+}
+
 @Composable
 private fun SessionRow(
     session: SessionInfo,
@@ -306,13 +321,28 @@ private fun SessionRow(
 ) {
     var menu by remember { mutableStateOf(false) }
     ListItem(
-        headlineContent = { Text(session.name.ifBlank { "#${session.id}" }) },
+        headlineContent = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (agent != null) AgentStatusBadge(agent)
+                Text(
+                    text = session.name.ifBlank { "#${session.id}" },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        },
         supportingContent = {
             val size = "${session.cols}×${session.rows}"
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (agent != null) AgentStatusBadge(agent)
-                Text(if (open) "$size · ${stringResource(R.string.session_open)}" else size)
+            val cwdShort = shortCwd(session.cwd)
+            val metaParts = buildList {
+                if (cwdShort != null) add(cwdShort)
+                add(size)
+                if (open) add(stringResource(R.string.session_open))
             }
+            Text(metaParts.joinToString(" · "))
         },
         trailingContent = {
             Box {
