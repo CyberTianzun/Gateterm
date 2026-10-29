@@ -59,10 +59,11 @@ class FrameAndControlTest {
     @Test
     fun parseSessionsAndResized() {
         val sessions = ControlJson.parse(
-            """{"type":"sessions","sessions":[{"id":2,"name":"zsh","cols":80,"rows":24,"created_at":1}]}""".toByteArray(),
+            """{"type":"sessions","sessions":[{"id":2,"name":"zsh","cols":80,"rows":24,"created_at":1,"cwd":"/Users/alice/work/gateterm"}]}""".toByteArray(),
         ) as ServerMsg.Sessions
         assertEquals(1, sessions.sessions.size)
         assertEquals(2L, sessions.sessions[0].id)
+        assertEquals("/Users/alice/work/gateterm", sessions.sessions[0].cwd)
         val resized = ControlJson.parse("""{"type":"resized","channel":1,"cols":100,"rows":30}""".toByteArray())
         assertEquals(ServerMsg.Resized(1, 100, 30), resized)
     }

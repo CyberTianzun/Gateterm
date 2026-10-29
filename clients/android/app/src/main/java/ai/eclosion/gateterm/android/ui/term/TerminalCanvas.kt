@@ -71,7 +71,8 @@ fun TerminalCanvas(
     Canvas(
         modifier.onSizeChanged { viewport = it },
     ) {
-        drawRect(androidx.compose.ui.graphics.Color(appearance.background or 0xFF000000.toInt()))
+        val defaultBg = appearance.background or 0xFF000000.toInt()
+        drawRect(androidx.compose.ui.graphics.Color(defaultBg))
         val cols = shown.cols
         val rows = shown.rows
         if (cols <= 0 || rows <= 0) return@Canvas
@@ -81,6 +82,58 @@ fun TerminalCanvas(
             val native = canvas.nativeCanvas
             for (y in 0 until rows) {
                 val row = shown.cells.getOrNull(y) ?: continue
+                val top = oy + y * cellH
+                val bottom = top + cellH
+
+                // 1. Run-length merged non-default cell backgrounds & selection runs
+                var rx = 0
+                while (rx < cols) {
+                    val c0 = row.getOrNull(rx)
+                    if (c0 == null || c0.width == 0) {
+                        rx++
+                        continue
+                    }
+                    var fg0 = appearance.colorFor(c0.fgIndex, c0.fg, foreground = true)
+                    var bg0 = appearance.colorFor(c0.bgIndex, c0.bg, foreground = false)
+                    if (c0.attrs and Attr.INVERSE != 0) {
+                        val tmp = fg0
+                        fg0 = bg0
+                        bg0 = tmp
+                    }
+                    val sel0 = sel != null && inSelection(sel, rx, y)
+                    val effBg0 = if (sel0) appearance.selection else (bg0 or 0xFF000000.toInt())
+                    if (!sel0 && effBg0 == defaultBg) {
+                        rx += c0.width.toInt().coerceAtLeast(1)
+                        continue
+                    }
+                    val runStart = rx
+                    rx += c0.width.toInt().coerceAtLeast(1)
+                    while (rx < cols) {
+                        val cn = row.getOrNull(rx) ?: break
+                        if (cn.width == 0) {
+                            rx++
+                            continue
+                        }
+                        var fgn = appearance.colorFor(cn.fgIndex, cn.fg, foreground = true)
+                        var bgn = appearance.colorFor(cn.bgIndex, cn.bg, foreground = false)
+                        if (cn.attrs and Attr.INVERSE != 0) {
+                            val tmp = fgn
+                            fgn = bgn
+                            bgn = tmp
+                        }
+                        val seln = sel != null && inSelection(sel, rx, y)
+                        val effBgn = if (seln) appearance.selection else (bgn or 0xFF000000.toInt())
+                        if (effBgn == effBg0) {
+                            rx += cn.width.toInt().coerceAtLeast(1)
+                        } else {
+                            break
+                        }
+                    }
+                    bgPaint.color = effBg0
+                    native.drawRect(ox + runStart * cellW, top, ox + rx * cellW, bottom, bgPaint)
+                }
+
+                // 2. Foreground glyphs & procedural box/block characters
                 for (x in 0 until cols) {
                     val cell = row.getOrNull(x) ?: continue
                     if (cell.width == 0) continue
@@ -92,11 +145,7 @@ fun TerminalCanvas(
                         bg = tmp
                     }
                     if (cell.attrs and Attr.HIDDEN != 0) fg = bg
-                    val selected = sel != null && inSelection(sel, x, y)
                     val left = ox + x * cellW
-                    val top = oy + y * cellH
-                    bgPaint.color = if (selected) appearance.selection else (bg or 0xFF000000.toInt())
-                    native.drawRect(left, top, left + cellW * cell.width, top + cellH, bgPaint)
                     if (cell.codepoint != ' '.code && cell.codepoint != 0) {
                         val alpha = if (cell.attrs and Attr.DIM != 0) 0x99000000.toInt() else 0xFF000000.toInt()
                         textPaint.color = (fg and 0x00FFFFFF) or alpha

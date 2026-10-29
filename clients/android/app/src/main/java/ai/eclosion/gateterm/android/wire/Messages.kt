@@ -8,6 +8,7 @@ data class SessionInfo(
     val cols: Int,
     val rows: Int,
     val createdAt: Long,
+    val cwd: String? = null,
 )
 
 enum class AttachMode { Replay, Resync }

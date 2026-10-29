@@ -108,6 +108,7 @@ object ControlJson {
             cols = obj.optInt("cols"),
             rows = obj.optInt("rows"),
             createdAt = obj.optLong("created_at"),
+            cwd = obj.optString("cwd").takeUnless { it.isEmpty() || it == "null" },
         )
     }
 }

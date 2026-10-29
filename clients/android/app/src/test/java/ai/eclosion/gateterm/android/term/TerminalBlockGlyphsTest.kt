@@ -39,4 +39,18 @@ class TerminalBlockGlyphsTest {
             assertNull(TerminalBlockGlyphs.rectangles(code))
         }
     }
+
+    @Test
+    fun boxDrawingGlyphsStayInsideCellAndSpanFullEdges() {
+        for (code in listOf('─'.code, '━'.code, '│'.code, '┃'.code, '┌'.code, '┐'.code, '└'.code, '┘'.code, '┼'.code, '═'.code, '║'.code, '╭'.code, '╯'.code)) {
+            val segments = TerminalBlockGlyphs.boxSegments(code)
+            assertTrue("Expected segments for U+${code.toString(16)}", segments != null && segments.isNotEmpty())
+            for (r in segments!!.toList().chunked(4)) {
+                assertTrue(r[0] in 0..15 && r[1] in 0..15)
+                assertTrue(r[2] in 1..16 && r[3] in 1..16)
+                assertTrue(r[0] < r[2] && r[1] < r[3])
+            }
+        }
+        assertNull(TerminalBlockGlyphs.boxSegments('A'.code))
+    }
 }
