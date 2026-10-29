@@ -313,6 +313,20 @@ impl ResizableState {
         }
         cx.notify();
     }
+
+    /// Reset all panels in this group to an equal `1/N` share of the container.
+    pub fn equalize_panels(&mut self, cx: &mut Context<Self>) {
+        let n = self.panels.len();
+        if n == 0 || self.container_size().is_zero() {
+            return;
+        }
+        let each = self.container_size() / (n as f32);
+        for i in 0..n {
+            self.sizes[i] = each;
+            self.panels[i].size = Some(each);
+        }
+        cx.notify();
+    }
 }
 
 impl EventEmitter<ResizablePanelEvent> for ResizableState {}

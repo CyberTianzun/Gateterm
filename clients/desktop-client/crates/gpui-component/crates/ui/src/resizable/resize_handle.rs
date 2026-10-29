@@ -25,6 +25,7 @@ pub(crate) struct ResizeHandle<T: 'static, E: 'static + Render> {
     drag_value: Option<Rc<T>>,
     placement: Option<DockPlacement>,
     on_drag: Option<Rc<dyn Fn(&Point<Pixels>, &mut Window, &mut App) -> Entity<E>>>,
+    on_double_click: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
 }
 
 impl<T: 'static, E: 'static + Render> ResizeHandle<T, E> {
@@ -33,10 +34,19 @@ impl<T: 'static, E: 'static + Render> ResizeHandle<T, E> {
         Self {
             id: id.clone(),
             on_drag: None,
+            on_double_click: None,
             drag_value: None,
             placement: None,
             axis,
         }
+    }
+
+    pub(crate) fn on_double_click(
+        mut self,
+        f: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_double_click = Some(Rc::new(f));
+        self
     }
 
     pub(crate) fn on_drag(
@@ -155,7 +165,7 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
                 .child(
                     div()
                         .bg(bg_color)
-                        .group_hover("handle", |this| this.bg(bg_color))
+                        .group_hover("handle", |this| this.bg(cx.theme().drag_border))
                         .when(axis.is_horizontal(), |this| this.h_full().w(HANDLE_SIZE))
                         .when(axis.is_vertical(), |this| this.w_full().h(HANDLE_SIZE)),
                 )
@@ -191,14 +201,22 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
     ) {
         request_layout.paint(window, cx);
 
+        let on_double_click = self.on_double_click.clone();
         window.with_element_state(id.unwrap(), |state: Option<ResizeHandleState>, window| {
             let state = state.unwrap_or(ResizeHandleState::default());
 
             window.on_mouse_event({
                 let state = state.clone();
-                move |ev: &MouseDownEvent, phase, window, _| {
+                let on_double_click = on_double_click.clone();
+                move |ev: &MouseDownEvent, phase, window, cx| {
                     if bounds.contains(&ev.position) && phase.bubble() {
-                        state.set_active(true);
+                        if ev.click_count >= 2 {
+                            if let Some(cb) = &on_double_click {
+                                cb(window, cx);
+                            }
+                        } else {
+                            state.set_active(true);
+                        }
                         window.refresh();
                     }
                 }

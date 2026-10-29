@@ -20,8 +20,8 @@ actions!(root, [Tab, TabPrev]);
 const CONTEXT: &str = "Root";
 pub(crate) fn init(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("tab", Tab, Some(CONTEXT)),
-        KeyBinding::new("shift-tab", TabPrev, Some(CONTEXT)),
+        KeyBinding::new("tab", Tab, Some("Root && !TerminalView")),
+        KeyBinding::new("shift-tab", TabPrev, Some("Root && !TerminalView")),
     ]);
 }
 
