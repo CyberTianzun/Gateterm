@@ -41,7 +41,8 @@ impl Pairing {
             .filter(|iface| iface.is_oper_up())
             .map(|iface| Address { ip: iface.ip(), interface: iface.name }).collect::<Vec<_>>());
         self.interface_error = interfaces.is_err();
-        self.addresses = candidates(listen, interfaces.unwrap_or_default());
+        let preferred = listen.and_then(|l| probe_default_route_ip(l.is_ipv6()));
+        self.addresses = candidates_with_preferred(listen, interfaces.unwrap_or_default(), preferred);
         self.selected = self.selected.filter(|ip| self.addresses.iter().any(|a| a.ip == *ip))
             .or_else(|| self.addresses.first().map(|a| a.ip));
         self.texture = None;
@@ -107,7 +108,16 @@ impl Pairing {
     }
 }
 
+#[cfg(test)]
 fn candidates(listen: Option<SocketAddr>, addresses: Vec<Address>) -> Vec<Address> {
+    candidates_with_preferred(listen, addresses, None)
+}
+
+fn candidates_with_preferred(
+    listen: Option<SocketAddr>,
+    addresses: Vec<Address>,
+    preferred_ip: Option<IpAddr>,
+) -> Vec<Address> {
     let Some(listen) = listen else { return vec![] };
     let mut result: Vec<_> = addresses.into_iter().filter(|a| {
         let reachable = match a.ip {
@@ -118,9 +128,71 @@ fn candidates(listen: Option<SocketAddr>, addresses: Vec<Address>) -> Vec<Addres
         reachable && if listen.ip().is_unspecified() { a.ip.is_ipv4() == listen.is_ipv4() }
             else { a.ip == listen.ip() }
     }).collect();
-    result.sort_by_key(|a| (matches!(a.ip, IpAddr::V4(ip) if ip.is_link_local()), a.ip, a.interface.clone()));
-    result.dedup_by_key(|a| a.ip);
+    result.sort_by_key(|a| (
+        matches!(a.ip, IpAddr::V4(ip) if ip.is_link_local()),
+        is_virtual_interface(&a.interface),
+        preferred_ip.is_some_and(|pref| a.ip != pref),
+        ip_subnet_rank(a.ip),
+        a.ip,
+        a.interface.clone(),
+    ));
+    let mut seen = std::collections::HashSet::new();
+    result.retain(|a| seen.insert(a.ip));
     result
+}
+
+fn is_virtual_interface(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    [
+        "vethernet",
+        "wsl",
+        "hyper-v",
+        "docker",
+        "vbox",
+        "virtualbox",
+        "vmware",
+        "vmnet",
+        "virbr",
+        "veth",
+        "br-",
+        "npcap",
+    ]
+    .iter()
+    .any(|kw| lower.contains(kw))
+}
+
+fn ip_subnet_rank(ip: IpAddr) -> u8 {
+    match ip {
+        IpAddr::V4(v4) => {
+            let octets = v4.octets();
+            if octets[0] == 192 && octets[1] == 168 {
+                0
+            } else if octets[0] == 10 {
+                1
+            } else if octets[0] == 100 && (64..=127).contains(&octets[1]) {
+                2
+            } else if octets[0] == 172 && (16..=31).contains(&octets[1]) {
+                4
+            } else if v4.is_link_local() {
+                5
+            } else {
+                3
+            }
+        }
+        IpAddr::V6(_) => 3,
+    }
+}
+
+fn probe_default_route_ip(ipv6: bool) -> Option<IpAddr> {
+    let (bind_addr, target_addr) = if ipv6 {
+        ("[::]:0", "[2606:4700:4700::1111]:80")
+    } else {
+        ("0.0.0.0:0", "223.5.5.5:80")
+    };
+    let socket = std::net::UdpSocket::bind(bind_addr).ok()?;
+    socket.connect(target_addr).ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    (!ip.is_unspecified() && !ip.is_loopback()).then_some(ip)
 }
 
 fn connection_url(listen: SocketAddr, ip: IpAddr, token: &str) -> String {
@@ -180,8 +252,21 @@ mod tests {
     #[test]
     fn wildcard_filters_and_deduplicates_interfaces() {
         let ips: Vec<_> = candidates(Some("0.0.0.0:7683".parse().unwrap()), addresses()).into_iter().map(|a| a.ip.to_string()).collect();
-        assert_eq!(ips, ["100.64.0.2", "192.168.1.2", "169.254.2.1"]);
+        assert_eq!(ips, ["192.168.1.2", "100.64.0.2", "169.254.2.1"]);
         assert_eq!(candidates(Some("[::]:7683".parse().unwrap()), addresses())[0].ip.to_string(), "fd00::2");
+    }
+    #[test]
+    fn lan_ip_sorts_before_wsl_and_virtual_switch_addresses() {
+        let addrs = vec![
+            Address { ip: "172.28.176.1".parse().unwrap(), interface: "vEthernet (WSL)".into() },
+            Address { ip: "172.18.0.1".parse().unwrap(), interface: "Ethernet 2".into() },
+            Address { ip: "192.168.4.24".parse().unwrap(), interface: "WLAN".into() },
+        ];
+        let ips: Vec<_> = candidates(Some("0.0.0.0:7683".parse().unwrap()), addrs)
+            .into_iter()
+            .map(|a| a.ip.to_string())
+            .collect();
+        assert_eq!(ips, ["192.168.4.24", "172.18.0.1", "172.28.176.1"]);
     }
     #[test]
     fn specific_listener_does_not_advertise_other_interfaces() {
