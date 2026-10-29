@@ -395,7 +395,10 @@ impl App {
                 //
                 // 位置在这个分支**里面**:托盘只会成功建起来一次,所以这一下也只会
                 // 发生一次,不会变成每次回到前台都弹一次设置窗口。
-                if self.startup.config_error.is_some() || self.startup.listen_error.is_some() {
+                if self.startup.config_error.is_some()
+                    || self.startup.listen_error.is_some()
+                    || std::env::var_os("GATETERM_OPEN_SETTINGS").is_some()
+                {
                     self.proxy.send_event(UserEvent::MenuClicked(MenuAction::Settings)).ok();
                 }
             }

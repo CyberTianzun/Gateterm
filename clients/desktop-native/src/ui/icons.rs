@@ -210,6 +210,18 @@ mod tests {
             let text = std::str::from_utf8(&bytes).expect("valid utf-8 svg");
             assert!(text.starts_with("<svg") && text.ends_with("</svg>"));
         }
+        for builtin in [
+            gpui_component::IconName::Plus,
+            gpui_component::IconName::Search,
+            gpui_component::IconName::Settings,
+            gpui_component::IconName::WindowClose,
+        ] {
+            let bytes = GatetermAssets
+                .load(builtin.path().as_ref())
+                .expect("builtin asset load should not error")
+                .expect("builtin asset should exist");
+            assert!(!bytes.is_empty());
+        }
     }
 
     #[test]
