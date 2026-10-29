@@ -32,6 +32,31 @@
 - **Agent-aware** — First-class integration with Claude Code, Codex, Gemini CLI, OpenCode, pi, Grok, and Antigravity CLI: live status badges, remote tool permission approval, Structured Chat View, and past session browsing & resume.
 - **Take over from any device** — Start an agent in the desktop workbench or browser on your workstation, then check its progress or approve a tool call from the native Android client or Gateterm Cloud notifications.
 
+## Release builds & screenshots
+
+Each [GitHub Release](../../releases) publishes four prebuilt packages so you can pick the deployment model that fits each machine:
+
+| Release Package | Platforms | What It Includes | Best For |
+| :--- | :--- | :--- | :--- |
+| **`gateterm-desktop-native`** | Windows (`x86_64` `.zip`)<br/>macOS (`aarch64` `.app.tar.gz`) | Native GPU terminal workbench (`gpui` + `alacritty_terminal`) + embedded local `gateterm-server` + system tray residency | Primary desktop terminal on Windows & macOS: native GPU rendering, N-ary equal split panes, and managing both local and remote `gateterm-server` nodes in one window |
+| **`gateterm-desktop-web`** | Windows (`x86_64` `.zip`)<br/>macOS (`aarch64` `.app.tar.gz`) | Lightweight system-tray server host + native settings window (LAN QR pairing, AI hook installer, Cloud sign-in) + embedded Web UI | Browser-first workflows or turning a Windows/macOS workstation into a background host for Web and Android clients |
+| **`gateterm-server`** | Linux (`x86_64`, `aarch64`)<br/>Windows (`x86_64`)<br/>macOS (`aarch64`) | Headless single-binary daemon with the Web client (`clients/web`) compiled in | Linux desktops, remote servers, cloud devboxes, and NAS — access directly in any browser or connect from `gateterm-desktop-native` / `gateterm-android` |
+| **`gateterm-android`** | Android (`arm64-v8a` `.apk`) | Native Jetpack Compose client with QR pairing, multi-server connections, and agent-adaptive shortcut bar | Monitoring coding agents on the go, approving tool calls (`Allow` / `Deny`), and resuming terminal sessions from your phone |
+
+### 1. Native GPU Desktop Workbench (`gateterm-desktop-native`)
+
+Starts an embedded local `gateterm-server` automatically on launch, renders terminals natively via GPU, and connects to any number of remote `gateterm-server` hosts from the left sidebar:
+
+![gateterm-desktop-native workbench](docs/assets/desktop-native.png)
+
+### 2. Tray Server Host (`gateterm-desktop-web`) & Embedded Web Client (`gateterm-server`)
+
+`gateterm-desktop-web` sits quietly in the system tray with a native settings window for one-scan LAN/Tailscale QR pairing, AI Agent hook installation, and Gateterm Cloud notifications, while `gateterm-server` (and `gateterm-desktop-web`) serves the full Web terminal directly to any browser:
+
+| Tray Server Host Settings (`gateterm-desktop-web`) | Embedded Web Client (`clients/web` / `gateterm-server`) |
+| :---: | :---: |
+| ![gateterm-desktop-web settings](docs/assets/desktop-web.png) | ![gateterm web client](docs/assets/web-client.png) |
+
 ## What's inside
 
 | Area | Capabilities |
