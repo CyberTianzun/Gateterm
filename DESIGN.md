@@ -1,37 +1,57 @@
-# Gateterm Design and Behavior
+# Gateterm Design, Architecture, and Implementation Notes
 
-This document describes client behavior, server configuration and agent session handling. For the project overview and build commands, see [README.md](README.md).
+This document records the architecture, technical design decisions, client/server implementation details, and AI agent integration mechanisms of Gateterm.
 
-- [Native GPU desktop workbench](#native-gpu-desktop-workbench)
-- [Standalone server](#standalone-server)
-- [Tray server host](#tray-server-host)
-- [Android client](#android-client)
-- [Agent session history](#agent-session-history)
-- [Agent integration](#agent-integration)
-- [Known limitations](#known-limitations)
+## Architecture
 
-## Native GPU desktop workbench
+Wire protocol: [`docs/protocol.md`](docs/protocol.md) — the normative specification and the checklist any protocol change must pass. Background and rationale: `docs/superpowers/specs/2026-08-16-gateterm-design.md`.
 
-`clients/desktop-native` starts an embedded local `gateterm-server` in-process and opens an interactive terminal tab. It can also connect to remote Gateterm servers.
+### Core design boundary
+
+A background `gateterm-server` daemon owns shells, PTY processes, and terminal screen state — not a window or browser tab. Rather than wrapping tmux, Gateterm extracts the kernel of what a multiplexer does (PTY lifecycle + IO + server-side VT grid + byte-accurate `seq` ledger) and exposes it over a multiplexed binary WebSocket protocol. Window management (tabs, splits, themes, keybindings) belongs entirely to each client.
+
+### Repository layout
+
+- `crates/protocol` — binary frame and control message definitions (single source of truth)
+- `crates/server` — the daemon: PTY hosting, server-side grid, WebSocket multiplexing, agent hooks, transcript & history indexing
+- `crates/client-core` — reusable state machines for Rust clients (`ClientTerm`, `ResumeTracker`, `Backoff`)
+- `crates/cloud-client` — Gateterm Cloud HTTP client and credential storage (`cloud.json`)
+- `crates/cloud-ffi` — UniFFI bindings exposing `client-core` and `cloud-client` to Android / mobile
+- `clients/desktop-native` — native GPU-accelerated desktop terminal workbench (`gpui` + `gpui-component` + `alacritty_terminal`)
+- `clients/desktop-web` — lightweight tray-resident server host with native `egui` settings window (Windows / macOS)
+- `clients/web` — browser terminal workbench (TypeScript + `xterm.js`, embedded into `gateterm-server` via `rust-embed`)
+- `clients/android` — native Android client (Kotlin + Jetpack Compose)
+
+## Native GPU desktop workbench (`clients/desktop-native`)
+
+Inspired by [`tty7`](https://github.com/l0ng-ai/tty7) and built with Zed's `gpui`, `gpui-component`, and `alacritty_terminal`:
+
+- **In-process server supervision**: Starts an embedded `gateterm-server` on launch (sharing `config.toml` and `cloud.json` with standalone `gateterm-server` and `clients/desktop-web`), while supporting simultaneous connections to any number of remote `gateterm-server` nodes.
+- **GPU terminal canvas (`TerminalElement`)**: Batch-renders run-length background quads, procedural box-drawing & block elements (`U+2500..=U+259F`), ligature-disabled monospace glyphs with CJK wide-character cell spanning, text selections, scrollback search highlights, and cursor shapes.
+- **N-ary equal split panes (`PaneTree`)**: Consecutive splits along the same axis flatten into sibling nodes and divide space into equal `1/N` shares.
+- **Agent-aware keyboard encoding**: Aligns 1:1 with `clients/web` (`keys.ts`) and `clients/android` (`TerminalKeyboard.kt`), supporting both `modifyOtherKeys` (`CSI 27;mod;code~`) and Windows ConPTY `win32-input-mode` (`CSI Vk;Sc;Uc;Kd;Cs;Rc _`) so `Shift+Enter`, `Ctrl+J`, `Alt+Enter`, and `Alt+Arrow` reach TUI agents intact.
+- **Theme derivation**: Derives both the GPUI chrome theme and the 16-color ANSI terminal palette from the same 5 built-in presets (`2026 Dark`, `2026 Light`, `Tokyo Night`, `Catppuccin Mocha`, `Solarized Dark`).
+- **System tray residency**: Closing the window hides it to the system tray (Win32 `ShowWindow(SW_HIDE)` / macOS `App::hide`) while keeping embedded sessions alive; left-clicking the tray icon restores and focuses the window.
 
 Key shortcuts:
 
 - <kbd>Ctrl+Shift+N</kbd> / <kbd>Cmd+N</kbd>: Open **New Session** provider-grouped launcher popup
 - <kbd>Ctrl+Shift+T</kbd> / <kbd>Cmd+T</kbd>: New default shell session
-- <kbd>Ctrl+B</kbd> / <kbd>Cmd+B</kbd>: Toggle left sidebar
-- <kbd>Ctrl+F</kbd> / <kbd>Cmd+F</kbd>: In-terminal scrollback search bar
-- <kbd>Ctrl+Shift+D</kbd> / <kbd>Ctrl+Shift+E</kbd>: Split pane equally horizontally / vertically
-- <kbd>Ctrl+Shift+Z</kbd>: Toggle zoom on active pane
-- <kbd>Ctrl+Shift+M</kbd>: Toggle between **Terminal View** and **Structured Agent Chat View**
-- <kbd>Ctrl+Shift+H</kbd>: Browse & resume host Agent Session History
+- <kbd>Ctrl+Shift+B</kbd> / <kbd>Cmd+B</kbd>: Toggle left sidebar
+- <kbd>Ctrl+Shift+F</kbd> / <kbd>Cmd+F</kbd>: In-terminal scrollback search bar
+- <kbd>Ctrl+Shift+D</kbd> / <kbd>Cmd+D</kbd>: Split pane right equally
+- <kbd>Ctrl+Shift+E</kbd> / <kbd>Cmd+Shift+D</kbd>: Split pane down equally
+- <kbd>Ctrl+Shift+Z</kbd> / <kbd>Cmd+Shift+Enter</kbd>: Toggle zoom on active split pane
+- <kbd>Ctrl+Shift+]</kbd> / <kbd>Ctrl+Shift+[</kbd>: Focus next / previous split pane
+- <kbd>Ctrl+Shift+M</kbd> / <kbd>Cmd+Shift+M</kbd>: Toggle between **Terminal View** and **Structured Agent Chat View**
+- <kbd>Ctrl+Shift+H</kbd> / <kbd>Cmd+Shift+H</kbd>: Browse & resume host Agent Session History
+- <kbd>Ctrl+Shift+,</kbd> / <kbd>Cmd+,</kbd>: Open Settings
 
-See [`clients/desktop-native/README.md`](clients/desktop-native/README.md) for full details.
-
-## Standalone server
+## Standalone server (`gateterm-server`)
 
 ### Configuration and authentication
 
-To pin a fixed token (so open pages survive server restarts), pass `--token <value>`, or put `token = "<value>"` in a config file. The config file is never auto-generated by the server; create it yourself at `~/Library/Application Support/gateterm/config.toml` (Linux: `~/.config/gateterm/config.toml`), or point at one with `--config <path>`. All fields are optional:
+To pin a fixed token (so open pages survive server restarts), pass `--token <value>`, or put `token = "<value>"` in a config file. The config file is never auto-generated by the server; create it yourself at `~/Library/Application Support/gateterm/config.toml` (Linux: `~/.config/gateterm/config.toml`, Windows: `%APPDATA%\gateterm\config.toml`), or point at one with `--config <path>`. All fields are optional:
 
 ```toml
 listen = "127.0.0.1:7683"
@@ -49,22 +69,22 @@ command = ["ssh", "prod01"]   # argv, not a command line: no quoting rules to gu
 cwd = "~/work"                # optional
 ```
 
-### The "new session" menu
+### The "new session" menu (`LauncherProvider`)
 
 Clicking **+** opens a menu instead of a prompt. Its entries come from *providers* on the server, so there is nothing to configure for the common case:
 
-| provider | where it looks |
-| --- | --- |
-| built-in | `$SHELL` (unix) / `powershell.exe`, `%ComSpec%` (Windows) |
-| config | `[[launcher]]` in the config file above |
-| iTerm2 | `com.googlecode.iterm2.plist` + `DynamicProfiles/` (macOS) |
-| Windows Terminal | `settings.json` (packaged, preview and portable installs) |
+| Provider | Source |
+| :--- | :--- |
+| `built-in` | `$SHELL` (Unix) / `powershell.exe`, `%ComSpec%` (Windows) |
+| `config` | `[[launcher]]` in `config.toml` |
+| `iTerm2` | `com.googlecode.iterm2.plist` + `DynamicProfiles/` (macOS) |
+| `Windows Terminal` | `settings.json` (packaged, preview, and portable installs) |
 
-Third-party configs are **read, never written**. Only profiles that differ in what they run — a custom command or a custom working directory — are listed; colour-scheme-only profiles are noise here. A provider that fails (missing, corrupt, unreadable) is skipped with a log line; the menu still works.
+Third-party configs are **read, never written**. Only profiles that differ in what they run — a custom command or a custom working directory — are listed; colour-scheme-only profiles are skipped as noise. A provider that fails (missing, corrupt, unreadable) is skipped with a log line; the menu still works. Adding a source is a single `LauncherProvider` implementation in `crates/server/src/launcher/`.
 
-Adding a source is one `LauncherProvider` impl in `crates/server/src/launcher/`.
+### Network listening and update checks
 
-By default the server listens on 127.0.0.1 only. To reach it from other devices, override on the command line (takes precedence over the config file):
+By default `gateterm-server` listens on `127.0.0.1` only. To reach it from other devices, override on the command line (takes precedence over `config.toml`):
 
 ```sh
 cargo run -p gateterm-server -- --host 0.0.0.0 --port 9000
@@ -74,56 +94,80 @@ With `--host 0.0.0.0`, startup logs list token-bearing URLs for localhost and ea
 
 At startup and every 24 hours, the server checks the latest stable GitHub Release in the background. If a newer version is available, it prints the version and Release page URL to the console. Offline or failed checks do not interrupt startup.
 
-## Tray server host
+## Tray server host (`clients/desktop-web`)
 
-Alongside the full GPU terminal workbench (`clients/desktop-native`), `gateterm-desktop-web` runs the server embedded in a lightweight tray-resident process with a small native settings window (terminals open in the browser or mobile app).
+Alongside the full GPU terminal workbench (`clients/desktop-native`), `gateterm-desktop-web` runs `gateterm-server` embedded in a lightweight tray-resident process with a small native `egui` settings window (terminals open in the browser or mobile app).
 
-```sh
-cargo run -p gateterm-desktop-web
-```
+- **Localization**: Supports English and Simplified Chinese. On first launch it follows the OS display language (Chinese for `zh` locales, English otherwise). Preference is saved as `[desktop].language` (`auto`, `en`, or `zh-CN`) in `config.toml`.
+- **Update checks**: Checks for a newer stable Release at startup and every 24 hours, offering a native dialog to open the Release page in the default browser. Updates are never downloaded or installed automatically.
+- **QR code pairing & LAN IP prioritization**: Enumerates active IPv4 interfaces when listening on `0.0.0.0`, prioritizing the OS default-route outbound interface and physical RFC1918 LAN subnets (`192.168.x.x` / `10.x.x.x`) ahead of virtual switch ranges (`172.16..31.x.x` used by Hyper-V / WSL / Docker).
+- **Hot HTTP rebinding**: Changing the listen address or token from the settings window only rebuilds the HTTP listener; running PTY sessions are unaffected. Existing open WebSocket connections stay alive on the old listener until closed.
+- **Default listen address (`0.0.0.0:7683`)**: Unlike headless `gateterm-server`, the desktop host listens on all interfaces by default so phones and tablets on the same LAN can pair via QR code out of the box. Two hard boundaries enforce safety: an empty token is rejected before binding (including in release builds), and `/hook/*` accepts loopback peers (`127.0.0.1` / `::1`) only.
+- **Platform support**: Supports Windows and macOS only (system tray and OS login item integration).
 
-The desktop interface supports English and Simplified Chinese. On first launch it follows the OS display language (Chinese for `zh` locales, English otherwise). Choose **Settings → Language** and save to override it or return to **Follow system**. This updates the window and tray immediately and saves the preference as `[desktop].language` (`auto`, `en`, or `zh-CN`) in `config.toml`.
+## Android client (`clients/android`)
 
-The desktop app also checks for a newer stable Release at startup and every 24 hours. At startup, a native dialog offers “Update now” to open the Release page in your default browser, or “Cancel” to keep working. Updates are never downloaded or installed automatically. When an update is available, the web sidebar shows a link to its GitHub Release page below the connection status.
+`clients/android` is a native Kotlin + Jetpack Compose client with connection management, server launchers, multiple sessions, scrollback, procedural box-drawing (`TerminalBlockGlyphs`), and text selection:
 
-Choose a reachable IP in Desktop settings under “Connect Android with a QR code”, then use Android’s “Add server → Scan QR code” to fill the address and token before saving.
-
-Changing the listen address or token from the settings window only rebuilds the HTTP layer: **your running sessions are not affected**. But a page you already have open does not get migrated — its WebSocket was never closed, so it keeps talking to the old address until you close it yourself; only new connections pick up the new one. Quitting the app does terminate every session, so it asks for confirmation first if any are running.
-
-**The chat view, and what it exposes**: when a hosted session is running Claude Code, you can open it as a structured message stream instead of a VT screen. It reads the agent's own transcript — **read-only, never cached, never written** — and is gated by `agents.transcript_enabled` (on by default; set it to `false` under `[agents]` to turn it off).
-
-That is a separate switch from installing hooks on purpose: hooks let gateterm see *what it is doing*, this one lets it see *what was said* — code, paths, commands, the model's reasoning. An order of magnitude more exposure, and not something the first switch should quietly imply. **Read it together with the next paragraph**: the desktop app listens on every interface by default, and both switches are on by default, so anyone on your LAN holding the token can read your whole conversation — turn it off on untrusted networks, or listen on 127.0.0.1 instead.
-
-**Hook self-check and cleanup**: on every start (and whenever the desktop app restarts the server on a new port) gateterm checks that installed hooks match the running server — port, events, binary path — and prints a warning when they don't. It only reports; fixing is still the "Reinstall" button under Settings → AI integration. For leftovers, use "Purge" on the same page or run `gateterm-server purge-hooks`: it removes **every** hook gateterm ever wrote into an agent's config (any port, any event), leaves your own hooks alone, and backs the file up first.
-
-**It listens on `0.0.0.0:7683` by default — unlike `gateterm-server`.** Reaching your machine from a phone or tablet is the whole point of the desktop app, and a loopback-only default makes it unusable out of the box. Two hard boundaries make that defensible: an empty token cannot reach the listener (enforced in release builds too), and `/hook/*` accepts loopback peers only, whatever the main listen address is. The residual risk is real — anyone on your LAN who has the token has your terminal — so on an untrusted network set it back to `127.0.0.1` in the settings window, or put your own network-layer security in front of it.
-
-`gateterm-desktop-web` does not support Linux (use `clients/desktop-native` on Linux).
-
-## Android client
-
-`clients/android` is a native Kotlin + Jetpack Compose client with connection management, server launchers, multiple sessions, scrollback and text selection. Connected servers are managed at application level: returning to the session or server list keeps the server WebSockets open. Leaving a terminal, switching to chat, or backgrounding the app detaches its terminal viewport so other clients regain their screen size. Opening the terminal again attaches it automatically. The server list shows each connection's state and offers reconnect/disconnect. Background connections are enabled by default and use a foreground service with an ongoing notification; its action disconnects all servers. Settings can limit connections to the foreground instead.
-
-The UI and terminal follow the system using `2026 Light` / `2026 Dark`. The terminal viewport shrinks above the soft keyboard, and shortcut keys scroll horizontally in two rows by default. The home screen settings icon combines language, appearance and the one/two-row shortcut preference. Keys are 35dp square. When the server identifies the active terminal's agent, the shortcut bar switches to an agent layout with Page Up, Page Down and multiline keys first. Under **Settings → Agent shortcut layouts → Configure**, each agent can independently use Ctrl+J, Shift+Enter or both, reorder other priority keys, or use the regular terminal layout. Preferences are saved locally.
-
-For Windows servers, the keyboard adapter preserves key identity and modifiers for Shift+Enter, Ctrl+J, Alt+arrows and other combinations. The shortcut bar includes Esc, Ctrl+C, arrows, Home, End and PgUp/PgDn.
-
-Android terminal font sizes use logical pixels, matching the Web client rather than the system font-size preference. New configurations default to size 14. Settings also expose line height and letter spacing; both fields are preserved when importing/exporting the Web appearance JSON. The native character grid follows the default xterm WebGL renderer.
-
-For build and installation commands, see [README.md](README.md#android-client-clientsandroid).
-
-## Agent session history
-
-Use <kbd>Ctrl+Shift+H</kbd> in the native desktop client (`clients/desktop-native`), the history button in the web sidebar, or **Agent session history** on the Android server screen to browse host-side Claude Code, Codex, pi, Grok and Antigravity CLI records, including conversations started outside Gateterm. Filter by agent or search titles, working directories and session IDs, and preview recent messages.
-
-An associated live Gateterm terminal opens directly. Otherwise, resuming creates a new Gateterm terminal in the original directory. The corresponding CLI must be on the server PATH, the directory must exist, and the record must contain the required metadata. pi resumes using its original session file. Concurrent resume requests share the same terminal.
-
-History uses the server bearer token and `[agents].transcript_enabled`. Startup asynchronously indexes at most 1000 distinct recent sessions. Clients load 50 metadata entries per page and display the limit at the end of the list. Transcript bodies load only for previews. Refresh rebuilds the index in the background while reads use the previous snapshot. Discovery and reads remain bounded; the UI reports incomplete scans and unreadable records. This version reads default agent stores for the server user, excluding WSL, other users and custom roots.
+- **Application-scoped connection lifecycle**: Server WebSockets stay open when navigating between the terminal, session list, and server list. Leaving a terminal, switching to Chat View, or backgrounding the app detaches its terminal viewport so other attached clients regain their preferred PTY dimensions; reopening the terminal re-attaches automatically.
+- **Foreground service keepalive**: Enabled by default with an ongoing system notification (including a "Disconnect all" action); can be restricted to foreground-only in settings.
+- **Agent-adaptive shortcut bar**: Defaults to a two-row horizontally scrollable bar (35dp square keys). When the server identifies an active agent in the terminal, the shortcut bar switches to an agent-specific layout prioritizing `P↑`, `P↓`, and multiline submission keys (`⌃J` / `⇧↵`).
+- **Logical-pixel typography**: Terminal font sizes use logical pixels matching `clients/web` (default 14, independent of OS font scaling), preserving line height and letter spacing across Web appearance JSON import/export.
 
 ## Agent integration
 
-A hosted session lets you take over an agent's prompts, answer its choices, and check its status from any device. **Claude Code works today** (hook install, live session state, remote approval, chat view). **Codex** is supported too (state, approval, chat view; its hooks must be reviewed once with `/hooks`). **pi** is supported through a generated extension at `~/.pi/agent/extensions/gateterm.ts` (state and chat view; pi has no approval prompts, so there is nothing to approve remotely). **Grok** (xAI's `grok`) is supported through `~/.grok/hooks/gateterm.json` (state and chat view; it has no approval event either). **Antigravity CLI** (Google's `agy`) is supported through a `gateterm` entry in the shared `~/.gemini/config/hooks.json` (state and chat view; its own permission prompts are left alone). This adapter targets Antigravity CLI, independently of Gemini CLI and the Antigravity IDE. After upgrading from older Windows builds, reinstall the Antigravity integration in settings and restart running `agy` sessions to replace the old hook command. Chat view reads Antigravity step logs, including thinking blocks in newer CLI versions.
+None of the supported agents are wrapped or proxied — the agent started in a session is the official CLI running in a standard PTY. Installing hooks under **Settings → AI Agent Hooks** connects the CLI's lifecycle events to Gateterm's loopback `/hook/*` endpoints.
+
+### Integration mechanism matrix
+
+| Agent | Live Status | Remote Approval (`Allow`/`Deny`) | Structured Chat View | Past Session Resume | Integration Mechanism |
+| :--- | :---: | :---: | :---: | :---: | :--- |
+| **Claude Code** | ✓ | ✓ | ✓ | ✓ | Automatic hooks in `~/.claude/settings.json` |
+| **Codex** | ✓ | ✓ | ✓ | ✓ | Automatic hooks (review once with `/hooks` inside Codex) |
+| **Gemini CLI** | ✓ | ✓ | ✓ | ✓ | Automatic hooks in `~/.gemini/settings.json` |
+| **OpenCode** | ✓ | ✓ | ✓ | ✓ | Generated OpenCode plugin hooks |
+| **pi** | ✓ | — | ✓ | ✓ | Generated extension at `~/.pi/agent/extensions/gateterm.ts` (resumes via original session file) |
+| **Grok (`grok`)** | ✓ | — | ✓ | ✓ | Hook config at `~/.grok/hooks/gateterm.json` |
+| **Antigravity (`agy`)** | ✓ | — | ✓ | ✓ | `gateterm` entry in `~/.gemini/config/hooks.json` (parses step logs including thinking blocks) |
+
+### Per-agent notes
+
+- **Claude Code**: Full support for hook installation, live session state, remote tool permission approval (`PermissionRequest`), Structured Chat View, and session history resume.
+- **Codex**: Supports live state, remote approval, Chat View, and history resume; installed hooks must be reviewed once via `/hooks` inside Codex.
+- **Gemini CLI & OpenCode**: Support live state, remote tool approval, Chat View, and history resume.
+- **pi & Grok (`grok`)**: Support live state, Chat View, and history resume; neither CLI exposes a blocking tool-permission hook event, so remote approval is not applicable.
+- **Antigravity CLI (`agy`)**: Targets the standalone Antigravity CLI independently of Gemini CLI and the Antigravity IDE. After upgrading from older Windows builds, reinstall the Antigravity integration in settings and restart running `agy` sessions to replace legacy hook commands.
+
+### Structured Chat View & security boundary (`agents.transcript_enabled`)
+
+When a hosted session is running an agent, clients can switch between the raw VT screen and a structured message stream (`Thinking`, `ToolUse`, `ToolResult`). The server reads the agent's own transcript files on demand — **read-only, never cached, never written** — gated by `agents.transcript_enabled` (enabled by default; set `transcript_enabled = false` under `[agents]` in `config.toml` to disable).
+
+This is intentionally separate from hook installation: hooks expose *what the agent is doing* (state & tool names), whereas transcript reading exposes *what was said* (code, file paths, commands, model reasoning). On untrusted LANs where the desktop host listens on `0.0.0.0`, disable `transcript_enabled` or bind to `127.0.0.1`.
+
+### Hook self-check and cleanup (`purge-hooks`)
+
+On every start (and whenever the desktop host restarts the HTTP listener on a new port), Gateterm verifies that installed hooks match the running server (port, events, executable path) and logs a warning if they diverge. To remove every hook Gateterm ever wrote across all agent configs (regardless of port or event) while preserving user-defined hooks and backing up config files first, click **Purge** in Settings or run:
+
+```sh
+gateterm-server purge-hooks
+```
+
+## Agent session history
+
+Clients can browse host-side Claude Code, Codex, pi, Grok, and Antigravity CLI transcripts (including conversations started outside Gateterm), filter by agent or keyword (title, working directory, session ID), preview recent messages, and resume sessions in one click:
+
+- **Live attachment vs. spawn**: If a transcript is already associated with a running Gateterm PTY session, selecting it switches directly to that terminal. Otherwise, Gateterm spawns a new terminal in the original working directory and invokes the agent CLI's resume command (coalescing concurrent resume requests for the same session).
+- **Bounded indexing**: Startup asynchronously indexes at most 1,000 deduplicated recent sessions in memory. Clients load 50 metadata entries per page; transcript bodies are read only when previewing a session. Refreshing rebuilds the index in the background without blocking reads. Discovery scans default user agent directories on the host (excluding WSL, other OS users, or custom store paths).
+
+## Gateterm Cloud
+
+When signed in to Gateterm Cloud on both the server and the Android client, Gateterm sends push notifications when an agent enters `Waiting` (permission request / question) or completes a turn (`Stop` hook):
+
+- **Zero terminal data in transit**: The relay never sees PTY bytes or server access tokens; push payloads contain only the session ID, agent name, and tool name.
+- **Shared credentials (`cloud.json`)**: Stored in the Gateterm config directory (`0600` permissions on Unix) and shared between `gateterm-server`, `clients/desktop-web`, and `clients/desktop-native` via `(mtime, size)` caching.
+- **Browser PKCE login & CLI**: Desktop and Android clients authenticate in the browser against regional relay presets (`https://gateterm.signal.top/`, `https://gateterm.eclosion.ai/`, `https://global.gateterm.eclosion.ai/`) via loopback/deep-link callbacks (`/auth/desktop`, `/auth/mobile`). Headless servers can also use `gateterm-server cloud {register,login,status,logout,reset-password,delete-account}`.
+- **Push providers**: Cloud deployments dynamically advertise Aliyun EMAS or Firebase Cloud Messaging (FCM) via `/v1/push-config`.
 
 ## Known limitations
 
-Resync restores content, cursor and common modes (application cursor keys, bracketed paste, mouse reporting), but not the alt screen or scroll regions (DECSTBM). After a rough-network reconnect, full-screen apps may need a Ctrl-L or an app-level redraw.
+Terminal `resync` restores screen content, cursor position, and common terminal modes (application cursor keys, bracketed paste, mouse reporting), but does not restore the alternate screen buffer or scroll regions (`DECSTBM`). After reconnecting across an unstable network, full-screen TUI applications may need `Ctrl+L` or a window resize to trigger a full redraw.
