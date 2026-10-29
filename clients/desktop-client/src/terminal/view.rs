@@ -7,8 +7,8 @@ use std::rc::Rc;
 
 use gateterm_client_core::term::ClientTerm;
 use gpui::{
-    App, Bounds, ClipboardItem, Context, EntityInputHandler, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    App, Bounds, ClipboardEntry, ClipboardItem, Context, EntityInputHandler, FocusHandle,
+    Focusable, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollWheelEvent,
     SharedString, Styled as _, UTF16Selection, Window, div, point, px,
 };
@@ -16,6 +16,9 @@ use gpui_component::ActiveTheme as _;
 
 use super::element::TerminalElement;
 use super::input::encode_keystroke;
+use crate::client::api::GateHttpClient;
+use crate::config::LOCAL_SERVER_ID;
+use crate::gpui_tokio::Tokio;
 
 pub type InputCallback = Rc<dyn Fn(&[u8], &mut App)>;
 pub type ResizeCallback = Rc<dyn Fn(u16, u16, &mut App)>;
@@ -59,6 +62,7 @@ pub struct TerminalView {
 
     on_input: Option<InputCallback>,
     on_resize: Option<ResizeCallback>,
+    http_client: Option<GateHttpClient>,
 }
 
 impl TerminalView {
@@ -101,6 +105,7 @@ impl TerminalView {
             search_current_idx: None,
             on_input: None,
             on_resize: None,
+            http_client: None,
         }
     }
 
@@ -111,6 +116,11 @@ impl TerminalView {
     ) -> Self {
         self.on_input = Some(on_input);
         self.on_resize = Some(on_resize);
+        self
+    }
+
+    pub fn with_http_client(mut self, http_client: Option<GateHttpClient>) -> Self {
+        self.http_client = http_client;
         self
     }
 
@@ -340,15 +350,111 @@ impl TerminalView {
         false
     }
 
+    pub fn paste_text_str(&mut self, text: &str, cx: &mut Context<Self>) {
+        if text.is_empty() {
+            return;
+        }
+        self.term.scroll_to_bottom();
+        let encoded = self.term.encode_paste(text);
+        self.send_bytes(&encoded, cx);
+        cx.notify();
+    }
+
     pub fn paste_from_clipboard(&mut self, cx: &mut Context<Self>) {
-        if let Some(item) = cx.read_from_clipboard()
-            && let Some(text) = item.text()
+        let Some(item) = cx.read_from_clipboard() else {
+            return;
+        };
+
+        // 1. Copied local files from Explorer / Finder
+        let paths: Vec<std::path::PathBuf> = item
+            .entries()
+            .iter()
+            .filter_map(|e| match e {
+                ClipboardEntry::ExternalPaths(p) => Some(p.paths()),
+                _ => None,
+            })
+            .flatten()
+            .cloned()
+            .collect();
+
+        if !paths.is_empty() {
+            if self.server_id == LOCAL_SERVER_ID {
+                let formatted = format_paths_for_paste(
+                    &paths
+                        .iter()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .collect::<Vec<_>>(),
+                );
+                self.paste_text_str(&formatted, cx);
+                return;
+            } else if let Some(http) = self.http_client.clone() {
+                // If user copied image files and pasted into a remote session, upload them
+                let img_files: Vec<std::path::PathBuf> = paths
+                    .into_iter()
+                    .filter(|p| p.is_file())
+                    .collect();
+                if !img_files.is_empty() {
+                    let task = Tokio::spawn_result(cx, async move {
+                        let mut remote_paths = Vec::new();
+                        for p in img_files {
+                            if let Ok(bytes) = std::fs::read(&p)
+                                && gateterm_server::app::detect_image_extension(&bytes).is_some()
+                                && let Ok(remote) = http.upload_pasted_image(bytes).await
+                            {
+                                remote_paths.push(remote);
+                            }
+                        }
+                        Ok(remote_paths)
+                    });
+                    cx.spawn(async move |this, cx| {
+                        if let Ok(remote_paths) = task.await
+                            && !remote_paths.is_empty()
+                        {
+                            let formatted = format_paths_for_paste(&remote_paths);
+                            let _ = this.update(cx, |this, cx| {
+                                this.paste_text_str(&formatted, cx);
+                            });
+                        }
+                    })
+                    .detach();
+                    return;
+                }
+            }
+        }
+
+        // 2. Plain text on clipboard
+        if let Some(text) = item.text()
             && !text.is_empty()
         {
-            self.term.scroll_to_bottom();
-            let encoded = self.term.encode_paste(&text);
-            self.send_bytes(&encoded, cx);
-            cx.notify();
+            self.paste_text_str(&text, cx);
+            return;
+        }
+
+        // 3. Screenshot / image data on clipboard (`Win+Shift+S`, `Cmd+Ctrl+Shift+4`, etc.)
+        if let Some(img) = item.entries().iter().find_map(|e| match e {
+            ClipboardEntry::Image(img) => Some(img),
+            _ => None,
+        }) {
+            let bytes = img.bytes.clone();
+            if self.server_id == LOCAL_SERVER_ID {
+                let dir = std::env::temp_dir().join("gateterm-paste");
+                if let Ok(path) = gateterm_server::app::save_pasted_image_bytes(&dir, &bytes) {
+                    let formatted = format_paths_for_paste(&[path.to_string_lossy().into_owned()]);
+                    self.paste_text_str(&formatted, cx);
+                }
+            } else if let Some(http) = self.http_client.clone() {
+                let task =
+                    Tokio::spawn_result(cx, async move { http.upload_pasted_image(bytes).await });
+                cx.spawn(async move |this, cx| {
+                    if let Ok(remote_path) = task.await {
+                        let formatted = format_paths_for_paste(&[remote_path]);
+                        let _ = this.update(cx, |this, cx| {
+                            this.paste_text_str(&formatted, cx);
+                        });
+                    }
+                })
+                .detach();
+            }
         }
     }
 
@@ -365,39 +471,53 @@ impl TerminalView {
         GridPoint { col, row }
     }
 
-    fn on_key_down(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_key_down(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // Never intercept keys during active IME composition (e.g., Enter, Space, Backspace,
+        // Escape, or arrow keys used for candidate selection).
+        if self.ime_marked_text.is_some() {
+            return;
+        }
+
         let ks = &ev.keystroke;
         let m = &ks.modifiers;
 
-        // Copy / Paste shortcuts
+        // Copy / Paste shortcuts (aligned with clients/web/src/keys.ts `browserShortcut`):
+        // - Copy: Cmd+C, Ctrl+Shift+C, Ctrl+Insert, or Ctrl+C when terminal has an active selection
+        // - Paste: Cmd+V, Ctrl+V, Ctrl+Shift+V, or Shift+Insert
         let key_lower = ks.key.to_ascii_lowercase();
-        let is_copy = (m.platform && key_lower == "c")
-            || (m.control && !m.alt && key_lower == "c" && (m.shift || self.has_selection()));
+        let is_copy = (m.platform && !m.control && !m.alt && key_lower == "c")
+            || (m.control && !m.alt && key_lower == "c" && (m.shift || self.has_selection()))
+            || (m.control && !m.shift && !m.alt && key_lower == "insert");
         if is_copy {
-            if self.copy_selection(cx) {
-                cx.stop_propagation();
-                return;
-            }
-            if m.platform || m.shift {
-                return;
-            }
-        }
-
-        let is_paste = (m.platform && key_lower == "v")
-            || (m.control && !m.alt && key_lower == "v" && m.shift)
-            || (m.shift && !m.control && !m.alt && key_lower == "insert");
-        if is_paste {
-            self.paste_from_clipboard(cx);
+            let _ = self.copy_selection(cx);
+            window.prevent_default();
             cx.stop_propagation();
             return;
         }
 
-        // Scrollback navigation via Shift+PageUp / Shift+PageDown
-        if m.shift && !m.control && !m.alt {
+        let is_paste = (m.platform && !m.control && !m.alt && key_lower == "v")
+            || (m.control && !m.alt && key_lower == "v")
+            || (m.shift && !m.control && !m.alt && key_lower == "insert");
+        if is_paste {
+            self.paste_from_clipboard(cx);
+            window.prevent_default();
+            cx.stop_propagation();
+            return;
+        }
+
+        // Scrollback navigation via Shift+PageUp / Shift+PageDown when not in win32-input-mode
+        // and scrollback history exists; otherwise forward to the terminal/agent.
+        if !self.win32_input_mode
+            && self.term.state().max_scroll_offset > 0
+            && m.shift
+            && !m.control
+            && !m.alt
+        {
             if key_lower == "pageup" {
                 let page = (self.term.state().rows as i32 / 2).max(1);
                 self.term.scroll_by(page);
                 cx.notify();
+                window.prevent_default();
                 cx.stop_propagation();
                 return;
             }
@@ -405,17 +525,25 @@ impl TerminalView {
                 let page = (self.term.state().rows as i32 / 2).max(1);
                 self.term.scroll_by(-page);
                 cx.notify();
+                window.prevent_default();
                 cx.stop_propagation();
                 return;
             }
         }
 
         let state = self.term.state();
-        if let Some(bytes) = encode_keystroke(ks, &state, &self.server_os, self.has_selection(), self.win32_input_mode) {
+        if let Some(bytes) = encode_keystroke(
+            ks,
+            &state,
+            &self.server_os,
+            self.has_selection(),
+            self.win32_input_mode,
+        ) {
             self.term.scroll_to_bottom();
             self.clear_selection();
             self.send_bytes(&bytes, cx);
             cx.notify();
+            window.prevent_default();
             cx.stop_propagation();
         }
     }
@@ -688,5 +816,38 @@ impl Render for TerminalView {
                     .text_color(theme.danger_foreground)
                     .child("[Session exited]")
             }))
+    }
+}
+
+pub fn quote_path_for_shell(path: &str) -> String {
+    if path.contains([' ', '\t', '"', '\'', '&', '(', ')', '[', ']', '$', ';']) {
+        format!("\"{}\"", path.replace('"', "\\\""))
+    } else {
+        path.to_string()
+    }
+}
+
+pub fn format_paths_for_paste(paths: &[String]) -> String {
+    if paths.is_empty() {
+        return String::new();
+    }
+    let words: Vec<String> = paths.iter().map(|p| quote_path_for_shell(p)).collect();
+    format!("{} ", words.join(" "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_pasted_paths_with_quoting_when_needed() {
+        assert_eq!(
+            format_paths_for_paste(&["/tmp/gateterm-paste/paste-1.png".to_string()]),
+            "/tmp/gateterm-paste/paste-1.png "
+        );
+        assert_eq!(
+            format_paths_for_paste(&[r"C:\Users\My User\paste-1.png".to_string()]),
+            "\"C:\\Users\\My User\\paste-1.png\" "
+        );
     }
 }

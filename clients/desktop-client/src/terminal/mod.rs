@@ -1,3 +1,4 @@
+pub mod boxdraw;
 pub mod element;
 pub mod input;
 pub mod view;

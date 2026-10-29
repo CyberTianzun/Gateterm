@@ -14,6 +14,7 @@ use gpui::{
     TextAlign, TextRun, UnderlineStyle, Window, fill, outline, point, px, relative, size,
 };
 
+use super::boxdraw;
 use super::view::TerminalView;
 use crate::theme::TerminalPalette;
 
@@ -278,12 +279,21 @@ impl Element for TerminalElement {
             make_font(&font_family, true, true),
         ];
 
+        let scale = window.scale_factor().max(1.0);
+        let snap_px = |v: f32| -> f32 { (v * scale).round() / scale };
+        let span_rect = |start_col: usize, end_col: usize, row: usize| -> Bounds<Pixels> {
+            let x0 = snap_px(origin.x.as_f32() + prepaint.cell_width.as_f32() * (start_col as f32));
+            let x1 = snap_px(origin.x.as_f32() + prepaint.cell_width.as_f32() * (end_col as f32));
+            let y0 = snap_px(origin.y.as_f32() + prepaint.line_height.as_f32() * (row as f32));
+            let y1 = snap_px(origin.y.as_f32() + prepaint.line_height.as_f32() * ((row + 1) as f32));
+            Bounds::new(point(px(x0), px(y0)), size(px(x1 - x0), px(y1 - y0)))
+        };
+
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
-            // 1. Paint non-default cell backgrounds & selection runs
+            // 1. Paint non-default cell backgrounds & selection runs (run-length merged & pixel-snapped)
             let sel_bg = palette.selection_hsla();
             for y in 0..rows {
                 let row_offset = y * cols;
-                let row_y = origin.y + prepaint.line_height * (y as f32);
 
                 // Cell backgrounds
                 let mut x = 0;
@@ -303,14 +313,7 @@ impl Element for TerminalElement {
                             break;
                         }
                     }
-                    let rect = Bounds::new(
-                        point(origin.x + prepaint.cell_width * (start as f32), row_y),
-                        size(
-                            prepaint.cell_width * ((x - start) as f32),
-                            prepaint.line_height,
-                        ),
-                    );
-                    window.paint_quad(fill(rect, bg));
+                    window.paint_quad(fill(span_rect(start, x, y), bg));
                 }
 
                 // Selection highlight runs
@@ -324,14 +327,7 @@ impl Element for TerminalElement {
                     while sx < cols && (cells[row_offset + sx].selected || cells[row_offset + sx].width == 0) {
                         sx += 1;
                     }
-                    let rect = Bounds::new(
-                        point(origin.x + prepaint.cell_width * (start as f32), row_y),
-                        size(
-                            prepaint.cell_width * ((sx - start) as f32),
-                            prepaint.line_height,
-                        ),
-                    );
-                    window.paint_quad(fill(rect, sel_bg));
+                    window.paint_quad(fill(span_rect(start, sx, y), sel_bg));
                 }
 
                 // Search match highlight runs
@@ -348,23 +344,16 @@ impl Element for TerminalElement {
                     {
                         mx += 1;
                     }
-                    let rect = Bounds::new(
-                        point(origin.x + prepaint.cell_width * (start as f32), row_y),
-                        size(
-                            prepaint.cell_width * ((mx - start) as f32),
-                            prepaint.line_height,
-                        ),
-                    );
                     let match_color = if is_current {
                         gpui::hsla(0.11, 0.95, 0.55, 0.45)
                     } else {
                         gpui::hsla(0.14, 0.85, 0.50, 0.25)
                     };
-                    window.paint_quad(fill(rect, match_color));
+                    window.paint_quad(fill(span_rect(start, mx, y), match_color));
                 }
             }
 
-            // 2. Paint text runs row by row
+            // 2. Paint procedural box-drawing/block glyphs & text runs row by row
             for y in 0..rows {
                 let row_offset = y * cols;
                 let row_y = origin.y + prepaint.line_height * (y as f32);
@@ -375,6 +364,15 @@ impl Element for TerminalElement {
                     if cell.width == 0
                         || (cell.ch == ' ' && !cell.underline && !cell.strike)
                     {
+                        x += 1;
+                        continue;
+                    }
+
+                    // Procedural pixel-snapped Box-Drawing (U+2500..=U+257F) & Block Elements (U+2580..=U+259F)
+                    if boxdraw::is_box_or_block(cell.ch) {
+                        let span_cols = (cell.width.max(1)) as usize;
+                        let cell_rect = span_rect(x, x + span_cols, y);
+                        boxdraw::paint_box_or_block(cell.ch, cell_rect, cell.fg, scale, window);
                         x += 1;
                         continue;
                     }
@@ -475,44 +473,49 @@ impl Element for TerminalElement {
                 let cx_idx = (term_state.cursor_x as usize).min(cols.saturating_sub(1));
                 let cy_idx = (term_state.cursor_y as usize).min(rows.saturating_sub(1));
                 let cur_cell = &cells[cy_idx * cols + cx_idx];
-                let cur_w = prepaint.cell_width * (cur_cell.width.max(1) as f32);
-                let cur_rect = Bounds::new(
-                    point(
-                        origin.x + prepaint.cell_width * (cx_idx as f32),
-                        origin.y + prepaint.line_height * (cy_idx as f32),
-                    ),
-                    size(cur_w, prepaint.line_height),
-                );
+                let cur_cols = (cur_cell.width.max(1)) as usize;
+                let cur_w = prepaint.cell_width * (cur_cols as f32);
+                let cur_rect = span_rect(cx_idx, cx_idx + cur_cols, cy_idx);
                 let cursor_color = palette.cursor_hsla();
 
                 if focused {
                     window.paint_quad(fill(cur_rect, cursor_color));
                     if cur_cell.ch != ' ' {
-                        let mut s = String::with_capacity(4);
-                        s.push(cur_cell.ch);
-                        let shared = SharedString::from(s);
-                        let run = [TextRun {
-                            len: shared.len(),
-                            font: fonts[1].clone(),
-                            color: palette.bg_hsla(),
-                            background_color: None,
-                            underline: None,
-                            strikethrough: None,
-                        }];
-                        let shaped = window.text_system().shape_line(
-                            shared,
-                            font_size,
-                            &run,
-                            Some(cur_w),
-                        );
-                        let _ = shaped.paint(
-                            cur_rect.origin,
-                            prepaint.line_height,
-                            TextAlign::Left,
-                            None,
-                            window,
-                            cx,
-                        );
+                        if boxdraw::is_box_or_block(cur_cell.ch) {
+                            boxdraw::paint_box_or_block(
+                                cur_cell.ch,
+                                cur_rect,
+                                palette.bg_hsla(),
+                                scale,
+                                window,
+                            );
+                        } else {
+                            let mut s = String::with_capacity(4);
+                            s.push(cur_cell.ch);
+                            let shared = SharedString::from(s);
+                            let run = [TextRun {
+                                len: shared.len(),
+                                font: fonts[1].clone(),
+                                color: palette.bg_hsla(),
+                                background_color: None,
+                                underline: None,
+                                strikethrough: None,
+                            }];
+                            let shaped = window.text_system().shape_line(
+                                shared,
+                                font_size,
+                                &run,
+                                Some(cur_w),
+                            );
+                            let _ = shaped.paint(
+                                cur_rect.origin,
+                                prepaint.line_height,
+                                TextAlign::Left,
+                                None,
+                                window,
+                                cx,
+                            );
+                        }
                     }
                 } else {
                     window.paint_quad(outline(cur_rect, cursor_color, BorderStyle::Solid));
