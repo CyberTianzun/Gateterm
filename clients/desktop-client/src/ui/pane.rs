@@ -6,7 +6,10 @@ use gpui::{
     AnyElement, App, Entity, Focusable as _, IntoElement, ParentElement as _, SharedString,
     Styled as _, Window, div, px,
 };
-use gpui_component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_component::{
+    ActiveTheme as _,
+    resizable::{h_resizable, resizable_panel, v_resizable},
+};
 
 use crate::terminal::view::TerminalView;
 
@@ -201,11 +204,12 @@ impl PaneNode {
 
     pub fn render(&self, focused_id: Option<gpui::EntityId>, cx: &App) -> AnyElement {
         let has_splits = matches!(self, Self::Split { .. });
-        self.render_inner(focused_id, has_splits, cx)
+        self.render_inner("root", focused_id, has_splits, cx)
     }
 
     fn render_inner(
         &self,
+        path: &str,
         focused_id: Option<gpui::EntityId>,
         has_splits: bool,
         cx: &App,
@@ -265,44 +269,29 @@ impl PaneNode {
                     )
                     .into_any_element()
             }
-            Self::Split { axis, children } => match axis {
-                SplitAxis::Horizontal => {
-                    let mut container = h_flex().size_full().overflow_hidden();
-                    for (idx, child) in children.iter().enumerate() {
-                        if idx > 0 {
-                            container =
-                                container.child(div().h_full().w(px(1.0)).bg(border_color));
-                        }
-                        container = container.child(
-                            div()
-                                .flex_1()
-                                .h_full()
-                                .min_w(px(0.0))
-                                .overflow_hidden()
-                                .child(child.render_inner(focused_id, true, cx)),
-                        );
-                    }
-                    container.into_any_element()
+            Self::Split { axis, children } => {
+                // Encoding `children.len()` into `group_id` guarantees that adding or removing
+                // a split resets the sibling panes to equal `1/N` widths/heights, while keeping
+                // interactive drag-resized ratios stable across normal renders and window resizes.
+                // Double-clicking any divider handle also equalizes all panes in the group.
+                let group_id = SharedString::from(format!(
+                    "pane-split-{path}-{axis:?}-n{}",
+                    children.len()
+                ));
+                let mut group = match axis {
+                    SplitAxis::Horizontal => h_resizable(group_id),
+                    SplitAxis::Vertical => v_resizable(group_id),
+                };
+                for (idx, child) in children.iter().enumerate() {
+                    let child_path = format!("{path}-{idx}");
+                    group = group.child(
+                        resizable_panel()
+                            .size_range(px(64.0)..gpui::Pixels::MAX)
+                            .child(child.render_inner(&child_path, focused_id, true, cx)),
+                    );
                 }
-                SplitAxis::Vertical => {
-                    let mut container = v_flex().size_full().overflow_hidden();
-                    for (idx, child) in children.iter().enumerate() {
-                        if idx > 0 {
-                            container =
-                                container.child(div().w_full().h(px(1.0)).bg(border_color));
-                        }
-                        container = container.child(
-                            div()
-                                .flex_1()
-                                .w_full()
-                                .min_h(px(0.0))
-                                .overflow_hidden()
-                                .child(child.render_inner(focused_id, true, cx)),
-                        );
-                    }
-                    container.into_any_element()
-                }
-            },
+                group.into_any_element()
+            }
         }
     }
 }

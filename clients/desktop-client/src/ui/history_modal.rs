@@ -16,6 +16,7 @@ use gpui_component::{
 
 use super::app::GatetermWorkbench;
 use super::chat_view::render_message_list;
+use super::icons::GatetermIcon;
 use crate::client::api::{ChatMessage, HistoryAgentFilter, HistoryEntry};
 
 #[derive(Default)]
@@ -44,6 +45,17 @@ pub fn render_history_modal(
     let locale = workbench.locale;
     let state = &workbench.history_modal;
     let current_filter = state.agent_filter.clone();
+    let srv_id = if state.server_id.is_empty() {
+        &workbench.active_server_id
+    } else {
+        &state.server_id
+    };
+    let server_name: SharedString = workbench
+        .servers
+        .get(srv_id)
+        .map(|s| s.profile.name.clone())
+        .unwrap_or_else(|| srv_id.clone())
+        .into();
 
     let mut filter_bar = h_flex().items_center().gap_1p5().flex_wrap().child(
         Button::new("hist-filter-all")
@@ -253,13 +265,27 @@ pub fn render_history_modal(
                     h_flex()
                         .items_center()
                         .gap_2()
-                        .child(Icon::new(IconName::Inbox).small().text_color(cx.theme().primary))
+                        .child(
+                            Icon::new(GatetermIcon::History)
+                                .small()
+                                .text_color(cx.theme().primary),
+                        )
                         .child(
                             div()
                                 .text_sm()
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(cx.theme().foreground)
                                 .child(locale.t("Agent 历史会话浏览与恢复", "Agent Session History & Resume")),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .py_0p5()
+                                .rounded(px(4.0))
+                                .bg(cx.theme().secondary)
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(server_name),
                         ),
                 )
                 .child(

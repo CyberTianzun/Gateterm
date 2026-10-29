@@ -17,6 +17,7 @@ use gpui_component::{
 };
 
 use super::app::GatetermWorkbench;
+use super::icons::GatetermIcon;
 use crate::client::api::LauncherItem;
 use crate::i18n::Locale;
 
@@ -181,11 +182,11 @@ pub fn render_new_session_modal(
                                     .items_center()
                                     .gap_1p5()
                                     .child(
-                                        Icon::new(if item.provider == "built-in" {
-                                            IconName::SquareTerminal
+                                        if item.provider == "built-in" {
+                                            Icon::new(GatetermIcon::Terminal)
                                         } else {
-                                            IconName::Bot
-                                        })
+                                            Icon::new(IconName::Bot)
+                                        }
                                         .xsmall()
                                         .text_color(if is_selected {
                                             cx.theme().primary
@@ -217,6 +218,8 @@ pub fn render_new_session_modal(
         }
     }
 
+    let popover_top = px(34.0 + 44.0 + (app.servers.len() as f32 * 30.0).min(180.0) + 34.0);
+
     Some(
         div()
             .id("new-session-modal-backdrop")
@@ -236,7 +239,7 @@ pub fn render_new_session_modal(
                     .id("new-session-popover-card")
                     .occlude()
                     .absolute()
-                    .top(px(76.0))
+                    .top(popover_top)
                     .left(px(12.0))
                     .w(px(340.0))
                     .max_h(px(460.0))

@@ -11,7 +11,7 @@ use gateterm_protocol::{
     AgentState, AttachMode, ClientMsg, ServerMsg, SessionEventKind, SessionInfo,
 };
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable,
+    AnyElement, App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, actions, div, px,
 };
@@ -28,6 +28,7 @@ use tokio::sync::mpsc;
 
 use super::chat_view::render_chat_view;
 use super::history_modal::{HistoryModalState, render_history_modal};
+use super::icons::GatetermIcon;
 use super::new_session_modal::{NewSessionModalState, filtered_launchers, render_new_session_modal};
 use super::pane::{SplitAxis, TabViewMode, WorkspaceTab};
 use super::pending_banner::render_pending_banners;
@@ -149,6 +150,16 @@ pub struct GatetermWorkbench {
     pub server_token_input: Entity<InputState>,
     pub font_family_input: Entity<InputState>,
     pub embedded_listen_input: Entity<InputState>,
+    pub embedded_token_input: Entity<InputState>,
+    pub cloud_password_input: Entity<InputState>,
+    pub cloud_code_input: Entity<InputState>,
+
+    pub system_tray: Option<crate::system::tray::SystemTray>,
+    pub quitting: bool,
+    pub pending_focus_terminal: bool,
+    pub last_window_title: String,
+    pub cloud_abort: Option<tokio::task::AbortHandle>,
+    pub cloud_generation: u64,
 
     _subscriptions: Vec<Subscription>,
 }
@@ -164,6 +175,7 @@ impl GatetermWorkbench {
         let config = DesktopClientConfig::load();
         let locale = config.language.resolve();
         apply_palette(config.palette, cx);
+        window.set_window_title("Gateterm");
 
         let new_session_filter_input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -212,6 +224,22 @@ impl GatetermWorkbench {
             InputState::new(window, cx)
                 .default_value(config.embedded_listen.clone())
                 .placeholder("127.0.0.1:17683")
+        });
+        let embedded_token_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(config.embedded_token.clone())
+                .placeholder(locale.t(
+                    "至少 6 个字符或点击随机生成",
+                    "At least 6 characters or click Regenerate",
+                ))
+        });
+        let cloud_password_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder(locale.t("云账号密码", "Cloud account password"))
+        });
+        let cloud_code_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(locale.t("6 位邮箱验证码", "6-digit email code"))
         });
 
         let mut subscriptions = Vec::new();
@@ -301,6 +329,75 @@ impl GatetermWorkbench {
                 .unwrap_or_else(|| LOCAL_SERVER_ID.to_string())
         };
 
+        let mut settings_modal = SettingsModalState::default();
+        settings_modal.autostart_enabled = crate::system::autostart::is_enabled().unwrap_or(false);
+        settings_modal.server_summary = crate::system::configfile::load_server_summary();
+        settings_modal.local_cloud_account = crate::system::cloud::status_from_local_creds();
+        settings_modal.cloud_region = match &settings_modal.local_cloud_account {
+            crate::system::cloud::CloudAccountStatus::LoggedIn { url, .. } => {
+                crate::system::cloud::RelayRegion::from_url(url)
+            }
+            crate::system::cloud::CloudAccountStatus::LoggedOut => {
+                crate::system::cloud::RelayRegion::China
+            }
+        };
+        let init_listen = config
+            .embedded_listen
+            .trim()
+            .parse::<std::net::SocketAddr>()
+            .ok();
+        settings_modal.pairing = crate::system::pairing::PairingState::new(
+            init_listen,
+            Some(config.embedded_token.as_str()),
+        );
+
+        let (tray_tx, mut tray_rx) = mpsc::unbounded_channel();
+        let system_tray = match crate::system::tray::SystemTray::new(tray_tx, locale) {
+            Ok(tray) => Some(tray),
+            Err(err) => {
+                tracing::warn!("Failed to initialize system tray icon: {err:#}");
+                None
+            }
+        };
+
+        let weak_this = cx.weak_entity();
+        window
+            .spawn(cx, async move |window_cx| {
+                while let Some(action) = tray_rx.recv().await {
+                    let Some(this) = weak_this.upgrade() else {
+                        break;
+                    };
+                    let _ = window_cx.update(|window, cx| {
+                        this.update(cx, |this, cx| {
+                            this.handle_tray_action(action, window, cx);
+                        });
+                    });
+                }
+            })
+            .detach();
+
+        let weak_for_close = cx.weak_entity();
+        window.on_window_should_close(cx, move |window, cx| {
+            let Some(entity) = weak_for_close.upgrade() else {
+                return true;
+            };
+            let should_hide = {
+                let wb = entity.read(cx);
+                !wb.quitting && wb.config.close_to_tray && wb.system_tray.is_some()
+            };
+            if should_hide {
+                crate::system::window_ext::hide_window_to_tray(window, cx);
+                false
+            } else {
+                entity.update(cx, |wb, _| {
+                    if let Some(mut sup) = wb.local_supervisor.take() {
+                        sup.shutdown_all();
+                    }
+                });
+                true
+            }
+        });
+
         let mut workbench = Self {
             focus_handle: cx.focus_handle(),
             config,
@@ -321,7 +418,7 @@ impl GatetermWorkbench {
             new_session_modal: NewSessionModalState::default(),
             history_modal: HistoryModalState::default(),
             server_dialog: ServerDialogState::default(),
-            settings_modal: SettingsModalState::default(),
+            settings_modal,
             new_session_filter_input,
             terminal_search_input,
             rename_input,
@@ -332,6 +429,15 @@ impl GatetermWorkbench {
             server_token_input,
             font_family_input,
             embedded_listen_input,
+            embedded_token_input,
+            cloud_password_input,
+            cloud_code_input,
+            system_tray,
+            quitting: false,
+            pending_focus_terminal: true,
+            last_window_title: "Gateterm".to_string(),
+            cloud_abort: None,
+            cloud_generation: 0,
             _subscriptions: subscriptions,
         };
 
@@ -356,9 +462,125 @@ impl GatetermWorkbench {
         }
     }
 
+    fn handle_tray_action(
+        &mut self,
+        action: crate::system::tray::TrayAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::system::tray::TrayAction;
+        match action {
+            TrayAction::ShowWindow => {
+                crate::system::window_ext::show_and_focus_window(window, cx);
+            }
+            TrayAction::OpenWeb => {
+                let url = self
+                    .local_supervisor
+                    .as_ref()
+                    .map(|s| s.access_url())
+                    .or_else(|| {
+                        self.servers
+                            .get(&self.active_server_id)
+                            .map(|c| c.profile.access_url())
+                    });
+                if let Some(url) = url {
+                    let _ = open::that(url);
+                }
+            }
+            TrayAction::CopyUrl => {
+                let url = self
+                    .local_supervisor
+                    .as_ref()
+                    .map(|s| s.access_url())
+                    .or_else(|| {
+                        self.servers
+                            .get(&self.active_server_id)
+                            .map(|c| c.profile.access_url())
+                    });
+                if let Some(url) = url {
+                    cx.write_to_clipboard(ClipboardItem::new_string(url));
+                }
+            }
+            TrayAction::OpenSettings => {
+                crate::system::window_ext::show_and_focus_window(window, cx);
+                self.open_settings_modal(cx);
+            }
+            TrayAction::ViewLogs => {
+                self.open_log_file();
+            }
+            TrayAction::Quit => {
+                self.quitting = true;
+                if let Some(mut sup) = self.local_supervisor.take() {
+                    sup.shutdown_all();
+                }
+                cx.quit();
+            }
+        }
+    }
+
+    pub fn refresh_tray_status(&mut self) {
+        let session_count = self
+            .servers
+            .get(LOCAL_SERVER_ID)
+            .map(|c| c.sessions.len())
+            .unwrap_or(0);
+        let line = if let Some(sup) = &self.local_supervisor {
+            let addr_str = sup
+                .listen_addr()
+                .map(|a| a.to_string())
+                .unwrap_or_else(|| self.config.embedded_listen.clone());
+            match self.locale {
+                Locale::ZhCn => format!("gateterm · {addr_str} · {session_count} 个会话"),
+                Locale::En => {
+                    let word = if session_count == 1 {
+                        "session"
+                    } else {
+                        "sessions"
+                    };
+                    format!("gateterm · {addr_str} · {session_count} {word}")
+                }
+            }
+        } else {
+            self.locale
+                .t("gateterm · 内置服务已停止", "gateterm · embedded server stopped")
+                .to_string()
+        };
+        if let Some(tray) = &mut self.system_tray {
+            tray.set_status(&line);
+        }
+    }
+
+    pub fn refresh_pairing_from_supervisor(&mut self) {
+        let listen = self
+            .local_supervisor
+            .as_ref()
+            .and_then(|s| s.listen_addr())
+            .or_else(|| {
+                self.config
+                    .embedded_listen
+                    .trim()
+                    .parse::<std::net::SocketAddr>()
+                    .ok()
+            });
+        let token = self
+            .local_supervisor
+            .as_ref()
+            .map(|s| s.token().to_string())
+            .unwrap_or_else(|| self.config.embedded_token.clone());
+        self.settings_modal
+            .pairing
+            .refresh(listen, Some(token.as_str()));
+    }
+
     pub fn start_embedded_server_async(&mut self, cx: &mut Context<Self>) {
-        let listen = self.config.embedded_listen.clone();
+        let listen_addr: std::net::SocketAddr = self
+            .config
+            .embedded_listen
+            .trim()
+            .parse()
+            .unwrap_or_else(|_| "127.0.0.1:17683".parse().unwrap());
         let token = self.config.embedded_token.clone();
+        let prev = self.local_supervisor.take();
 
         if let Some(conn) = self.servers.get_mut(LOCAL_SERVER_ID) {
             conn.state = WsConnectionState::Connecting;
@@ -366,7 +588,9 @@ impl GatetermWorkbench {
         cx.notify();
 
         let task = Tokio::spawn_result(cx, async move {
-            LocalServerSupervisor::start(&listen, token).await
+            let mut sup = prev.unwrap_or_else(LocalServerSupervisor::from_system_config);
+            sup.start_or_rebind(listen_addr, token).await?;
+            Ok(sup)
         });
 
         cx.spawn(async move |this, cx| {
@@ -386,6 +610,8 @@ impl GatetermWorkbench {
                             this.servers
                                 .insert(LOCAL_SERVER_ID.to_string(), ServerConnection::new(profile));
                         }
+                        this.refresh_pairing_from_supervisor();
+                        this.refresh_tray_status();
                         this.connect_server(LOCAL_SERVER_ID, cx);
                     });
                 }
@@ -396,6 +622,7 @@ impl GatetermWorkbench {
                             conn.state =
                                 WsConnectionState::Error(format!("Embedded server error: {err}"));
                         }
+                        this.refresh_tray_status();
                         cx.notify();
                     });
                 }
@@ -544,6 +771,9 @@ impl GatetermWorkbench {
                 } else if should_create_initial {
                     self.create_new_session(&server_id, None, None, None, None, cx);
                 }
+                if server_id == LOCAL_SERVER_ID {
+                    self.refresh_tray_status();
+                }
                 cx.notify();
             }
             ServerMsg::SessionEvent { event, session } => {
@@ -591,6 +821,9 @@ impl GatetermWorkbench {
                             self.open_session_in_new_tab(&server_id, sid, cx);
                         }
                     }
+                }
+                if server_id == LOCAL_SERVER_ID {
+                    self.refresh_tray_status();
                 }
                 cx.notify();
             }
@@ -745,6 +978,7 @@ impl GatetermWorkbench {
     pub fn open_new_session_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.new_session_modal.open = true;
         self.new_session_modal.selected_index = 0;
+        self.pending_focus_terminal = true;
         self.new_session_filter_input.update(cx, |s, cx| {
             s.set_value("", window, cx);
         });
@@ -828,8 +1062,12 @@ impl GatetermWorkbench {
 
         let palette_id = self.config.palette;
         let tx_resize = cmd_tx.clone();
-        let on_resize: crate::terminal::view::ResizeCallback = Rc::new(move |cols, rows, _cx| {
-            let colors = Some(TerminalPalette::get(palette_id).to_term_colors());
+        let on_resize: crate::terminal::view::ResizeCallback = Rc::new(move |cols, rows, cx| {
+            let pal = cx
+                .try_global::<TerminalPalette>()
+                .copied()
+                .unwrap_or_else(|| TerminalPalette::get(palette_id));
+            let colors = Some(pal.to_term_colors());
             let _ = tx_resize.send(WsCommand::Resize {
                 channel,
                 cols,
@@ -843,6 +1081,7 @@ impl GatetermWorkbench {
         let line_height = self.config.line_height;
         let max_scrollback = self.config.max_scrollback;
         let srv_id = server_id.to_string();
+        let http = conn.http.clone();
 
         let view = cx.new(|cx| {
             TerminalView::new(
@@ -859,6 +1098,7 @@ impl GatetermWorkbench {
                 cx,
             )
             .with_callbacks(on_input, on_resize)
+            .with_http_client(http)
         });
 
         self.channel_views
@@ -889,6 +1129,7 @@ impl GatetermWorkbench {
         self.next_tab_id += 1;
         self.tabs.push(WorkspaceTab::new(tab_id, view));
         self.active_tab_idx = self.tabs.len() - 1;
+        self.pending_focus_terminal = true;
         cx.notify();
     }
 
@@ -914,6 +1155,7 @@ impl GatetermWorkbench {
                 tab.view_mode = TabViewMode::Terminal;
             }
         }
+        self.pending_focus_terminal = true;
         cx.notify();
     }
 
@@ -1203,6 +1445,7 @@ impl GatetermWorkbench {
     pub fn open_history_modal(&mut self, cx: &mut Context<Self>) {
         self.history_modal.open = true;
         self.history_modal.server_id = self.active_server_id.clone();
+        self.pending_focus_terminal = true;
         self.refresh_history_list(false, cx);
         cx.notify();
     }
@@ -1336,6 +1579,7 @@ impl GatetermWorkbench {
         self.server_dialog.open = true;
         self.server_dialog.editing_id = None;
         self.server_dialog.error = None;
+        self.pending_focus_terminal = true;
         self.server_name_input
             .update(cx, |s, cx| s.set_value("", window, cx));
         self.server_url_input
@@ -1419,11 +1663,18 @@ impl GatetermWorkbench {
 
     pub fn open_settings_modal(&mut self, cx: &mut Context<Self>) {
         self.settings_modal.open = true;
+        self.pending_focus_terminal = true;
+        self.settings_modal.autostart_enabled =
+            crate::system::autostart::is_enabled().unwrap_or(false);
+        self.settings_modal.server_summary = crate::system::configfile::load_server_summary();
+        self.settings_modal.local_cloud_account = crate::system::cloud::status_from_local_creds();
+        self.refresh_pairing_from_supervisor();
         self.refresh_settings_hooks_and_cloud(cx);
         cx.notify();
     }
 
     pub fn refresh_settings_hooks_and_cloud(&mut self, cx: &mut Context<Self>) {
+        self.settings_modal.local_cloud_account = crate::system::cloud::status_from_local_creds();
         let Some(http) = self
             .servers
             .get(&self.active_server_id)
@@ -1496,6 +1747,21 @@ impl GatetermWorkbench {
         self.config.palette = palette;
         let _ = self.config.save();
         apply_palette(palette, cx);
+        let colors = Some(TerminalPalette::get(palette).to_term_colors());
+        for ((srv_id, channel), view) in &self.channel_views {
+            let (cols, rows) = view.read(cx).dimensions();
+            if let Some(conn) = self.servers.get(srv_id) {
+                if let Some(tx) = &conn.cmd_tx {
+                    let _ = tx.send(WsCommand::Resize {
+                        channel: *channel,
+                        cols,
+                        rows,
+                        colors: colors.clone(),
+                    });
+                }
+            }
+            view.update(cx, |_, cx| cx.notify());
+        }
         cx.notify();
     }
 
@@ -1503,7 +1769,157 @@ impl GatetermWorkbench {
         self.config.language = lang;
         self.locale = lang.resolve();
         let _ = self.config.save();
+        if let Some(tray) = &mut self.system_tray {
+            tray.set_language(self.locale);
+        }
+        self.refresh_tray_status();
         cx.notify();
+    }
+
+    pub fn update_language_with_window(
+        &mut self,
+        lang: LanguagePref,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_language(lang, cx);
+    }
+
+    pub fn toggle_close_to_tray(&mut self, cx: &mut Context<Self>) {
+        self.config.close_to_tray = !self.config.close_to_tray;
+        let _ = self.config.save();
+        cx.notify();
+    }
+
+    pub fn toggle_autostart(&mut self, cx: &mut Context<Self>) {
+        let next = !self.settings_modal.autostart_enabled;
+        match crate::system::autostart::set(next) {
+            Ok(()) => {
+                self.settings_modal.autostart_enabled =
+                    crate::system::autostart::is_enabled().unwrap_or(next);
+                self.settings_modal.autostart_message = Some((
+                    true,
+                    self.locale
+                        .t("开机自启设置已更新", "Start at login updated")
+                        .to_string(),
+                ));
+            }
+            Err(err) => {
+                self.settings_modal.autostart_message = Some((
+                    false,
+                    format!(
+                        "{}: {err:#}",
+                        self.locale
+                            .t("设置开机自启失败", "Failed to update start at login")
+                    ),
+                ));
+            }
+        }
+        cx.notify();
+    }
+
+    pub fn open_server_config_file(&mut self, cx: &mut Context<Self>) {
+        let Ok(path) = crate::system::configfile::default_path() else {
+            return;
+        };
+        if !path.exists() {
+            if let Ok(addr) = self
+                .config
+                .embedded_listen
+                .trim()
+                .parse::<std::net::SocketAddr>()
+            {
+                let _ = crate::system::configfile::save_shared_server_config(
+                    &path,
+                    addr,
+                    Some(&self.config.embedded_token),
+                    self.config.language,
+                );
+            }
+        }
+        if let Err(err) = open::that(&path) {
+            self.settings_modal.local_server_message = Some((
+                false,
+                format!(
+                    "{}: {err}",
+                    self.locale
+                        .t("无法打开配置文件", "Could not open config.toml")
+                ),
+            ));
+            cx.notify();
+        }
+    }
+
+    pub fn open_log_file(&self) {
+        if let Ok(log) = crate::system::logs::log_path() {
+            let target = if log.exists() {
+                log
+            } else {
+                log.parent().map(|p| p.to_path_buf()).unwrap_or(log)
+            };
+            let _ = open::that(target);
+        }
+    }
+
+    pub fn refresh_pairing_addresses(&mut self, cx: &mut Context<Self>) {
+        self.refresh_pairing_from_supervisor();
+        cx.notify();
+    }
+
+    pub fn select_pairing_ip(&mut self, ip: std::net::IpAddr, cx: &mut Context<Self>) {
+        self.settings_modal.pairing.select_ip(ip);
+        cx.notify();
+    }
+
+    pub fn set_embedded_host_preset(
+        &mut self,
+        host: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cur = self
+            .embedded_listen_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        let (_, port) = crate::config::split_listen_host_port(&cur);
+        let port = if port == 0 { 17683 } else { port };
+        let next = format!("{host}:{port}");
+        self.embedded_listen_input.update(cx, |s, cx| {
+            s.set_value(next, window, cx);
+        });
+        cx.notify();
+    }
+
+    pub fn regenerate_embedded_token_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let new_tok = crate::config::generate_random_token();
+        self.embedded_token_input.update(cx, |s, cx| {
+            s.set_value(new_tok, window, cx);
+        });
+        self.settings_modal.local_server_message = Some((
+            true,
+            self.locale
+                .t(
+                    "已生成新令牌，点击“保存并应用”生效",
+                    "Generated new token — click Save & Apply to activate",
+                )
+                .to_string(),
+        ));
+        cx.notify();
+    }
+
+    pub fn switch_embedded_to_all_interfaces(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_embedded_host_preset("0.0.0.0", window, cx);
+        self.save_and_restart_embedded_server_with_window(window, cx);
     }
 
     pub fn apply_font_family_from_input(&mut self, cx: &mut Context<Self>) {
@@ -1549,8 +1965,9 @@ impl GatetermWorkbench {
         } else {
             self.disconnect_server(LOCAL_SERVER_ID, cx);
             if let Some(mut sup) = self.local_supervisor.take() {
-                sup.stop();
+                sup.shutdown_all();
             }
+            self.refresh_tray_status();
         }
         cx.notify();
     }
@@ -1567,14 +1984,239 @@ impl GatetermWorkbench {
             let _ = self.config.save();
         }
         self.disconnect_server(LOCAL_SERVER_ID, cx);
-        if let Some(mut sup) = self.local_supervisor.take() {
-            sup.stop();
-        }
         if self.config.start_embedded_server {
             self.start_embedded_server_async(cx);
         }
     }
 
+    pub fn save_and_restart_embedded_server_with_window(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let listen = self
+            .embedded_listen_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        let raw_token = self
+            .embedded_token_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+
+        let (host, port) = crate::config::split_listen_host_port(&listen);
+        let normalized_listen = format!("{host}:{port}");
+        let Ok(listen_sock) = normalized_listen.parse::<std::net::SocketAddr>() else {
+            self.settings_modal.local_server_message = Some((
+                false,
+                self.locale
+                    .t(
+                        "监听地址必须是合法的 IP:端口（如 127.0.0.1:17683 或 0.0.0.0:17683）",
+                        "Listen address must be a valid IP:Port (e.g. 127.0.0.1:17683 or 0.0.0.0:17683)",
+                    )
+                    .to_string(),
+            ));
+            cx.notify();
+            return;
+        };
+        if port == 0 {
+            self.settings_modal.local_server_message = Some((
+                false,
+                self.locale
+                    .t("端口必须是 1..=65535 之间的整数", "Port must be in 1..=65535")
+                    .to_string(),
+            ));
+            cx.notify();
+            return;
+        }
+        let token = if raw_token.is_empty() {
+            let new_token = crate::config::generate_random_token();
+            self.embedded_token_input.update(cx, |s, cx| {
+                s.set_value(new_token.clone(), window, cx);
+            });
+            new_token
+        } else if raw_token.chars().count() < 6 {
+            self.settings_modal.local_server_message = Some((
+                false,
+                self.locale
+                    .t(
+                        "访问令牌至少需要 6 个字符",
+                        "Access token must be at least 6 characters",
+                    )
+                    .to_string(),
+            ));
+            cx.notify();
+            return;
+        } else {
+            raw_token
+        };
+
+        self.config.embedded_listen = normalized_listen.clone();
+        self.config.embedded_token = token.clone();
+        self.embedded_listen_input.update(cx, |s, cx| {
+            s.set_value(normalized_listen, window, cx);
+        });
+        let _ = self.config.save();
+        if let Ok(path) = crate::system::configfile::default_path() {
+            let _ = crate::system::configfile::save_shared_server_config(
+                &path,
+                listen_sock,
+                Some(&token),
+                self.config.language,
+            );
+        }
+
+        self.settings_modal.local_server_message = Some((
+            true,
+            self.locale
+                .t(
+                    "已保存并热重载内置服务器（现有终端会话保持不断开）",
+                    "Saved and hot-rebound embedded server (existing sessions preserved)",
+                )
+                .to_string(),
+        ));
+
+        self.disconnect_server(LOCAL_SERVER_ID, cx);
+        if self.config.start_embedded_server {
+            self.start_embedded_server_async(cx);
+        } else {
+            self.refresh_pairing_from_supervisor();
+            self.refresh_tray_status();
+        }
+        cx.notify();
+    }
+
+    pub fn start_cloud_action(
+        &mut self,
+        action: crate::system::cloud::CloudAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::system::cloud::{CloudAction, prepare_cloud_job, run_cloud_job};
+
+        if matches!(action, CloudAction::CancelLogin) {
+            if let Some(abort) = self.cloud_abort.take() {
+                abort.abort();
+            }
+            self.cloud_generation = self.cloud_generation.wrapping_add(1);
+            self.settings_modal.cloud_busy = false;
+            self.settings_modal.cloud_message = Some((
+                true,
+                self.locale
+                    .t("已取消浏览器登录", "Browser sign-in cancelled")
+                    .to_string(),
+            ));
+            cx.notify();
+            return;
+        }
+
+        if self.settings_modal.cloud_busy {
+            return;
+        }
+
+        let region = self.settings_modal.cloud_region;
+        let password = self.cloud_password_input.read(cx).value().to_string();
+        let code = self.cloud_code_input.read(cx).value().trim().to_string();
+        let confirm_delete = self.settings_modal.cloud_confirm_delete;
+
+        let job = match prepare_cloud_job(
+            region,
+            &password,
+            &code,
+            confirm_delete,
+            &self.settings_modal.local_cloud_account,
+            action,
+            self.locale,
+        ) {
+            Ok(j) => j,
+            Err(msg) => {
+                self.settings_modal.cloud_message = Some((false, msg));
+                cx.notify();
+                return;
+            }
+        };
+
+        let Some(creds_path) = gateterm_cloud_client::credentials::default_path() else {
+            self.settings_modal.cloud_message = Some((
+                false,
+                self.locale
+                    .t("无法定位凭据文件目录", "Cannot locate credentials directory")
+                    .to_string(),
+            ));
+            cx.notify();
+            return;
+        };
+
+        let locale = self.locale;
+        let is_browser_signin = matches!(action, CloudAction::Login);
+        let is_delete_confirm = matches!(action, CloudAction::DeleteAccount);
+
+        self.settings_modal.cloud_busy = true;
+        self.settings_modal.cloud_message = Some((
+            true,
+            if is_browser_signin {
+                locale
+                    .t(
+                        "已打开浏览器，请在网页中完成登录或注册…",
+                        "Browser opened — complete sign-in in your browser...",
+                    )
+                    .to_string()
+            } else {
+                locale.t("正在请求云服务…", "Contacting cloud...").to_string()
+            },
+        ));
+        cx.notify();
+
+        self.cloud_generation = self.cloud_generation.wrapping_add(1);
+        let my_gen = self.cloud_generation;
+
+        let handle = Tokio::handle(cx);
+        let join_handle =
+            handle.spawn(async move { run_cloud_job(job, creds_path, locale).await });
+        self.cloud_abort = Some(join_handle.abort_handle());
+
+        let cloud_pw_input = self.cloud_password_input.clone();
+        let cloud_code_input = self.cloud_code_input.clone();
+        let _ = window;
+
+        cx.spawn(async move |this, cx| {
+            let outcome = match join_handle.await {
+                Ok(res) => res,
+                Err(_) => return,
+            };
+            let _ = this.update(cx, |this, cx| {
+                if this.cloud_generation != my_gen {
+                    return;
+                }
+                this.cloud_abort = None;
+                this.settings_modal.cloud_busy = false;
+                match outcome {
+                    Ok(notice) => {
+                        this.settings_modal.local_cloud_account =
+                            crate::system::cloud::status_from_local_creds();
+                        this.settings_modal.cloud_message = Some((true, notice));
+                        if is_delete_confirm {
+                            this.settings_modal.cloud_delete_expanded = false;
+                            this.settings_modal.cloud_confirm_delete = false;
+                            let _ = cloud_pw_input;
+                            let _ = cloud_code_input;
+                        }
+                        this.refresh_settings_hooks_and_cloud(cx);
+                    }
+                    Err(err) => {
+                        this.settings_modal.cloud_message = Some((false, err));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    #[inline(never)]
     fn render_title_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let locale = self.locale;
         let active_tab = self.tabs.get(self.active_tab_idx);
@@ -1630,13 +2272,18 @@ impl GatetermWorkbench {
                                     } else {
                                         ButtonVariant::Ghost
                                     })
-                                    .icon(IconName::PanelLeft)
+                                    .icon(if sidebar_collapsed {
+                                        GatetermIcon::SidebarShow
+                                    } else {
+                                        GatetermIcon::SidebarHide
+                                    })
                                     .tooltip(locale.t(
-                                        "切换侧边栏 (Ctrl+B)",
-                                        "Toggle Sidebar (Ctrl+B)",
+                                        "切换侧边栏 (Ctrl+Shift+B)",
+                                        "Toggle Sidebar (Ctrl+Shift+B)",
                                     ))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.sidebar_collapsed = !this.sidebar_collapsed;
+                                        this.pending_focus_terminal = true;
                                         cx.notify();
                                     })),
                             ),
@@ -1700,8 +2347,8 @@ impl GatetermWorkbench {
                                     })
                                     .icon(IconName::Search)
                                     .tooltip(locale.t(
-                                        "终端内搜索 (Ctrl+F)",
-                                        "Search in Terminal (Ctrl+F)",
+                                        "终端内搜索 (Ctrl+Shift+F)",
+                                        "Search in Terminal (Ctrl+Shift+F)",
                                     ))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.toggle_terminal_search(window, cx);
@@ -1767,6 +2414,7 @@ impl GatetermWorkbench {
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         if let Some(tab) = this.tabs.get_mut(this.active_tab_idx) {
                                             tab.toggle_zoom();
+                                            this.pending_focus_terminal = true;
                                             cx.notify();
                                         }
                                     }))
@@ -1780,9 +2428,9 @@ impl GatetermWorkbench {
                                         ButtonVariant::Ghost
                                     })
                                     .icon(if is_chat_mode {
-                                        IconName::SquareTerminal
+                                        GatetermIcon::Terminal
                                     } else {
-                                        IconName::Bot
+                                        GatetermIcon::Chat
                                     })
                                     .tooltip(if is_chat_mode {
                                         locale.t(
@@ -1809,7 +2457,7 @@ impl GatetermWorkbench {
                                     .xsmall()
                                     .ghost()
                                     .icon(IconName::Settings)
-                                    .tooltip(locale.t("设置 (Ctrl+,)", "Settings (Ctrl+,)"))
+                                    .tooltip(locale.t("设置", "Settings"))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.open_settings_modal(cx);
                                     })),
@@ -1819,6 +2467,7 @@ impl GatetermWorkbench {
             .into_any_element()
     }
 
+    #[inline(never)]
     fn render_terminal_search_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.terminal_search_open {
             return None;
@@ -1918,6 +2567,7 @@ impl GatetermWorkbench {
         )
     }
 
+    #[inline(never)]
     fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let locale = self.locale;
         let mut srv_section = v_flex().w_full().gap_1();
@@ -2043,28 +2693,97 @@ impl GatetermWorkbench {
                 let sid = sess.id;
                 let sname = sess.name.clone();
 
-                let agent_badge = best_agent_for_session(&conn.agent_sessions, sid).map(|ag| {
-                    let (badge_txt, badge_col) = match ag.state {
-                        AgentState::Waiting => ("Waiting", cx.theme().warning),
-                        AgentState::Working => ("Working", cx.theme().success),
-                        AgentState::Thinking => ("Thinking", cx.theme().primary),
-                        AgentState::Error => ("Error", cx.theme().danger),
-                        AgentState::Idle | AgentState::Done => ("Idle", cx.theme().muted_foreground),
+                let leading_icon: AnyElement =
+                    if let Some(ag) = best_agent_for_session(&conn.agent_sessions, sid) {
+                        let (_, brand_color) = agent_brand_style(&ag.agent_id, cx);
+                        let dot_col = match ag.state {
+                            AgentState::Waiting => Some(cx.theme().warning),
+                            AgentState::Working => Some(brand_color),
+                            AgentState::Thinking => Some(gpui::Hsla::from(gpui::rgb(0x9A8CFF))),
+                            AgentState::Error => Some(cx.theme().danger),
+                            AgentState::Idle | AgentState::Done => None,
+                        };
+                        let (badge_bg, badge_border, icon_col) = match ag.state {
+                            AgentState::Waiting => (
+                                gpui::Hsla::from(gpui::rgb(0xFFB020)),
+                                gpui::Hsla::from(gpui::rgb(0xFFB020)),
+                                gpui::Hsla::from(gpui::rgb(0x241A00)),
+                            ),
+                            AgentState::Error => (
+                                gpui::Hsla::from(gpui::rgb(0xFF6B6B)),
+                                gpui::Hsla::from(gpui::rgb(0xFF6B6B)),
+                                gpui::Hsla::from(gpui::rgb(0x2A0000)),
+                            ),
+                            AgentState::Working | AgentState::Thinking => (
+                                brand_color.opacity(0.22),
+                                brand_color.opacity(0.45),
+                                brand_color,
+                            ),
+                            AgentState::Idle | AgentState::Done => (
+                                brand_color.opacity(0.14),
+                                brand_color.opacity(0.30),
+                                brand_color,
+                            ),
+                        };
+                        div()
+                            .relative()
+                            .w(px(18.0))
+                            .h(px(18.0))
+                            .flex_shrink_0()
+                            .rounded(px(4.5))
+                            .bg(badge_bg)
+                            .border_1()
+                            .border_color(badge_border)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                Icon::new(GatetermIcon::for_agent(&ag.agent_id))
+                                    .xsmall()
+                                    .text_color(icon_col),
+                            )
+                            .children(dot_col.map(|col| {
+                                div()
+                                    .absolute()
+                                    .right(px(-2.0))
+                                    .bottom(px(-2.0))
+                                    .w(px(6.0))
+                                    .h(px(6.0))
+                                    .rounded(px(99.0))
+                                    .bg(col)
+                                    .border_1()
+                                    .border_color(cx.theme().sidebar)
+                            }))
+                            .into_any_element()
+                    } else {
+                        div()
+                            .w(px(18.0))
+                            .h(px(18.0))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                Icon::new(GatetermIcon::Terminal)
+                                    .xsmall()
+                                    .text_color(if is_current {
+                                        cx.theme().primary
+                                    } else {
+                                        cx.theme().muted_foreground
+                                    }),
+                            )
+                            .into_any_element()
                     };
-                    div()
-                        .px_1p5()
-                        .py_0p5()
-                        .rounded(px(4.0))
-                        .bg(badge_col.opacity(0.18))
-                        .text_xs()
-                        .text_color(badge_col)
-                        .child(badge_txt)
-                });
 
                 let is_renaming =
                     self.renaming_session.as_ref() == Some(&(active_srv_id.clone(), sid));
 
-                let meta_sub: SharedString = format!("{}×{}", sess.cols, sess.rows).into();
+                let meta_sub: SharedString = match sess.cwd.as_deref().map(format_short_cwd) {
+                    Some(short_cwd) if !short_cwd.is_empty() => {
+                        format!("{short_cwd} · {}×{}", sess.cols, sess.rows).into()
+                    }
+                    _ => format!("{}×{}", sess.cols, sess.rows).into(),
+                };
 
                 let item = if is_renaming {
                     h_flex()
@@ -2124,15 +2843,7 @@ impl GatetermWorkbench {
                                     h_flex()
                                         .items_center()
                                         .gap_1p5()
-                                        .child(
-                                            Icon::new(IconName::SquareTerminal)
-                                                .xsmall()
-                                                .text_color(if is_current {
-                                                    cx.theme().primary
-                                                } else {
-                                                    cx.theme().muted_foreground
-                                                }),
-                                        )
+                                        .child(leading_icon)
                                         .child(
                                             div()
                                                 .flex_1()
@@ -2145,12 +2856,11 @@ impl GatetermWorkbench {
                                                 })
                                                 .text_color(cx.theme().foreground)
                                                 .child(SharedString::from(sess.name.clone())),
-                                        )
-                                        .children(agent_badge),
+                                        ),
                                 )
                                 .child(
                                     div()
-                                        .pl_4()
+                                        .pl_6()
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
                                         .child(meta_sub),
@@ -2167,7 +2877,7 @@ impl GatetermWorkbench {
                                     Button::new(SharedString::from(format!("sess-ren-{sid}")))
                                         .xsmall()
                                         .ghost()
-                                        .label("✎")
+                                        .icon(GatetermIcon::Pencil)
                                         .tooltip(locale.t("重命名会话", "Rename Session"))
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             cx.stop_propagation();
@@ -2205,49 +2915,6 @@ impl GatetermWorkbench {
             .border_r_1()
             .border_color(cx.theme().border)
             .child(
-                // Sidebar header: brand + History and `+` (New Session) icon buttons
-                h_flex()
-                    .w_full()
-                    .px_3()
-                    .py_2p5()
-                    .items_center()
-                    .justify_between()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(cx.theme().foreground)
-                            .child("gateterm"),
-                    )
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .gap_1()
-                            .child(
-                                Button::new("sidebar-head-history")
-                                    .xsmall()
-                                    .ghost()
-                                    .icon(IconName::Inbox)
-                                    .tooltip(locale.t("历史会话", "Session History"))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.open_history_modal(cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("sidebar-head-new-session")
-                                    .xsmall()
-                                    .secondary()
-                                    .icon(IconName::Plus)
-                                    .tooltip(locale.t("新建会话", "New Session"))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.open_new_session_modal(window, cx);
-                                    })),
-                            ),
-                    ),
-            )
-            .child(
                 // Servers section
                 v_flex()
                     .w_full()
@@ -2257,6 +2924,7 @@ impl GatetermWorkbench {
                     .border_color(cx.theme().border)
                     .child(
                         h_flex()
+                            .px_1()
                             .items_center()
                             .justify_between()
                             .child(
@@ -2280,7 +2948,7 @@ impl GatetermWorkbench {
                     .child(srv_section),
             )
             .child(
-                // Sessions list
+                // Sessions list (with per-server Agent Session History & New Session actions)
                 v_flex()
                     .flex_1()
                     .min_h(px(0.0))
@@ -2288,12 +2956,48 @@ impl GatetermWorkbench {
                     .p_2()
                     .gap_1p5()
                     .child(
-                        div()
+                        h_flex()
                             .px_1()
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(cx.theme().muted_foreground)
-                            .child(locale.t("会话列表", "SESSIONS")),
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(locale.t("会话列表", "SESSIONS")),
+                            )
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        Button::new("sidebar-sessions-history")
+                                            .xsmall()
+                                            .ghost()
+                                            .icon(GatetermIcon::History)
+                                            .tooltip(locale.t(
+                                                "当前服务器 Agent 历史会话 (Ctrl+Shift+H)",
+                                                "Agent Session History (Ctrl+Shift+H)",
+                                            ))
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.open_history_modal(cx);
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("sidebar-sessions-new")
+                                            .xsmall()
+                                            .secondary()
+                                            .icon(IconName::Plus)
+                                            .tooltip(locale.t(
+                                                "新建会话 (Ctrl+Shift+N)",
+                                                "New Session (Ctrl+Shift+N)",
+                                            ))
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.open_new_session_modal(window, cx);
+                                            })),
+                                    ),
+                            ),
                     )
                     .child(
                         div()
@@ -2310,8 +3014,36 @@ impl GatetermWorkbench {
 
 impl Render for GatetermWorkbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.pending_focus_terminal
+            && !self.settings_modal.open
+            && !self.new_session_modal.open
+            && !self.history_modal.open
+            && !self.server_dialog.open
+            && !self.terminal_search_open
+        {
+            if let Some(tab) = self.tabs.get(self.active_tab_idx) {
+                self.pending_focus_terminal = false;
+                tab.focus_active(window, cx);
+            }
+        }
+
         if let Some(tab) = self.tabs.get_mut(self.active_tab_idx) {
             tab.sync_active_from_focus(window, cx);
+        }
+
+        let desired_window_title = if let Some(tab) = self.tabs.get(self.active_tab_idx) {
+            let t = tab.title(cx);
+            if t.trim().is_empty() || t == "Gateterm" {
+                "Gateterm".to_string()
+            } else {
+                format!("Gateterm — {t}")
+            }
+        } else {
+            "Gateterm".to_string()
+        };
+        if desired_window_title != self.last_window_title {
+            self.last_window_title = desired_window_title.clone();
+            window.set_window_title(&desired_window_title);
         }
 
         let title_bar = self.render_title_bar(cx);
@@ -2343,7 +3075,7 @@ impl Render for GatetermWorkbench {
                 .gap_3()
                 .bg(cx.theme().background)
                 .child(
-                    Icon::new(IconName::SquareTerminal)
+                    Icon::new(GatetermIcon::Terminal)
                         .large()
                         .text_color(cx.theme().muted_foreground),
                 )
@@ -2422,6 +3154,7 @@ impl Render for GatetermWorkbench {
             }))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
                 this.sidebar_collapsed = !this.sidebar_collapsed;
+                this.pending_focus_terminal = true;
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ToggleTerminalSearch, window, cx| {
@@ -2450,6 +3183,7 @@ impl Render for GatetermWorkbench {
             .on_action(cx.listener(|this, _: &ToggleZoomPane, _, cx| {
                 if let Some(tab) = this.tabs.get_mut(this.active_tab_idx) {
                     tab.toggle_zoom();
+                    this.pending_focus_terminal = true;
                     cx.notify();
                 }
             }))
@@ -2489,5 +3223,46 @@ impl Render for GatetermWorkbench {
             .children(history_modal)
             .children(server_dialog)
             .children(settings_modal)
+    }
+}
+
+pub fn format_short_cwd(cwd: &str) -> String {
+    let trimmed = cwd.trim().trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let parts: Vec<&str> = trimmed
+        .split(['/', '\\'])
+        .filter(|s| !s.is_empty())
+        .collect();
+    match parts.as_slice() {
+        [] => trimmed.to_string(),
+        [only] => (*only).to_string(),
+        [.., parent, leaf] => format!("{parent}/{leaf}"),
+    }
+}
+
+fn agent_brand_style(agent_id: &str, cx: &App) -> (&'static str, gpui::Hsla) {
+    match agent_id.to_ascii_lowercase().as_str() {
+        "claude" | "claude-code" => ("Claude", gpui::rgb(0xE07A5F).into()),
+        "codex" => ("Codex", gpui::rgb(0x10B981).into()),
+        "gemini" | "gemini-cli" => ("Gemini", gpui::rgb(0x8B5CF6).into()),
+        "opencode" => ("OpenCode", gpui::rgb(0x06B6D4).into()),
+        "pi" => ("pi", gpui::rgb(0xEC4899).into()),
+        "grok" => ("Grok", gpui::rgb(0xA855F7).into()),
+        "agy" | "antigravity" => ("AGY", gpui::rgb(0x3B82F6).into()),
+        _ => ("Agent", cx.theme().primary),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_cwd_extracts_tail_components() {
+        assert_eq!(format_short_cwd(r"D:\online\Octoterm"), "online/Octoterm");
+        assert_eq!(format_short_cwd("/home/dev/projects/gateterm/"), "projects/gateterm");
+        assert_eq!(format_short_cwd("Octoterm"), "Octoterm");
     }
 }

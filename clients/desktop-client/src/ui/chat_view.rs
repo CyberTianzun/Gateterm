@@ -14,6 +14,7 @@ use gpui_component::{
 };
 
 use super::app::GatetermWorkbench;
+use super::icons::GatetermIcon;
 use super::pane::TabViewMode;
 use crate::client::api::{ChatBlock, ChatMessage, ChatRole};
 use crate::i18n::Locale;
@@ -70,7 +71,7 @@ pub fn render_chat_view(
             h_flex()
                 .items_center()
                 .gap_2()
-                .child(Icon::new(IconName::Bot).small().text_color(cx.theme().primary))
+                .child(Icon::new(GatetermIcon::Chat).small().text_color(cx.theme().primary))
                 .child(
                     div()
                         .text_sm()
@@ -106,7 +107,7 @@ pub fn render_chat_view(
                     Button::new("chat-back-terminal")
                         .xsmall()
                         .secondary()
-                        .icon(IconName::SquareTerminal)
+                        .icon(GatetermIcon::Terminal)
                         .label(locale.t("返回终端", "Terminal View"))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.set_active_tab_view_mode(TabViewMode::Terminal, window, cx);

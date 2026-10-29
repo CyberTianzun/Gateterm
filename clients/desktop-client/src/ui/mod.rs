@@ -1,6 +1,7 @@
 pub mod app;
 pub mod chat_view;
 pub mod history_modal;
+pub mod icons;
 pub mod new_session_modal;
 pub mod pane;
 pub mod pending_banner;
