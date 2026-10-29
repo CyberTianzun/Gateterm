@@ -60,6 +60,7 @@ struct Desired {
 
 struct Shared {
     name: String,
+    cwd: Option<String>,
     grid: SessionGrid,
     buffer: SeqBuffer,
     viewports: HashMap<u64, Desired>,
@@ -252,6 +253,7 @@ impl Session {
             window_size,
             shared: Mutex::new(Shared {
                 name,
+                cwd: cwd.as_ref().map(|p| p.to_string_lossy().into_owned()),
                 grid: SessionGrid::new(cols, rows),
                 buffer: SeqBuffer::new(buffer_cap),
                 viewports: HashMap::new(),
@@ -441,6 +443,7 @@ impl Session {
             cols,
             rows,
             created_at: self.created_at,
+            cwd: shared.cwd.clone(),
         }
     }
 

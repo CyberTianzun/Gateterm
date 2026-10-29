@@ -1,6 +1,8 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::http::{header, HeaderMap, StatusCode};
@@ -50,6 +52,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/agents/messages", get(crate::agent::routes::messages))
         .route("/api/agents/answer", post(crate::agent::routes::answer))
         .route(
+            "/api/paste-image",
+            post(paste_image_handler)
+                .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024)),
+        )
+        .route(
             "/hook/{agent}/{event}",
             post(crate::agent::routes::hook)
                 // hook payload 里有 tool_input(命令原文、文件路径),给它一个明确上界
@@ -57,6 +64,89 @@ pub fn router(state: AppState) -> Router {
         )
         .fallback(crate::assets::static_handler)
         .with_state(state)
+}
+
+/// Inspect image magic bytes so only valid image files can be staged.
+pub fn detect_image_extension(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if bytes.starts_with(b"\xFF\xD8\xFF") {
+        Some("jpg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("gif")
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("webp")
+    } else if bytes.len() >= 26 && &bytes[0..2] == b"BM" {
+        Some("bmp")
+    } else {
+        None
+    }
+}
+
+pub fn save_pasted_image_bytes(
+    dir: &std::path::Path,
+    bytes: &[u8],
+) -> anyhow::Result<std::path::PathBuf> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let ext = detect_image_extension(bytes).ok_or_else(|| anyhow::anyhow!("unsupported image format"))?;
+    std::fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+
+    // Best-effort cleanup of staged pastes older than 24h.
+    let now = SystemTime::now();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata()
+                && meta.is_file()
+                && let Ok(modified) = meta.modified()
+                && now.duration_since(modified).is_ok_and(|age| age > Duration::from_secs(86_400))
+            {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+
+    let millis = now
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path = dir.join(format!("paste-{millis:x}-{seq:x}.{ext}"));
+    std::fs::write(&path, bytes)?;
+    Ok(path)
+}
+
+/// `POST /api/paste-image`: stage a pasted screenshot/image into the server's temporary
+/// directory and return its local path so coding agents (Claude Code, Codex, etc.) can read it.
+async fn paste_image_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if !bearer_ok(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if body.is_empty() {
+        return (StatusCode::BAD_REQUEST, "empty image body").into_response();
+    }
+    if detect_image_extension(&body).is_none() {
+        return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "unsupported image format").into_response();
+    }
+    let dir = std::env::temp_dir().join("gateterm-paste");
+    match tokio::task::spawn_blocking(move || save_pasted_image_bytes(&dir, &body)).await {
+        Ok(Ok(path)) => Json(serde_json::json!({
+            "path": path.to_string_lossy(),
+        }))
+        .into_response(),
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "failed to save pasted image");
+            (StatusCode::INTERNAL_SERVER_ERROR, "failed to save image").into_response()
+        }
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "image task panicked").into_response(),
+    }
 }
 
 /// Cached process-wide result; requesting it does not initiate another GitHub check.
@@ -182,4 +272,29 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) -> anyhow::Result
     }
     crate::conn::run(socket, state).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_common_image_formats_and_rejects_text() {
+        assert_eq!(detect_image_extension(b"\x89PNG\r\n\x1a\n1234"), Some("png"));
+        assert_eq!(detect_image_extension(b"\xFF\xD8\xFF\xE000"), Some("jpg"));
+        assert_eq!(detect_image_extension(b"GIF89a1234"), Some("gif"));
+        assert_eq!(detect_image_extension(b"RIFF\x00\x00\x00\x00WEBP"), Some("webp"));
+        assert_eq!(detect_image_extension(&[b'B', b'M', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), Some("bmp"));
+        assert_eq!(detect_image_extension(b"not an image"), None);
+    }
+
+    #[test]
+    fn saves_pasted_image_to_staging_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let png = b"\x89PNG\r\n\x1a\nfake-png-payload";
+        let path = save_pasted_image_bytes(tmp.path(), png).unwrap();
+        assert!(path.exists());
+        assert_eq!(path.extension().and_then(|s| s.to_str()), Some("png"));
+        assert_eq!(std::fs::read(&path).unwrap(), png);
+    }
 }

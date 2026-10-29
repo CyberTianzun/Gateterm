@@ -7,6 +7,8 @@ pub struct SessionInfo {
     pub cols: u16,
     pub rows: u16,
     pub created_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
