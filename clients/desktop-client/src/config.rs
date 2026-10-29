@@ -72,6 +72,15 @@ impl ServerProfile {
             format!("http://{without_ws}")
         }
     }
+
+    pub fn access_url(&self) -> String {
+        let base = self.http_base_url();
+        if self.token.trim().is_empty() {
+            base
+        } else {
+            format!("{base}/#token={}", self.token)
+        }
+    }
 }
 
 /// Parses a Gateterm access URL like `http://127.0.0.1:7683/#token=abc` or `http://host:port?token=abc`
@@ -131,6 +140,8 @@ pub struct DesktopClientConfig {
     #[serde(default = "default_scrollback")]
     pub max_scrollback: usize,
     #[serde(default = "default_true")]
+    pub close_to_tray: bool,
+    #[serde(default = "default_true")]
     pub start_embedded_server: bool,
     #[serde(default = "default_embedded_listen")]
     pub embedded_listen: String,
@@ -181,6 +192,7 @@ impl Default for DesktopClientConfig {
             font_size: default_font_size(),
             line_height: default_line_height(),
             max_scrollback: default_scrollback(),
+            close_to_tray: true,
             start_embedded_server: true,
             embedded_listen: listen.clone(),
             embedded_token: token.clone(),
@@ -240,19 +252,21 @@ impl DesktopClientConfig {
             self.embedded_listen = default_embedded_listen();
         }
         if !self.servers.iter().any(|s| s.is_embedded) {
+            let connect_addr = client_connect_host_port(&self.embedded_listen);
             self.servers.insert(
                 0,
                 ServerProfile {
                     id: BUILTIN_LOCAL_SERVER_ID.to_string(),
                     name: "Local Gateterm".to_string(),
-                    base_url: format!("http://{}", self.embedded_listen),
+                    base_url: format!("http://{connect_addr}"),
                     token: self.embedded_token.clone(),
                     is_embedded: true,
                     auto_connect: self.start_embedded_server,
                 },
             );
         } else if let Some(local) = self.servers.iter_mut().find(|s| s.is_embedded) {
-            local.base_url = format!("http://{}", self.embedded_listen);
+            let connect_addr = client_connect_host_port(&self.embedded_listen);
+            local.base_url = format!("http://{connect_addr}");
             local.token = self.embedded_token.clone();
         }
     }
@@ -267,6 +281,46 @@ impl DesktopClientConfig {
 
     pub fn remove_server(&mut self, id: &str) {
         self.servers.retain(|s| s.id != id || s.is_embedded);
+    }
+}
+
+pub fn generate_random_token() -> String {
+    default_embedded_token()
+}
+
+pub fn split_listen_host_port(listen: &str) -> (String, u16) {
+    if let Ok(addr) = listen.trim().parse::<std::net::SocketAddr>() {
+        let host = if addr.ip().is_ipv6() {
+            format!("[{}]", addr.ip())
+        } else {
+            addr.ip().to_string()
+        };
+        (host, addr.port())
+    } else if let Some((h, p)) = listen.trim().rsplit_once(':') {
+        let port = p.parse::<u16>().unwrap_or(0);
+        let host = if h.trim().is_empty() {
+            "127.0.0.1".to_string()
+        } else {
+            h.trim().to_string()
+        };
+        (host, port)
+    } else {
+        ("127.0.0.1".to_string(), 17683)
+    }
+}
+
+pub fn client_connect_host_port(listen: &str) -> String {
+    if let Ok(addr) = listen.trim().parse::<std::net::SocketAddr>() {
+        let host = if addr.ip().is_unspecified() {
+            "127.0.0.1".to_string()
+        } else if addr.ip().is_ipv6() {
+            format!("[{}]", addr.ip())
+        } else {
+            addr.ip().to_string()
+        };
+        format!("{host}:{}", addr.port())
+    } else {
+        listen.trim().to_string()
     }
 }
 

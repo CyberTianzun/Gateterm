@@ -454,4 +454,23 @@ impl GateHttpClient {
         }
         Ok(resp.json().await.unwrap_or_default())
     }
+
+    pub async fn upload_pasted_image(&self, bytes: Vec<u8>) -> Result<String> {
+        #[derive(Deserialize)]
+        struct PasteImageResp {
+            path: String,
+        }
+        let resp = self
+            .http
+            .post(self.url("/api/paste-image"))
+            .bearer_auth(&self.token)
+            .body(bytes)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            bail!("POST /api/paste-image returned {}", resp.status());
+        }
+        let parsed: PasteImageResp = resp.json().await?;
+        Ok(parsed.path)
+    }
 }

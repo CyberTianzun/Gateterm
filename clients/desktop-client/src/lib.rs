@@ -3,6 +3,7 @@ pub mod config;
 pub mod gpui_tokio;
 pub mod i18n;
 pub mod local_server;
+pub mod system;
 pub mod terminal;
 pub mod theme;
 pub mod ui;
