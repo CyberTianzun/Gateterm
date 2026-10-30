@@ -8,6 +8,9 @@ uniffi::setup_scaffolding!();
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use gateterm_client_core::clipboard::{
+    ClipboardEvent, encode_osc5522_paste_offer, encode_osc5522_read_reply,
+};
 use gateterm_client_core::keyboard::{KeyEventKind, KeyInput};
 use gateterm_client_core::term::{ClientTerm, ClientTermState};
 use gateterm_cloud_client::ops::{self, OpsError};
@@ -171,6 +174,7 @@ pub struct TermState {
     pub bracketed_paste: bool,
     pub modify_other_keys: u8,
     pub kitty_keyboard_flags: u8,
+    pub kitty_clipboard_paste_mode: bool,
     pub scroll_offset: u32,
     pub max_scroll_offset: u32,
     pub mouse_tracking: bool,
@@ -188,9 +192,25 @@ impl From<ClientTermState> for TermState {
             bracketed_paste: s.bracketed_paste,
             modify_other_keys: s.modify_other_keys,
             kitty_keyboard_flags: s.kitty_keyboard_flags,
+            kitty_clipboard_paste_mode: s.kitty_clipboard_paste_mode,
             scroll_offset: s.scroll_offset,
             max_scroll_offset: s.max_scroll_offset,
             mouse_tracking: s.mouse_tracking,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum FfiClipboardEvent {
+    Write { mime: String, data: Vec<u8> },
+    ReadRequest { mimes: Vec<String> },
+}
+
+impl From<ClipboardEvent> for FfiClipboardEvent {
+    fn from(ev: ClipboardEvent) -> Self {
+        match ev {
+            ClipboardEvent::Write { mime, data } => Self::Write { mime, data },
+            ClipboardEvent::ReadRequest { mimes } => Self::ReadRequest { mimes },
         }
     }
 }
@@ -274,6 +294,25 @@ impl TermEngine {
 
     pub fn encode_paste(&self, text: String) -> Vec<u8> {
         self.inner.lock().unwrap().encode_paste(&text)
+    }
+
+    pub fn drain_clipboard_events(&self) -> Vec<FfiClipboardEvent> {
+        self.inner
+            .lock()
+            .unwrap()
+            .drain_clipboard_events()
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+
+    pub fn encode_osc5522_read_reply(&self, mime: String, data: Vec<u8>) -> Vec<u8> {
+        encode_osc5522_read_reply(&mime, &data)
+    }
+
+    pub fn encode_osc5522_paste_offer(&self, available_mimes: Vec<String>) -> Vec<u8> {
+        let refs: Vec<&str> = available_mimes.iter().map(String::as_str).collect();
+        encode_osc5522_paste_offer(&refs)
     }
 
     #[allow(clippy::too_many_arguments)]

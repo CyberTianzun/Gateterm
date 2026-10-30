@@ -60,6 +60,7 @@ impl EventListener for ReplyListener {
 #[derive(Default)]
 struct SnapshotModes {
     modify_other_keys: u8,
+    kitty_clipboard_paste_mode: bool,
     alt_screen: bool,
     scroll_region: Option<(usize, Option<usize>)>,
     active_charset: CharsetIndex,
@@ -70,14 +71,26 @@ impl Handler for SnapshotModes {
         self.active_charset = charset;
     }
     fn set_private_mode(&mut self, mode: PrivateMode) {
-        if mode == PrivateMode::Named(NamedPrivateMode::SwapScreenAndSetRestoreCursor) {
-            self.alt_screen = true;
+        match mode {
+            PrivateMode::Named(NamedPrivateMode::SwapScreenAndSetRestoreCursor) => {
+                self.alt_screen = true;
+            }
+            PrivateMode::Unknown(5522) => {
+                self.kitty_clipboard_paste_mode = true;
+            }
+            _ => {}
         }
     }
 
     fn unset_private_mode(&mut self, mode: PrivateMode) {
-        if mode == PrivateMode::Named(NamedPrivateMode::SwapScreenAndSetRestoreCursor) {
-            self.alt_screen = false;
+        match mode {
+            PrivateMode::Named(NamedPrivateMode::SwapScreenAndSetRestoreCursor) => {
+                self.alt_screen = false;
+            }
+            PrivateMode::Unknown(5522) => {
+                self.kitty_clipboard_paste_mode = false;
+            }
+            _ => {}
         }
     }
 
@@ -372,6 +385,9 @@ impl SessionGrid {
         }
         if kitty_flags != 0 {
             out.push_str(&format!("\x1b[>{kitty_flags}u"));
+        }
+        if self.snapshot_modes.kitty_clipboard_paste_mode {
+            out.push_str("\x1b[?5522h");
         }
         let mut out = out.into_bytes();
         out.extend_from_slice(self.stream_tail.pending());
@@ -855,5 +871,26 @@ mod tests {
         b.advance(&repaint);
         b.advance(b"\x1b[?u");
         assert_eq!(String::from_utf8(b.take_pty_replies()).unwrap(), "\x1b[?5u");
+    }
+
+    #[test]
+    fn repaint_restores_kitty_clipboard_paste_mode_and_resets_on_ris() {
+        let mut a = SessionGrid::new(20, 5);
+        assert!(!String::from_utf8_lossy(&a.repaint()).contains("\x1b[?5522h"));
+
+        a.advance(b"\x1b[?5522h");
+        assert!(a.snapshot_modes.kitty_clipboard_paste_mode);
+        let repaint = a.repaint();
+        assert!(String::from_utf8_lossy(&repaint).contains("\x1b[?5522h"));
+
+        let mut b = SessionGrid::new(20, 5);
+        b.advance(&repaint);
+        assert!(b.snapshot_modes.kitty_clipboard_paste_mode);
+
+        a.advance(b"\x1b[?5522l");
+        assert!(!a.snapshot_modes.kitty_clipboard_paste_mode);
+
+        a.advance(b"\x1b[?5522h\x1bc");
+        assert!(!a.snapshot_modes.kitty_clipboard_paste_mode);
     }
 }

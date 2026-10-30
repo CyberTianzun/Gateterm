@@ -2,6 +2,7 @@ package ai.eclosion.gateterm.android.term
 
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import uniffi.gateterm_cloud_ffi.FfiClipboardEvent
 import uniffi.gateterm_cloud_ffi.TermEngine
 import uniffi.gateterm_cloud_ffi.TermState
 
@@ -33,6 +34,9 @@ class AlacrittyTerm(
         private set
     /** Kitty 键盘协议标志位（`CSI > flags u`）。 */
     var kittyKeyboardFlags: Int = 0
+        private set
+    /** Kitty 剪贴板粘贴事件模式（`DECSET 5522`）。 */
+    var kittyClipboardPasteMode: Boolean = false
         private set
 
     /** 0 表示贴着最新一行。正数是向上翻了多少行。alt-screen 没有回滚。 */
@@ -67,6 +71,7 @@ class AlacrittyTerm(
         bracketedPaste = st.bracketedPaste
         modifyOtherKeys = st.modifyOtherKeys.toInt()
         kittyKeyboardFlags = st.kittyKeyboardFlags.toInt()
+        kittyClipboardPasteMode = st.kittyClipboardPasteMode
         scrollOffset = st.scrollOffset.toInt()
         mouseTracking = st.mouseTracking
     }
@@ -146,6 +151,18 @@ class AlacrittyTerm(
 
     fun encodePaste(text: String): ByteArray = synchronized(lock) {
         engine.encodePaste(text)
+    }
+
+    fun drainClipboardEvents(): List<FfiClipboardEvent> = synchronized(lock) {
+        engine.drainClipboardEvents()
+    }
+
+    fun encodeOsc5522ReadReply(mime: String, data: ByteArray): ByteArray = synchronized(lock) {
+        engine.encodeOsc5522ReadReply(mime, data)
+    }
+
+    fun encodeOsc5522PasteOffer(availableMimes: List<String>): ByteArray = synchronized(lock) {
+        engine.encodeOsc5522PasteOffer(availableMimes)
     }
 
     fun encodeKey(

@@ -4,7 +4,7 @@ use axum::Router;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post, put};
-use gateterm_cloud_ffi::{CloudAccount, CloudFfiError, Purpose, TermEngine};
+use gateterm_cloud_ffi::{CloudAccount, CloudFfiError, FfiClipboardEvent, Purpose, TermEngine};
 use serde_json::{Value, json};
 
 type Seen = Arc<Mutex<Vec<(String, Option<String>, Value)>>>;
@@ -282,5 +282,17 @@ fn term_engine_encodes_kitty_and_win32_keys() {
     assert_eq!(
         win32_shift_enter,
         b"\x1b[13;28;13;1;16;1_\x1b[13;28;13;0;16;1_"
+    );
+
+    // OSC 52, OSC 5522, and DECSET 5522 clipboard events
+    assert!(!engine.state().kitty_clipboard_paste_mode);
+    let st_clip = engine.write(b"\x1b]52;c;aGVsbG8=\x07\x1b[?5522h".to_vec());
+    assert!(st_clip.kitty_clipboard_paste_mode);
+    assert_eq!(
+        engine.drain_clipboard_events(),
+        vec![FfiClipboardEvent::Write {
+            mime: "text/plain".into(),
+            data: b"hello".to_vec(),
+        }]
     );
 }

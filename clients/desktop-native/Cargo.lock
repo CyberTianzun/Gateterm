@@ -2408,6 +2408,7 @@ name = "gateterm-client-core"
 version = "0.3.1"
 dependencies = [
  "alacritty_terminal",
+ "base64",
 ]
 
 [[package]]

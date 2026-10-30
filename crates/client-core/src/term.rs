@@ -1,10 +1,14 @@
-use alacritty_terminal::event::VoidListener;
+use std::sync::{Arc, Mutex};
+
+use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell as TermCell, Flags};
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, Handler, ModifyOtherKeys, NamedColor, Processor, Rgb};
+
+use crate::clipboard::{ClipboardEvent, Osc5522Parser};
 
 pub const COLOR_INDEX_DEFAULT: i32 = -1;
 pub const COLOR_INDEX_RGB: i32 = -2;
@@ -74,6 +78,7 @@ pub struct ClientTermState {
     pub bracketed_paste: bool,
     pub modify_other_keys: u8,
     pub kitty_keyboard_flags: u8,
+    pub kitty_clipboard_paste_mode: bool,
     pub scroll_offset: u32,
     pub max_scroll_offset: u32,
     pub mouse_tracking: bool,
@@ -211,12 +216,33 @@ impl CsiColonFilter {
     }
 }
 
+#[derive(Clone)]
+struct ClientEventListener {
+    clipboard_events: Arc<Mutex<Vec<ClipboardEvent>>>,
+}
+
+impl EventListener for ClientEventListener {
+    fn send_event(&self, event: Event) {
+        if let Event::ClipboardStore(_, text) = event {
+            self.clipboard_events
+                .lock()
+                .unwrap()
+                .push(ClipboardEvent::Write {
+                    mime: "text/plain".into(),
+                    data: text.into_bytes(),
+                });
+        }
+    }
+}
+
 pub struct ClientTerm {
-    term: Term<VoidListener>,
+    term: Term<ClientEventListener>,
     parser: Processor,
     key_modes: KeyModes,
     key_modes_parser: Processor,
     csi_filter: CsiColonFilter,
+    osc5522: Osc5522Parser,
+    clipboard_events: Arc<Mutex<Vec<ClipboardEvent>>>,
     cols: u16,
     rows: u16,
     max_scrollback: usize,
@@ -234,12 +260,21 @@ impl ClientTerm {
             kitty_keyboard: true,
             ..Config::default()
         };
+        let clipboard_events = Arc::new(Mutex::new(Vec::new()));
         Self {
-            term: Term::new(config, &size, VoidListener),
+            term: Term::new(
+                config,
+                &size,
+                ClientEventListener {
+                    clipboard_events: clipboard_events.clone(),
+                },
+            ),
             parser: Processor::new(),
             key_modes: KeyModes::default(),
             key_modes_parser: Processor::new(),
             csi_filter: CsiColonFilter::default(),
+            osc5522: Osc5522Parser::new(),
+            clipboard_events,
             cols,
             rows,
             max_scrollback,
@@ -252,10 +287,18 @@ impl ClientTerm {
         let parser = &mut self.parser;
         let key_modes = &mut self.key_modes;
         let key_modes_parser = &mut self.key_modes_parser;
-        self.csi_filter.filter(bytes, |chunk| {
-            parser.advance(term, chunk);
-            key_modes_parser.advance(key_modes, chunk);
-        });
+        let csi_filter = &mut self.csi_filter;
+        let clipboard_events = &self.clipboard_events;
+        self.osc5522.filter(
+            bytes,
+            |ev| clipboard_events.lock().unwrap().push(ev),
+            |passthrough| {
+                csi_filter.filter(passthrough, |chunk| {
+                    parser.advance(term, chunk);
+                    key_modes_parser.advance(key_modes, chunk);
+                });
+            },
+        );
         self.clamp_scroll_offset();
         self.state()
     }
@@ -267,13 +310,25 @@ impl ClientTerm {
             kitty_keyboard: true,
             ..Config::default()
         };
-        self.term = Term::new(config, &size, VoidListener);
+        self.clipboard_events.lock().unwrap().clear();
+        self.term = Term::new(
+            config,
+            &size,
+            ClientEventListener {
+                clipboard_events: self.clipboard_events.clone(),
+            },
+        );
         self.parser = Processor::new();
         self.key_modes = KeyModes::default();
         self.key_modes_parser = Processor::new();
         self.csi_filter.reset();
+        self.osc5522.reset();
         self.scroll_offset = 0;
         self.state()
+    }
+
+    pub fn drain_clipboard_events(&mut self) -> Vec<ClipboardEvent> {
+        std::mem::take(&mut *self.clipboard_events.lock().unwrap())
     }
 
     pub fn resize(&mut self, new_cols: u16, new_rows: u16) -> ClientTermState {
@@ -332,6 +387,7 @@ impl ClientTerm {
             bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE),
             modify_other_keys: self.key_modes.modify_other_keys,
             kitty_keyboard_flags: kitty_flags_from_mode(mode),
+            kitty_clipboard_paste_mode: self.osc5522.paste_mode(),
             scroll_offset: self.viewport_offset() as u32,
             max_scroll_offset: self.max_scroll_offset() as u32,
             mouse_tracking: mode.intersects(TermMode::MOUSE_MODE),
