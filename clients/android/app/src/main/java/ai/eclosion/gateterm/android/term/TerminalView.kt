@@ -1,7 +1,16 @@
 package ai.eclosion.gateterm.android.term
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Rect
+import android.graphics.RectF
+import android.net.Uri
 import android.os.Build
 import android.text.InputType
 import android.util.AttributeSet
@@ -14,6 +23,9 @@ import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
+import java.nio.ByteBuffer
+import uniffi.gateterm_cloud_ffi.FfiClipboardEvent
+import uniffi.gateterm_cloud_ffi.FfiViewportImage
 
 class TerminalView @JvmOverloads constructor(
     context: Context,
@@ -21,6 +33,9 @@ class TerminalView @JvmOverloads constructor(
 ) : View(context, attrs) {
     var applicationCursor: Boolean = false
     var modifyOtherKeys: Int = 0
+    var term: AlacrittyTerm? = null
+    var cellWidthPx: Float = 8f
+    var cellHeightPx: Float = 16f
 
     var onInput: (ByteArray) -> Unit = {}
     var keyboard: TerminalKeyboard = TerminalKeyboard("")
@@ -30,6 +45,7 @@ class TerminalView @JvmOverloads constructor(
     private var composing = false
     private var deadAccent = 0
     private val textKeys = mutableSetOf<Long>()
+    private val layerPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
     init {
         isFocusable = true
@@ -38,6 +54,46 @@ class TerminalView @JvmOverloads constructor(
         keepScreenOn = true
         setBackgroundColor(android.graphics.Color.TRANSPARENT)
         setWillNotDraw(true)
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val t = term ?: return
+        val cols = t.cols
+        val rows = t.rows
+        if (cols <= 0 || rows <= 0) return
+        val (ox, oy) = TermGeometry.origin(
+            width.toFloat(),
+            height.toFloat(),
+            cols,
+            rows,
+            cellWidthPx,
+            cellHeightPx,
+        )
+        val images = t.visibleImages()
+        drawViewportImages(canvas, images, { it < 0 }, ox, oy, cellWidthPx, cellHeightPx, layerPaint)
+        val snap = t.snapshot()
+        val density = resources.displayMetrics.density.coerceAtLeast(1f)
+        for (y in 0 until rows) {
+            val row = snap.getOrNull(y) ?: continue
+            val top = oy + y * cellHeightPx
+            for (x in 0 until cols) {
+                val cell = row.getOrNull(x) ?: continue
+                if (cell.width == 0 || !hasFancyUnderline(cell.attrs)) continue
+                drawFancyUnderline(
+                    canvas,
+                    cell.attrs,
+                    ox + x * cellWidthPx,
+                    top,
+                    cellWidthPx * cell.width.coerceAtLeast(1),
+                    cellHeightPx,
+                    (cell.fg and 0x00FFFFFF) or 0xFF000000.toInt(),
+                    density,
+                    layerPaint,
+                )
+            }
+        }
+        drawViewportImages(canvas, images, { it >= 0 }, ox, oy, cellWidthPx, cellHeightPx, layerPaint)
     }
 
     fun showKeyboard() {
@@ -234,5 +290,142 @@ class TerminalView @JvmOverloads constructor(
     private fun consumeModifiers() {
         softModifiers = KeyModifiers()
         onModifiersConsumed()
+    }
+
+    companion object {
+        fun hasFancyUnderline(attrs: Int): Boolean {
+            return (attrs and (Attr.DOUBLE_UNDERLINE or Attr.UNDERCURL or Attr.DOTTED_UNDERLINE or Attr.DASHED_UNDERLINE or Attr.HYPERLINK)) != 0
+        }
+
+        fun drawViewportImages(
+            canvas: Canvas,
+            images: List<FfiViewportImage>,
+            zFilter: (Int) -> Boolean,
+            ox: Float,
+            oy: Float,
+            cellW: Float,
+            cellH: Float,
+            paint: Paint,
+        ) {
+            for (img in images) {
+                if (!zFilter(img.zIndex)) continue
+                val w = img.widthPx.toInt()
+                val h = img.heightPx.toInt()
+                if (w <= 0 || h <= 0 || img.rgba.size < w * h * 4) continue
+                val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                bmp.copyPixelsFromBuffer(ByteBuffer.wrap(img.rgba))
+                val left = ox + img.col.toFloat() * cellW
+                val top = oy + img.row.toFloat() * cellH
+                val right = left + img.cols.coerceAtLeast(1u).toFloat() * cellW
+                val bottom = top + img.rows.coerceAtLeast(1u).toFloat() * cellH
+                canvas.drawBitmap(bmp, null, RectF(left, top, right, bottom), paint)
+                bmp.recycle()
+            }
+        }
+
+        fun drawFancyUnderline(
+            canvas: Canvas,
+            attrs: Int,
+            left: Float,
+            top: Float,
+            width: Float,
+            cellH: Float,
+            color: Int,
+            density: Float,
+            paint: Paint,
+        ) {
+            val stroke = density.coerceAtLeast(1f)
+            val bottom = top + cellH
+            paint.color = color
+            paint.strokeWidth = stroke
+            when {
+                (attrs and Attr.DOUBLE_UNDERLINE) != 0 -> {
+                    paint.style = Paint.Style.FILL
+                    canvas.drawRect(left, bottom - stroke * 3f, left + width, bottom - stroke * 2f, paint)
+                    canvas.drawRect(left, bottom - stroke, left + width, bottom, paint)
+                }
+                (attrs and Attr.UNDERCURL) != 0 -> {
+                    paint.style = Paint.Style.STROKE
+                    val waveY = bottom - stroke * 2f
+                    val step = (stroke * 3f).coerceAtLeast(3f)
+                    val path = Path()
+                    path.moveTo(left, waveY)
+                    var x = left
+                    var up = true
+                    while (x < left + width) {
+                        val nextX = (x + step).coerceAtMost(left + width)
+                        val midX = (x + nextX) * 0.5f
+                        val ctrlY = if (up) waveY - stroke * 1.5f else waveY + stroke * 1.5f
+                        path.quadTo(midX, ctrlY, nextX, waveY)
+                        x = nextX
+                        up = !up
+                    }
+                    canvas.drawPath(path, paint)
+                    paint.style = Paint.Style.FILL
+                }
+                (attrs and Attr.DOTTED_UNDERLINE) != 0 -> {
+                    paint.style = Paint.Style.FILL
+                    val dot = (stroke * 2f).coerceAtLeast(2f)
+                    val y0 = bottom - stroke * 2f
+                    var x = left
+                    while (x < left + width) {
+                        val x1 = (x + dot).coerceAtMost(left + width)
+                        canvas.drawRect(x, y0, x1, y0 + stroke, paint)
+                        x += dot * 2f
+                    }
+                }
+                (attrs and Attr.DASHED_UNDERLINE) != 0 -> {
+                    paint.style = Paint.Style.FILL
+                    val dash = (stroke * 4f).coerceAtLeast(4f)
+                    val gap = (stroke * 2f).coerceAtLeast(2f)
+                    val y0 = bottom - stroke * 2f
+                    var x = left
+                    while (x < left + width) {
+                        val x1 = (x + dash).coerceAtMost(left + width)
+                        canvas.drawRect(x, y0, x1, y0 + stroke, paint)
+                        x += dash + gap
+                    }
+                }
+                (attrs and Attr.HYPERLINK) != 0 && (attrs and Attr.UNDERLINE) == 0 -> {
+                    paint.style = Paint.Style.FILL
+                    val dot = (stroke * 2f).coerceAtLeast(2f)
+                    val y0 = bottom - stroke * 1.5f
+                    var x = left
+                    while (x < left + width) {
+                        val x1 = (x + dot).coerceAtMost(left + width)
+                        canvas.drawRect(x, y0, x1, y0 + stroke, paint)
+                        x += dot * 2f
+                    }
+                }
+            }
+        }
+
+        fun drainClipboardToSystem(context: Context, term: AlacrittyTerm) {
+            val events = term.drainClipboardEvents()
+            if (events.isEmpty()) return
+            val cm = context.getSystemService(ClipboardManager::class.java) ?: return
+            for (ev in events) {
+                when (ev) {
+                    is FfiClipboardEvent.Write -> {
+                        if (ev.mime == "text/plain" || ev.mime.startsWith("text/plain;")) {
+                            val text = ev.data.toString(Charsets.UTF_8)
+                            cm.setPrimaryClip(ClipData.newPlainText("gateterm", text))
+                        }
+                    }
+                    is FfiClipboardEvent.ReadRequest -> {}
+                }
+            }
+        }
+
+        fun openHyperlinkAt(context: Context, term: AlacrittyTerm, col: Int, row: Int): Boolean {
+            val url = term.hyperlinkAt(col, row) ?: return false
+            return runCatching {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+                true
+            }.getOrDefault(false)
+        }
     }
 }

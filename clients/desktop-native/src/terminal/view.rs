@@ -2,15 +2,21 @@
 //! manages viewport selection, scrollback, mouse tracking, clipboard copy/paste,
 //! and channel input/resize callbacks.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
+use std::sync::Arc;
 
+use gateterm_client_core::clipboard::{ClipboardEvent, encode_osc5522_read_reply};
+use gateterm_client_core::graphics::ViewportImage;
 use gateterm_client_core::term::ClientTerm;
 use gpui::{
     App, Bounds, ClipboardEntry, ClipboardItem, Context, EntityInputHandler, FocusHandle,
-    Focusable, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollWheelEvent,
-    SharedString, Styled as _, UTF16Selection, Window, div, point, px,
+    Focusable, Image, ImageFormat, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render,
+    RenderImage, ScrollWheelEvent, SharedString, Styled as _, UTF16Selection, Window, div, point,
+    px,
 };
 use gpui_component::{
     ActiveTheme as _, Sizable as _,
@@ -67,6 +73,8 @@ pub struct TerminalView {
     // Pending multiline paste awaiting user confirmation when bracketed paste is disabled
     pub pending_paste: Option<String>,
 
+    render_image_cache: RefCell<HashMap<(u32, usize), Arc<RenderImage>>>,
+
     on_input: Option<InputCallback>,
     on_resize: Option<ResizeCallback>,
     http_client: Option<GateHttpClient>,
@@ -111,6 +119,7 @@ impl TerminalView {
             search_matches: Vec::new(),
             search_current_idx: None,
             pending_paste: None,
+            render_image_cache: RefCell::new(HashMap::new()),
             on_input: None,
             on_resize: None,
             http_client: None,
@@ -134,11 +143,67 @@ impl TerminalView {
 
     pub fn write_output(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
         self.term.write(bytes);
+        for event in self.term.drain_clipboard_events() {
+            match event {
+                ClipboardEvent::Write { mime, data } => {
+                    if (mime == "text/plain" || mime.starts_with("text/plain;"))
+                        && let Ok(text) = String::from_utf8(data)
+                    {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    }
+                }
+                ClipboardEvent::ReadRequest { mimes } => {
+                    if mimes
+                        .iter()
+                        .any(|m| m == "text/plain" || m.starts_with("text/plain;"))
+                        && let Some(item) = cx.read_from_clipboard()
+                        && let Some(text) = item.text()
+                    {
+                        let reply = encode_osc5522_read_reply("text/plain", text.as_bytes());
+                        self.send_bytes(&reply, cx);
+                    }
+                }
+            }
+        }
         cx.notify();
     }
 
     pub fn write_pty_bytes(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
         self.write_output(bytes, cx);
+    }
+
+    pub(crate) fn render_image_for(
+        &self,
+        img: &ViewportImage,
+        cx: &App,
+    ) -> Option<Arc<RenderImage>> {
+        if img.width_px == 0
+            || img.height_px == 0
+            || img.rgba.len() != (img.width_px as usize) * (img.height_px as usize) * 4
+        {
+            return None;
+        }
+        let key = (img.image_id, Arc::as_ptr(&img.rgba) as usize);
+        if let Some(cached) = self.render_image_cache.borrow().get(&key) {
+            return Some(cached.clone());
+        }
+        let mut png_bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png_bytes, img.width_px, img.height_px);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().ok()?;
+            writer.write_image_data(&img.rgba).ok()?;
+        }
+        let rendered = Image::from_bytes(ImageFormat::Png, png_bytes)
+            .to_image_data(cx.svg_renderer())
+            .ok()?;
+        let mut cache = self.render_image_cache.borrow_mut();
+        if cache.len() >= 128 {
+            cache.clear();
+        }
+        cache.insert(key, rendered.clone());
+        Some(rendered)
     }
 
     pub fn mark_exited(&mut self, cx: &mut Context<Self>) {
@@ -167,6 +232,7 @@ impl TerminalView {
         self.term.reset();
         self.clear_selection();
         self.pending_paste = None;
+        self.render_image_cache.borrow_mut().clear();
         cx.notify();
     }
 
@@ -611,6 +677,16 @@ impl TerminalView {
             MouseButton::Right => 2,
             _ => return,
         };
+
+        if ev.button == MouseButton::Left
+            && (ev.modifiers.secondary() || ev.modifiers.control || ev.modifiers.platform)
+            && pt.col >= 0
+            && pt.row >= 0
+            && let Some(url) = self.term.hyperlink_at(pt.col as usize, pt.row as usize)
+        {
+            cx.open_url(&url);
+            return;
+        }
 
         if !ev.modifiers.shift
             && let Some(bytes) = self.term.encode_pointer(pt.col, pt.row, btn_code, true, false)
@@ -1072,6 +1148,27 @@ mod tests {
             assert_eq!(
                 sent.borrow().as_slice(),
                 &[b"\x1b[200~safe[20[201~1~; rm -rf /\r\x1b[201~".to_vec()]
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn drains_osc52_clipboard_writes_and_resolves_osc8_hyperlinks(cx: &mut TestAppContext) {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let view = terminal_view(cx, requests);
+        view.update(cx, |view, cx| {
+            // OSC 52 write "hello" (aGVsbG8=) and OSC 8 hyperlink
+            view.write_output(
+                b"\x1b]52;c;aGVsbG8=\x07\x1b]8;;https://example.com\x07link\x1b]8;;\x07",
+                cx,
+            );
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()),
+                Some("hello".to_string())
+            );
+            assert_eq!(
+                view.term.hyperlink_at(0, 0),
+                Some("https://example.com".to_string())
             );
         });
     }

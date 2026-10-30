@@ -1,5 +1,7 @@
 package ai.eclosion.gateterm.android.term
 
+import uniffi.gateterm_cloud_ffi.FfiViewportImage
+
 /** 一次已提交的终端画面。和终端状态机解耦，reset/resize 不能改正在显示的帧。 */
 data class TermFrame(
     val cells: Array<Array<Cell>>,
@@ -9,6 +11,7 @@ data class TermFrame(
     val cursorY: Int,
     val cursorVisible: Boolean,
     val scrollOffset: Int = 0,
+    val images: List<FfiViewportImage> = emptyList(),
 ) {
     companion object {
         val Empty = TermFrame(
@@ -34,12 +37,14 @@ data class TermFrame(
                 cursorY = if (visible) cy else term.cursorY,
                 cursorVisible = visible,
                 scrollOffset = term.scrollOffset,
+                images = term.visibleImages(),
             )
         }
     }
 
     fun hasContent(): Boolean {
         if (cols <= 0 || rows <= 0) return false
+        if (images.isNotEmpty()) return true
         for (row in cells) {
             for (cell in row) {
                 if (cell.codepoint != ' '.code && cell.codepoint != 0) return true
@@ -58,6 +63,7 @@ data class TermFrame(
             cursorY == other.cursorY &&
             cursorVisible == other.cursorVisible &&
             scrollOffset == other.scrollOffset &&
+            images == other.images &&
             cells.contentDeepEquals(other.cells)
     }
 
@@ -69,6 +75,7 @@ data class TermFrame(
         result = 31 * result + cursorY
         result = 31 * result + cursorVisible.hashCode()
         result = 31 * result + scrollOffset
+        result = 31 * result + images.hashCode()
         return result
     }
 }

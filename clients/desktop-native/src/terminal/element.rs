@@ -6,11 +6,14 @@
 //! viewport selection highlight, IME composition preedit, block/hollow cursor,
 //! and scrollback indicator.
 
+use std::sync::Arc;
+
+use gateterm_client_core::graphics::ViewportImage;
 use gateterm_client_core::term::attr;
 use gpui::{
     App, BorderStyle, Bounds, ContentMask, Corners, Element, ElementId, ElementInputHandler,
     Entity, Font, FontFeatures, FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior,
-    Hsla, IntoElement, LayoutId, Pixels, SharedString, StrikethroughStyle, Style,
+    Hsla, IntoElement, LayoutId, Pixels, RenderImage, SharedString, StrikethroughStyle, Style,
     TextAlign, TextRun, UnderlineStyle, Window, fill, outline, point, px, relative, size,
 };
 
@@ -47,10 +50,129 @@ struct RenderCell {
     bold: bool,
     italic: bool,
     underline: bool,
+    double_underline: bool,
+    undercurl: bool,
+    dotted_underline: bool,
+    dashed_underline: bool,
+    hyperlink: bool,
     strike: bool,
     width: u8,
     selected: bool,
     search_match: Option<bool>,
+}
+
+pub fn image_cell_bounds(
+    origin_x: Pixels,
+    origin_y: Pixels,
+    cell_w: Pixels,
+    cell_h: Pixels,
+    col: u32,
+    row: i32,
+    cols: u32,
+    rows: u32,
+) -> Bounds<Pixels> {
+    Bounds::new(
+        point(
+            origin_x + cell_w * (col as f32),
+            origin_y + cell_h * (row as f32),
+        ),
+        size(
+            cell_w * (cols.max(1) as f32),
+            cell_h * (rows.max(1) as f32),
+        ),
+    )
+}
+
+pub fn double_underline_bounds(
+    origin_x: Pixels,
+    row_bottom: Pixels,
+    width: Pixels,
+    thickness: Pixels,
+) -> [Bounds<Pixels>; 2] {
+    let h = thickness.max(px(1.0));
+    [
+        Bounds::new(point(origin_x, row_bottom - h * 3.0), size(width, h)),
+        Bounds::new(point(origin_x, row_bottom - h), size(width, h)),
+    ]
+}
+
+pub fn undercurl_segments(
+    origin_x: Pixels,
+    row_bottom: Pixels,
+    width: Pixels,
+    thickness: Pixels,
+) -> Vec<Bounds<Pixels>> {
+    let w = width.as_f32().max(0.0);
+    let h = thickness.as_f32().max(1.0);
+    let base_y = row_bottom.as_f32() - h * 2.0;
+    let step = (h * 2.0).max(2.0);
+    let mut out = Vec::new();
+    let mut dx = 0.0f32;
+    let mut idx = 0usize;
+    while dx < w {
+        let seg_w = (w - dx).min(step);
+        let dy = match idx % 4 {
+            0 => 0.0,
+            1 => -h,
+            2 => 0.0,
+            _ => h,
+        };
+        out.push(Bounds::new(
+            point(px(origin_x.as_f32() + dx), px(base_y + dy)),
+            size(px(seg_w), px(h)),
+        ));
+        dx += step;
+        idx += 1;
+    }
+    out
+}
+
+pub fn dotted_underline_segments(
+    origin_x: Pixels,
+    row_bottom: Pixels,
+    width: Pixels,
+    thickness: Pixels,
+) -> Vec<Bounds<Pixels>> {
+    let w = width.as_f32().max(0.0);
+    let h = thickness.as_f32().max(1.0);
+    let y = row_bottom.as_f32() - h * 2.0;
+    let dot = (h * 2.0).max(2.0);
+    let gap = dot;
+    let mut out = Vec::new();
+    let mut dx = 0.0f32;
+    while dx < w {
+        let seg_w = (w - dx).min(dot);
+        out.push(Bounds::new(
+            point(px(origin_x.as_f32() + dx), px(y)),
+            size(px(seg_w), px(h)),
+        ));
+        dx += dot + gap;
+    }
+    out
+}
+
+pub fn dashed_underline_segments(
+    origin_x: Pixels,
+    row_bottom: Pixels,
+    width: Pixels,
+    thickness: Pixels,
+) -> Vec<Bounds<Pixels>> {
+    let w = width.as_f32().max(0.0);
+    let h = thickness.as_f32().max(1.0);
+    let y = row_bottom.as_f32() - h * 2.0;
+    let dash = (h * 4.0).max(4.0);
+    let gap = (h * 2.0).max(2.0);
+    let mut out = Vec::new();
+    let mut dx = 0.0f32;
+    while dx < w {
+        let seg_w = (w - dx).min(dash);
+        out.push(Bounds::new(
+            point(px(origin_x.as_f32() + dx), px(y)),
+            size(px(seg_w), px(h)),
+        ));
+        dx += dash + gap;
+    }
+    out
 }
 
 fn disable_ligatures() -> FontFeatures {
@@ -197,6 +319,8 @@ impl Element for TerminalElement {
             cells,
             ime_marked,
             cursor_bounds,
+            under_text_images,
+            over_text_images,
         ) = {
             let view = self.view.read(cx);
             let st = view.term.state();
@@ -232,6 +356,11 @@ impl Element for TerminalElement {
                         bold: (c.attrs & attr::BOLD) != 0,
                         italic: (c.attrs & attr::ITALIC) != 0,
                         underline: (c.attrs & attr::UNDERLINE) != 0,
+                        double_underline: (c.attrs & attr::DOUBLE_UNDERLINE) != 0,
+                        undercurl: (c.attrs & attr::UNDERCURL) != 0,
+                        dotted_underline: (c.attrs & attr::DOTTED_UNDERLINE) != 0,
+                        dashed_underline: (c.attrs & attr::DASHED_UNDERLINE) != 0,
+                        hyperlink: (c.attrs & attr::HYPERLINK) != 0,
                         strike: (c.attrs & attr::STRIKE) != 0,
                         width: c.width,
                         selected: view.is_cell_selected(x as i32, y as i32),
@@ -248,6 +377,18 @@ impl Element for TerminalElement {
                 size(prepaint.cell_width, prepaint.line_height),
             );
 
+            let mut under_imgs: Vec<(ViewportImage, Arc<RenderImage>)> = Vec::new();
+            let mut over_imgs: Vec<(ViewportImage, Arc<RenderImage>)> = Vec::new();
+            for img in view.term.visible_images() {
+                if let Some(render_img) = view.render_image_for(&img, cx) {
+                    if img.z_index < 0 {
+                        under_imgs.push((img, render_img));
+                    } else {
+                        over_imgs.push((img, render_img));
+                    }
+                }
+            }
+
             (
                 view.focus_handle.clone(),
                 view.font_family.clone(),
@@ -256,6 +397,8 @@ impl Element for TerminalElement {
                 grid_cells,
                 view.ime_marked_text.clone(),
                 cur_rect,
+                under_imgs,
+                over_imgs,
             )
         };
 
@@ -353,16 +496,38 @@ impl Element for TerminalElement {
                 }
             }
 
-            // 2. Paint procedural box-drawing/block glyphs & text runs row by row
+            // 1b. Paint Kitty graphics placements with z_index < 0 (below text, above cell backgrounds)
+            for (img, render_img) in &under_text_images {
+                let img_bounds = image_cell_bounds(
+                    origin.x,
+                    origin.y,
+                    prepaint.cell_width,
+                    prepaint.line_height,
+                    img.col,
+                    img.row,
+                    img.cols,
+                    img.rows,
+                );
+                let _ = window.paint_image(
+                    img_bounds,
+                    Corners::default(),
+                    render_img.clone(),
+                    0,
+                    false,
+                );
+            }
+
+            // 2. Paint procedural box-drawing/block glyphs, text runs & fancy underlines row by row
             for y in 0..rows {
                 let row_offset = y * cols;
                 let row_y = origin.y + prepaint.line_height * (y as f32);
+                let row_bottom = row_y + prepaint.line_height;
                 let mut x = 0;
 
                 while x < cols {
                     let cell = &cells[row_offset + x];
                     if cell.width == 0
-                        || (cell.ch == ' ' && !cell.underline && !cell.strike)
+                        || (cell.ch == ' ' && !cell.underline && !cell.undercurl && !cell.strike)
                     {
                         x += 1;
                         continue;
@@ -379,11 +544,21 @@ impl Element for TerminalElement {
 
                     let font_idx = (cell.bold as usize) | ((cell.italic as usize) << 1);
                     let font = fonts[font_idx].clone();
-                    let underline = cell.underline.then_some(UnderlineStyle {
-                        thickness: px(1.0),
-                        color: Some(cell.fg),
-                        wavy: false,
-                    });
+                    let underline = if cell.undercurl {
+                        Some(UnderlineStyle {
+                            thickness: px(1.0),
+                            color: Some(cell.fg),
+                            wavy: true,
+                        })
+                    } else if cell.underline {
+                        Some(UnderlineStyle {
+                            thickness: px(1.0),
+                            color: Some(cell.fg),
+                            wavy: false,
+                        })
+                    } else {
+                        None
+                    };
                     let strikethrough = cell.strike.then_some(StrikethroughStyle {
                         thickness: px(1.0),
                         color: Some(cell.fg),
@@ -401,6 +576,7 @@ impl Element for TerminalElement {
                                 && c.bold == cell.bold
                                 && c.italic == cell.italic
                                 && c.underline == cell.underline
+                                && c.undercurl == cell.undercurl
                                 && c.strike == cell.strike
                             {
                                 text.push(c.ch);
@@ -409,7 +585,11 @@ impl Element for TerminalElement {
                                 break;
                             }
                         }
-                        if text.trim().is_empty() && !cell.underline && !cell.strike {
+                        if text.trim().is_empty()
+                            && !cell.underline
+                            && !cell.undercurl
+                            && !cell.strike
+                        {
                             continue;
                         }
                         let shared = SharedString::from(text);
@@ -466,6 +646,88 @@ impl Element for TerminalElement {
                         x += 1;
                     }
                 }
+
+                // Fancy underline styles (DOUBLE_UNDERLINE, UNDERCURL on spaces, DOTTED, DASHED, HYPERLINK)
+                let mut ux = 0;
+                while ux < cols {
+                    let c = &cells[row_offset + ux];
+                    let has_fancy = c.double_underline
+                        || c.dotted_underline
+                        || c.dashed_underline
+                        || (c.hyperlink
+                            && !c.underline
+                            && !c.double_underline
+                            && !c.undercurl
+                            && !c.dotted_underline
+                            && !c.dashed_underline);
+                    if c.width == 0 || !has_fancy {
+                        ux += 1;
+                        continue;
+                    }
+                    let start = ux;
+                    let fg = c.fg;
+                    let double_u = c.double_underline;
+                    let dotted_u = c.dotted_underline;
+                    let dashed_u = c.dashed_underline;
+                    let link_u = c.hyperlink;
+                    ux += 1;
+                    while ux < cols {
+                        let cn = &cells[row_offset + ux];
+                        if cn.width == 0
+                            || (cn.fg == fg
+                                && cn.double_underline == double_u
+                                && cn.dotted_underline == dotted_u
+                                && cn.dashed_underline == dashed_u
+                                && cn.hyperlink == link_u)
+                        {
+                            ux += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    let span_x = origin.x + prepaint.cell_width * (start as f32);
+                    let span_w = prepaint.cell_width * ((ux - start) as f32);
+                    if double_u {
+                        for seg in double_underline_bounds(span_x, row_bottom, span_w, px(1.0)) {
+                            window.paint_quad(fill(seg, fg));
+                        }
+                    } else if dotted_u {
+                        for seg in dotted_underline_segments(span_x, row_bottom, span_w, px(1.0)) {
+                            window.paint_quad(fill(seg, fg));
+                        }
+                    } else if dashed_u {
+                        for seg in dashed_underline_segments(span_x, row_bottom, span_w, px(1.0)) {
+                            window.paint_quad(fill(seg, fg));
+                        }
+                    } else if link_u {
+                        let mut link_color = fg;
+                        link_color.a *= 0.65;
+                        for seg in dotted_underline_segments(span_x, row_bottom, span_w, px(1.0)) {
+                            window.paint_quad(fill(seg, link_color));
+                        }
+                    }
+                }
+            }
+
+            // 2b. Paint Kitty graphics placements with z_index >= 0 (above text, below cursor/IME)
+            for (img, render_img) in &over_text_images {
+                let img_bounds = image_cell_bounds(
+                    origin.x,
+                    origin.y,
+                    prepaint.cell_width,
+                    prepaint.line_height,
+                    img.col,
+                    img.row,
+                    img.cols,
+                    img.rows,
+                );
+                let _ = window.paint_image(
+                    img_bounds,
+                    Corners::default(),
+                    render_img.clone(),
+                    0,
+                    false,
+                );
             }
 
             // 3. Paint cursor when at bottom of scrollback and cursor is visible
@@ -587,5 +849,36 @@ impl Element for TerminalElement {
                 );
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn computes_image_pixel_bounds_from_viewport_cells() {
+        let bounds = image_cell_bounds(px(10.0), px(20.0), px(8.0), px(16.0), 2, 1, 4, 2);
+        assert_eq!(bounds.origin.x, px(26.0));
+        assert_eq!(bounds.origin.y, px(36.0));
+        assert_eq!(bounds.size.width, px(32.0));
+        assert_eq!(bounds.size.height, px(32.0));
+    }
+
+    #[test]
+    fn generates_undercurl_and_fancy_underline_segments() {
+        let wave = undercurl_segments(px(10.0), px(20.0), px(16.0), px(1.0));
+        assert!(!wave.is_empty());
+        assert_eq!(wave.first().unwrap().origin.x, px(10.0));
+
+        let double = double_underline_bounds(px(10.0), px(30.0), px(24.0), px(1.0));
+        assert_eq!(double.len(), 2);
+        assert!(double[0].origin.y < double[1].origin.y);
+
+        let dotted = dotted_underline_segments(px(0.0), px(20.0), px(12.0), px(1.0));
+        assert!(!dotted.is_empty());
+
+        let dashed = dashed_underline_segments(px(0.0), px(20.0), px(12.0), px(1.0));
+        assert!(!dashed.is_empty());
     }
 }

@@ -21,6 +21,7 @@ import ai.eclosion.gateterm.android.term.TermGeometry
 import ai.eclosion.gateterm.android.term.TermSelection
 import ai.eclosion.gateterm.android.term.TerminalFontMetrics
 import ai.eclosion.gateterm.android.term.TerminalBlockGlyphs
+import ai.eclosion.gateterm.android.term.TerminalView
 
 class TermPaint(
     val text: android.graphics.Paint,
@@ -132,8 +133,27 @@ fun TerminalCanvas(
                     bgPaint.color = effBg0
                     native.drawRect(ox + runStart * cellW, top, ox + rx * cellW, bottom, bgPaint)
                 }
+            }
 
-                // 2. Foreground glyphs & procedural box/block characters
+            // 1b. Kitty graphics placements with zIndex < 0 (below text, above cell backgrounds)
+            if (shown.images.isNotEmpty()) {
+                TerminalView.drawViewportImages(
+                    native,
+                    shown.images,
+                    { it < 0 },
+                    ox,
+                    oy,
+                    cellW,
+                    cellH,
+                    bgPaint,
+                )
+            }
+
+            for (y in 0 until rows) {
+                val row = shown.cells.getOrNull(y) ?: continue
+                val top = oy + y * cellH
+
+                // 2. Foreground glyphs, procedural box/block characters & fancy underlines
                 for (x in 0 until cols) {
                     val cell = row.getOrNull(x) ?: continue
                     if (cell.width == 0) continue
@@ -146,9 +166,10 @@ fun TerminalCanvas(
                     }
                     if (cell.attrs and Attr.HIDDEN != 0) fg = bg
                     val left = ox + x * cellW
+                    val alpha = if (cell.attrs and Attr.DIM != 0) 0x99000000.toInt() else 0xFF000000.toInt()
+                    val fgColor = (fg and 0x00FFFFFF) or alpha
                     if (cell.codepoint != ' '.code && cell.codepoint != 0) {
-                        val alpha = if (cell.attrs and Attr.DIM != 0) 0x99000000.toInt() else 0xFF000000.toInt()
-                        textPaint.color = (fg and 0x00FFFFFF) or alpha
+                        textPaint.color = fgColor
                         textPaint.isFakeBoldText = cell.attrs and Attr.BOLD != 0
                         textPaint.textSkewX = if (cell.attrs and Attr.ITALIC != 0) -0.2f else 0f
                         textPaint.isUnderlineText = cell.attrs and Attr.UNDERLINE != 0
@@ -159,7 +180,34 @@ fun TerminalCanvas(
                         )
                         if (!blockDrawn) native.drawText(glyph, left + paint.charLeft, top + baseline, textPaint)
                     }
+                    if (TerminalView.hasFancyUnderline(cell.attrs)) {
+                        TerminalView.drawFancyUnderline(
+                            native,
+                            cell.attrs,
+                            left,
+                            top,
+                            cellW * cell.width.coerceAtLeast(1),
+                            cellH,
+                            fgColor,
+                            density,
+                            bgPaint,
+                        )
+                    }
                 }
+            }
+
+            // 2b. Kitty graphics placements with zIndex >= 0 (above text, below cursor)
+            if (shown.images.isNotEmpty()) {
+                TerminalView.drawViewportImages(
+                    native,
+                    shown.images,
+                    { it >= 0 },
+                    ox,
+                    oy,
+                    cellW,
+                    cellH,
+                    bgPaint,
+                )
             }
             if (shown.cursorVisible && (sel == null)) {
                 bgPaint.color = (appearance.cursor or 0xFF000000.toInt()) and 0x00FFFFFF or 0xA0000000.toInt()

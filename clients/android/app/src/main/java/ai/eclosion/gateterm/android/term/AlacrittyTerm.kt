@@ -3,6 +3,7 @@ package ai.eclosion.gateterm.android.term
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import uniffi.gateterm_cloud_ffi.FfiClipboardEvent
+import uniffi.gateterm_cloud_ffi.FfiViewportImage
 import uniffi.gateterm_cloud_ffi.TermEngine
 import uniffi.gateterm_cloud_ffi.TermState
 
@@ -160,6 +161,10 @@ class AlacrittyTerm(
 
     fun drainClipboardEvents(): List<FfiClipboardEvent> = synchronized(lock) {
         engine.drainClipboardEvents()
+    }
+
+    fun visibleImages(): List<FfiViewportImage> = synchronized(lock) {
+        engine.visibleImages()
     }
 
     fun encodeOsc5522ReadReply(mime: String, data: ByteArray): ByteArray = synchronized(lock) {

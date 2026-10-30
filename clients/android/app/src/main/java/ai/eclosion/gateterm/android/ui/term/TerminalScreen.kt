@@ -139,6 +139,9 @@ fun TerminalScreen(
         if (reconnecting) { keyboard.reset(); clearModifiers() }
     }
     LaunchedEffect(agentId) { clearModifiers() }
+    LaunchedEffect(generation) {
+        TerminalView.drainClipboardToSystem(context, term)
+    }
     // 聊天视图里按返回 = 回终端,不是直接退出会话
     BackHandler { if (chatOpen) onToggleChat() else { releaseKeyboard(); onBack() } }
     Scaffold(
@@ -253,6 +256,9 @@ fun TerminalScreen(
                     update = { view ->
                         if (view.keyboard !== keyboard) view.releaseKeys()
                         view.keyboard = keyboard
+                        view.term = term
+                        view.cellWidthPx = paint.cellW
+                        view.cellHeightPx = paint.cellH
                         view.inputEnabled = !reconnecting
                         view.applicationCursor = term.applicationCursor
                         view.modifyOtherKeys = term.modifyOtherKeys
