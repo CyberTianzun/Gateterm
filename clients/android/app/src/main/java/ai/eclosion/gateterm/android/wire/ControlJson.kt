@@ -54,12 +54,20 @@ object ControlJson {
     fun parse(payload: ByteArray): ServerMsg {
         val obj = JSONObject(String(payload, StandardCharsets.UTF_8))
         return when (val type = obj.optString("type")) {
-            "hello-ok" -> ServerMsg.HelloOk(
-                obj.optInt("proto", PROTO_VERSION),
-                obj.optString("os").takeUnless { it == "null" }.orEmpty(),
-                obj.optString("cloud_server_id").takeUnless { it.isEmpty() || it == "null" },
-                obj.optBoolean("win32_input_mode", false),
-            )
+            "hello-ok" -> {
+                val os = obj.optString("os").takeUnless { it == "null" }.orEmpty()
+                val win32InputMode = if (obj.has("win32_input_mode") && !obj.isNull("win32_input_mode")) {
+                    obj.optBoolean("win32_input_mode", false)
+                } else {
+                    os.equals("windows", ignoreCase = true)
+                }
+                ServerMsg.HelloOk(
+                    obj.optInt("proto", PROTO_VERSION),
+                    os,
+                    obj.optString("cloud_server_id").takeUnless { it.isEmpty() || it == "null" },
+                    win32InputMode,
+                )
+            }
             "error" -> ServerMsg.Error(
                 message = obj.optString("message"),
                 channel = if (obj.has("channel") && !obj.isNull("channel")) obj.getInt("channel") else null,

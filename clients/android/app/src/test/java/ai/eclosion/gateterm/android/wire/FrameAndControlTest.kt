@@ -41,7 +41,7 @@ class FrameAndControlTest {
     fun parseHelloOkAndError() {
         val ok = ControlJson.parse("""{"type":"hello-ok","proto":1}""".toByteArray())
         assertEquals(ServerMsg.HelloOk(1), ok)
-        assertEquals(ServerMsg.HelloOk(1, "windows"), ControlJson.parse(
+        assertEquals(ServerMsg.HelloOk(1, "windows", null, true), ControlJson.parse(
             """{"type":"hello-ok","proto":1,"os":"windows"}""".toByteArray(),
         ))
         val err = ControlJson.parse("""{"type":"error","message":"bad hello"}""".toByteArray())
@@ -49,11 +49,13 @@ class FrameAndControlTest {
     }
 
     @Test
-    fun helloOkInputCapabilityDefaultsToVtAndAcceptsExplicitSupport() {
-        for (field in listOf("", ",\"win32_input_mode\":false", ",\"win32_input_mode\":true")) {
-            val msg = ControlJson.parse("""{"type":"hello-ok","proto":1,"os":"windows"$field}""".toByteArray()) as ServerMsg.HelloOk
-            assertEquals(field.endsWith("true"), msg.win32InputMode)
-        }
+    fun helloOkInputCapabilityDefaultsToOsAndHonorsExplicitSupport() {
+        val omittedWin = ControlJson.parse("""{"type":"hello-ok","proto":1,"os":"windows"}""".toByteArray()) as ServerMsg.HelloOk
+        assertEquals(true, omittedWin.win32InputMode)
+        val explicitFalse = ControlJson.parse("""{"type":"hello-ok","proto":1,"os":"windows","win32_input_mode":false}""".toByteArray()) as ServerMsg.HelloOk
+        assertEquals(false, explicitFalse.win32InputMode)
+        val explicitTrue = ControlJson.parse("""{"type":"hello-ok","proto":1,"os":"windows","win32_input_mode":true}""".toByteArray()) as ServerMsg.HelloOk
+        assertEquals(true, explicitTrue.win32InputMode)
     }
 
     @Test
