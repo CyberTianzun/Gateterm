@@ -268,6 +268,10 @@ impl TermEngine {
         self.inner.lock().unwrap().copy_viewport(x0, y0, x1, y1)
     }
 
+    pub fn paste_requires_confirmation(&self, text: String) -> bool {
+        self.inner.lock().unwrap().paste_requires_confirmation(&text)
+    }
+
     pub fn encode_paste(&self, text: String) -> Vec<u8> {
         self.inner.lock().unwrap().encode_paste(&text)
     }

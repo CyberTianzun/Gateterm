@@ -140,6 +140,10 @@ class AlacrittyTerm(
             if (!mouseTracking) null else engine.encodePointer(col, row, button, pressed, moving)
         }
 
+    fun pasteRequiresConfirmation(text: String): Boolean = synchronized(lock) {
+        engine.pasteRequiresConfirmation(text)
+    }
+
     fun encodePaste(text: String): ByteArray = synchronized(lock) {
         engine.encodePaste(text)
     }

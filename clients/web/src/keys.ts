@@ -108,6 +108,16 @@ export function browserShortcut(ev: KeyLike, hasSelection: boolean): boolean {
   return ev.shiftKey && !ev.ctrlKey && !ev.altKey && ev.key === "Insert";
 }
 
+/** 剥离粘贴文本中的 ESC (\x1b) 与 8-bit CSI (\x9b)，防止嵌套 \x1b[20\x1b[201~1~ 括号粘贴逃逸。 */
+export function sanitizePasteText(text: string): string {
+  return text.replace(/[\x1b\x9b]/g, "");
+}
+
+/** 未开启 Bracketed Paste Mode 时，包含 CR 或 LF 的粘贴需要用户确认以防直接执行命令。 */
+export function pasteRequiresConfirmation(text: string, bracketedPaste: boolean): boolean {
+  return !bracketedPaste && (text.includes("\n") || text.includes("\r"));
+}
+
 // 传统编码会丢修饰键的键。Alt 单独按时 ESC 前缀已经保留信息,Shift+Tab(CSI Z)、
 // Ctrl+Backspace(BS)是公认编码,这些都不改,对应 XTMODKEYS 的 "except well-defined"。
 const otherKeys: Record<string, { code: number; plain: number[] }> = {

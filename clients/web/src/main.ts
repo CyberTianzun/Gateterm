@@ -21,7 +21,13 @@ import { installMouseEventPolicy, type MouseEventPolicy } from "./mouse";
 import { type Launcher, fetchLaunchers } from "./launchers";
 import { type MsgKey, localeTag, navigatorLanguages, resolveLocale, setLocale, subscribe, t } from "./i18n";
 import { mountNewSessionMenu } from "./new-session";
-import { browserShortcut, KeyboardAdapter, type ServerOs } from "./keys";
+import {
+  browserShortcut,
+  KeyboardAdapter,
+  pasteRequiresConfirmation,
+  sanitizePasteText,
+  type ServerOs,
+} from "./keys";
 import {
   type ChatWindow,
   type Message as ChatMessage,
@@ -612,7 +618,20 @@ $("terminal-wrap").addEventListener(
   "paste",
   (ev: ClipboardEvent) => {
     if (attachedId === null || !term || !ev.clipboardData) return;
-    if (ev.clipboardData.getData("text/plain")) return;
+    const text = ev.clipboardData.getData("text/plain");
+    if (text) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (pasteRequiresConfirmation(text, term.modes.bracketedPasteMode)) {
+        const msg = localeTag().startsWith("zh")
+          ? "当前程序未开启括号粘贴模式（Bracketed Paste），粘贴包含换行符的文本可能会立即执行其中的命令。确定要继续粘贴吗？"
+          : "The running program has not enabled Bracketed Paste mode. Pasting text with newlines may execute commands immediately. Paste anyway?";
+        if (!window.confirm(msg)) return;
+      }
+      const clean = sanitizePasteText(text);
+      if (clean) term.paste(clean);
+      return;
+    }
     const imgItem = Array.from(ev.clipboardData.items).find(
       (item) => item.kind === "file" && item.type.startsWith("image/"),
     );
