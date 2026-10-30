@@ -72,6 +72,8 @@ pub struct TerminalView {
 
     // Pending multiline paste awaiting user confirmation when bracketed paste is disabled
     pub pending_paste: Option<String>,
+    // Pending OSC 5522 clipboard read request awaiting user authorization
+    pub pending_clipboard_read: Option<Vec<String>>,
 
     render_image_cache: RefCell<HashMap<(u32, usize), Arc<RenderImage>>>,
 
@@ -119,6 +121,7 @@ impl TerminalView {
             search_matches: Vec::new(),
             search_current_idx: None,
             pending_paste: None,
+            pending_clipboard_read: None,
             render_image_cache: RefCell::new(HashMap::new()),
             on_input: None,
             on_resize: None,
@@ -153,14 +156,8 @@ impl TerminalView {
                     }
                 }
                 ClipboardEvent::ReadRequest { mimes } => {
-                    if mimes
-                        .iter()
-                        .any(|m| m == "text/plain" || m.starts_with("text/plain;"))
-                        && let Some(item) = cx.read_from_clipboard()
-                        && let Some(text) = item.text()
-                    {
-                        let reply = encode_osc5522_read_reply("text/plain", text.as_bytes());
-                        self.send_bytes(&reply, cx);
+                    if !mimes.is_empty() {
+                        self.pending_clipboard_read = Some(mimes);
                     }
                 }
             }
@@ -232,6 +229,7 @@ impl TerminalView {
         self.term.reset();
         self.clear_selection();
         self.pending_paste = None;
+        self.pending_clipboard_read = None;
         self.render_image_cache.borrow_mut().clear();
         cx.notify();
     }
@@ -450,6 +448,31 @@ impl TerminalView {
         }
     }
 
+    pub fn confirm_pending_clipboard_read(&mut self, cx: &mut Context<Self>) {
+        let Some(mimes) = self.pending_clipboard_read.take() else {
+            return;
+        };
+        let text = if mimes
+            .iter()
+            .any(|m| m == "text/plain" || m.starts_with("text/plain;") || m == ".")
+        {
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let reply = encode_osc5522_read_reply("text/plain", text.as_bytes());
+        self.send_bytes(&reply, cx);
+        cx.notify();
+    }
+
+    pub fn cancel_pending_clipboard_read(&mut self, cx: &mut Context<Self>) {
+        if self.pending_clipboard_read.take().is_some() {
+            cx.notify();
+        }
+    }
+
     fn confirm_paste_text(&mut self, text: &str, cx: &mut Context<Self>) {
         if text.is_empty() {
             return;
@@ -582,6 +605,20 @@ impl TerminalView {
         let m = &ks.modifiers;
 
         let key_lower = ks.key.to_ascii_lowercase();
+        if self.pending_clipboard_read.is_some() && !m.control && !m.alt && !m.platform {
+            if key_lower == "escape" {
+                self.cancel_pending_clipboard_read(cx);
+                window.prevent_default();
+                cx.stop_propagation();
+                return;
+            }
+            if key_lower == "enter" {
+                self.confirm_pending_clipboard_read(cx);
+                window.prevent_default();
+                cx.stop_propagation();
+                return;
+            }
+        }
         if self.pending_paste.is_some() && !m.control && !m.alt && !m.platform {
             if key_lower == "escape" {
                 self.cancel_paste(cx);
@@ -893,6 +930,7 @@ impl Render for TerminalView {
         let scrolled = st.scroll_offset > 0;
         let exited = self.exited;
         let pending_paste = self.pending_paste.clone();
+        let pending_clipboard_read = self.pending_clipboard_read.clone();
         let theme = cx.theme();
         let ch_idx = self.channel as usize;
 
@@ -955,6 +993,51 @@ impl Render for TerminalView {
                                     .label("Paste Anyway (Enter)")
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.confirm_paste(cx);
+                                    })),
+                            ),
+                    )
+            }))
+            .children(pending_clipboard_read.map(|mimes| {
+                let mime_list = mimes.join(", ");
+                v_flex()
+                    .absolute()
+                    .top_2()
+                    .left_3()
+                    .right_3()
+                    .p_3()
+                    .gap_2()
+                    .rounded(px(6.0))
+                    .bg(theme.background)
+                    .border_1()
+                    .border_color(theme.warning)
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.warning)
+                            .child(format!(
+                                "Terminal application requested clipboard read access ({mime_list}). Allow reading system clipboard?"
+                            )),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .justify_end()
+                            .child(
+                                Button::new(("clipboard-read-cancel", ch_idx))
+                                    .xsmall()
+                                    .ghost()
+                                    .label("Deny (Esc)")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.cancel_pending_clipboard_read(cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new(("clipboard-read-confirm", ch_idx))
+                                    .xsmall()
+                                    .danger()
+                                    .label("Allow Read (Enter)")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.confirm_pending_clipboard_read(cx);
                                     })),
                             ),
                     )
@@ -1154,8 +1237,27 @@ mod tests {
 
     #[gpui::test]
     fn drains_osc52_clipboard_writes_and_resolves_osc8_hyperlinks(cx: &mut TestAppContext) {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let view = terminal_view(cx, requests);
+        let sent: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let sent_cb = sent.clone();
+        let view = cx.new(|cx| {
+            TerminalView::new(
+                "test".into(),
+                1,
+                "test".into(),
+                1,
+                "linux".into(),
+                false,
+                "monospace",
+                14.0,
+                1.0,
+                100,
+                cx,
+            )
+            .with_callbacks(
+                Rc::new(move |bytes, _| sent_cb.borrow_mut().push(bytes.to_vec())),
+                Rc::new(|_, _, _| {}),
+            )
+        });
         view.update(cx, |view, cx| {
             // OSC 52 write "hello" (aGVsbG8=) and OSC 8 hyperlink
             view.write_output(
@@ -1169,6 +1271,32 @@ mod tests {
             assert_eq!(
                 view.term.hyperlink_at(0, 0),
                 Some("https://example.com".to_string())
+            );
+
+            // OSC 5522 type=read holds pending_clipboard_read until user confirmation
+            view.write_output(b"\x1b]5522;type=read;dGV4dC9wbGFpbg==\x1b\\", cx);
+            assert_eq!(
+                view.pending_clipboard_read.as_deref(),
+                Some(&["text/plain".to_string()][..])
+            );
+            assert!(
+                sent.borrow().is_empty(),
+                "OSC 5522 read must not send clipboard contents without user confirmation"
+            );
+
+            // Denying clears pending_clipboard_read without sending bytes
+            view.cancel_pending_clipboard_read(cx);
+            assert!(view.pending_clipboard_read.is_none());
+            assert!(sent.borrow().is_empty());
+
+            // Confirming reads system clipboard and sends OSC 5522 read reply
+            view.write_output(b"\x1b]5522;type=read;dGV4dC9wbGFpbg==\x1b\\", cx);
+            assert!(view.pending_clipboard_read.is_some());
+            view.confirm_pending_clipboard_read(cx);
+            assert!(view.pending_clipboard_read.is_none());
+            assert_eq!(
+                sent.borrow().as_slice(),
+                &[encode_osc5522_read_reply("text/plain", b"hello")]
             );
         });
     }

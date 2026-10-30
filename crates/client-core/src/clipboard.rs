@@ -191,6 +191,11 @@ impl Osc5522Parser {
                     b'[' => self.decset_state = DecsetState::CsiStart,
                     b'c' => {
                         self.paste_mode = false;
+                        self.in_multi_write = false;
+                        self.multi_write_mime = None;
+                        self.multi_write_bufs.clear();
+                        self.multi_write_total = 0;
+                        self.write_overflowed = false;
                         self.decset_state = DecsetState::Idle;
                     }
                     0x1b => self.decset_state = DecsetState::Esc,
@@ -503,6 +508,16 @@ mod tests {
         assert!(offer.starts_with(b"\x1b]5522;"));
         let reply = encode_osc5522_read_reply("text/plain", b"ok");
         assert!(reply.starts_with(b"\x1b]5522;"));
+
+        // 5. RIS (\x1bc) clears an incomplete multi-write session
+        t.write(b"\x1b]5522;type=write\x1b\\");
+        t.write(b"\x1b]5522;type=wdata:mime=dGV4dC9wbGFpbg==;data=aGVsbG8=\x1b\\");
+        t.write(b"\x1bc");
+        t.write(b"\x1b]5522;type=wdata\x1b\\");
+        assert!(
+            t.drain_clipboard_events().is_empty(),
+            "RIS (\\x1bc) must clear an incomplete multi-write session"
+        );
     }
 
     #[test]

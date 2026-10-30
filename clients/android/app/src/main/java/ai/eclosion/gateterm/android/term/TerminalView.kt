@@ -14,6 +14,7 @@ import android.net.Uri
 import android.os.Build
 import android.text.InputType
 import android.util.AttributeSet
+import android.util.LruCache
 import android.view.KeyEvent
 import android.view.KeyCharacterMap
 import android.view.MotionEvent
@@ -137,7 +138,14 @@ class TerminalView @JvmOverloads constructor(
                     val value = text.toString()
                     val asciiKey = value.length == 1 && value[0].code in 32..126
                     val modifiers = if (composing && !asciiKey) KeyModifiers() else softModifiers
-                    emit(keyboard.committedText(value, modifiers, modifyOtherKeys))
+                    emit(
+                        keyboard.committedText(
+                            value,
+                            modifiers,
+                            modifyOtherKeys,
+                            kittyKeyboardFlags = term?.kittyKeyboardFlags ?: 0,
+                        )
+                    )
                     if ((!composing || asciiKey) && value.length == 1 && value[0].code < 128 &&
                         TerminalKey.fromAscii(value[0]) != null
                     ) consumeModifiers()
@@ -160,14 +168,20 @@ class TerminalView @JvmOverloads constructor(
             override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
                 if (composing) return super.deleteSurroundingText(beforeLength, afterLength)
                 if (inputEnabled) {
+                    val kittyFlags = term?.kittyKeyboardFlags ?: 0
                     repeat(beforeLength.coerceIn(0, 200_000)) {
                         emit(keyboard.tap(
                             KeyStroke(TerminalKey.Backspace, modifiers = softModifiers),
                             modifyOtherKeys = modifyOtherKeys,
+                            kittyKeyboardFlags = kittyFlags,
                         ))
                     }
                     repeat(afterLength.coerceIn(0, 200_000)) {
-                        emit(keyboard.tap(KeyStroke(TerminalKey.Delete, modifiers = softModifiers)))
+                        emit(keyboard.tap(
+                            KeyStroke(TerminalKey.Delete, modifiers = softModifiers),
+                            modifyOtherKeys = modifyOtherKeys,
+                            kittyKeyboardFlags = kittyFlags,
+                        ))
                     }
                     consumeModifiers()
                 }
@@ -248,7 +262,11 @@ class TerminalView @JvmOverloads constructor(
         ) unicode = key.character
         val modifiers = AndroidKeyMapper.modifiers(event) + softModifiers
         emit(keyboard.keyDown(
-            id, KeyStroke(key, unicode, modifiers), applicationCursor, modifyOtherKeys,
+            id,
+            KeyStroke(key, unicode, modifiers),
+            applicationCursor,
+            modifyOtherKeys,
+            kittyKeyboardFlags = term?.kittyKeyboardFlags ?: 0,
         ))
         if (key !in TerminalKey.ShiftLeft..TerminalKey.ScrollLock) consumeModifiers()
         return true
@@ -257,7 +275,11 @@ class TerminalView @JvmOverloads constructor(
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         val id = AndroidKeyMapper.id(event)
         val textKey = textKeys.remove(id)
-        val bytes = keyboard.keyUp(id, AndroidKeyMapper.modifiers(event))
+        val bytes = keyboard.keyUp(
+            id,
+            AndroidKeyMapper.modifiers(event),
+            kittyKeyboardFlags = term?.kittyKeyboardFlags ?: 0,
+        )
             ?: return if (textKey) true else super.onKeyUp(keyCode, event)
         if (inputEnabled) emit(bytes)
         return true
@@ -293,6 +315,8 @@ class TerminalView @JvmOverloads constructor(
     }
 
     companion object {
+        private val bitmapCache = LruCache<String, Bitmap>(64)
+
         fun hasFancyUnderline(attrs: Int): Boolean {
             return (attrs and (Attr.DOUBLE_UNDERLINE or Attr.UNDERCURL or Attr.DOTTED_UNDERLINE or Attr.DASHED_UNDERLINE or Attr.HYPERLINK)) != 0
         }
@@ -312,14 +336,17 @@ class TerminalView @JvmOverloads constructor(
                 val w = img.widthPx.toInt()
                 val h = img.heightPx.toInt()
                 if (w <= 0 || h <= 0 || img.rgba.size < w * h * 4) continue
-                val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                bmp.copyPixelsFromBuffer(ByteBuffer.wrap(img.rgba))
+                val cacheKey = "${img.imageId}:${img.widthPx}x${img.heightPx}:${img.rgba.contentHashCode()}"
+                val bmp = bitmapCache.get(cacheKey)?.takeIf { !it.isRecycled }
+                    ?: Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { created ->
+                        created.copyPixelsFromBuffer(ByteBuffer.wrap(img.rgba))
+                        bitmapCache.put(cacheKey, created)
+                    }
                 val left = ox + img.col.toFloat() * cellW
                 val top = oy + img.row.toFloat() * cellH
                 val right = left + img.cols.coerceAtLeast(1u).toFloat() * cellW
                 val bottom = top + img.rows.coerceAtLeast(1u).toFloat() * cellH
                 canvas.drawBitmap(bmp, null, RectF(left, top, right, bottom), paint)
-                bmp.recycle()
             }
         }
 

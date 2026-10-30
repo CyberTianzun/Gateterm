@@ -196,4 +196,11 @@ class TerminalKeyboardTest {
         assertEquals(TerminalKey.NumpadEnter, AndroidKeyMapper.key(KeyEvent.KEYCODE_NUMPAD_ENTER))
         assertNull(AndroidKeyMapper.key(KeyEvent.KEYCODE_BACK))
     }
+
+    @Test
+    fun kittyKeyboardReportAllKeysAsEscEncodesCommittedSingleAscii() {
+        val keyboard = TerminalKeyboard("linux")
+        assertEquals("\u001b[97u", keyboard.committedText("a", kittyKeyboardFlags = 8).text())
+        assertEquals("\u001b[97;2u", keyboard.committedText("A", KeyModifiers(shift = true), kittyKeyboardFlags = 8).text())
+    }
 }

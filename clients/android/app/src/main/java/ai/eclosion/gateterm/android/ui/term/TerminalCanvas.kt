@@ -172,7 +172,9 @@ fun TerminalCanvas(
                         textPaint.color = fgColor
                         textPaint.isFakeBoldText = cell.attrs and Attr.BOLD != 0
                         textPaint.textSkewX = if (cell.attrs and Attr.ITALIC != 0) -0.2f else 0f
-                        textPaint.isUnderlineText = cell.attrs and Attr.UNDERLINE != 0
+                        textPaint.isUnderlineText =
+                            (cell.attrs and Attr.UNDERLINE) != 0 &&
+                                (cell.attrs and (Attr.DOUBLE_UNDERLINE or Attr.UNDERCURL or Attr.DOTTED_UNDERLINE or Attr.DASHED_UNDERLINE)) == 0
                         textPaint.isStrikeThruText = cell.attrs and Attr.STRIKE != 0
                         val glyph = cell.glyphText()
                         val blockDrawn = glyph.length == 1 && blockGlyphs.draw(

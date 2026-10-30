@@ -174,7 +174,7 @@ class TerminalKeyboard(val serverOs: String, val win32InputMode: Boolean = false
     ): ByteArray {
         if (text.length == 1 && text[0].code < 128) {
             val key = TerminalKey.fromAscii(text[0])
-            if (key != null && (modifiers.active || text == "\n" || text == "\r" || text == "\t")) {
+            if (key != null && (modifiers.active || text == "\n" || text == "\r" || text == "\t" || (kittyKeyboardFlags and 8) != 0)) {
                 val cp = if (modifiers.shift && text[0] in 'a'..'z') text[0].uppercaseChar().code else text[0].code
                 return tap(
                     KeyStroke(key, cp, modifiers),

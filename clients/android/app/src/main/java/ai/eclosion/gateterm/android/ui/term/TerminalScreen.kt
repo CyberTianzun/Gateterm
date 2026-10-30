@@ -197,7 +197,10 @@ fun TerminalScreen(
                     if (!reconnecting) {
                         val modifiers = stroke.modifiers + softModifiers()
                         onInput(keyboard.tap(
-                            stroke.copy(modifiers = modifiers), term.applicationCursor, term.modifyOtherKeys,
+                            stroke.copy(modifiers = modifiers),
+                            term.applicationCursor,
+                            term.modifyOtherKeys,
+                            kittyKeyboardFlags = term.kittyKeyboardFlags,
                         ))
                         clearModifiers()
                     }

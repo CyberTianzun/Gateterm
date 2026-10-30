@@ -550,7 +550,11 @@ impl Element for TerminalElement {
                             color: Some(cell.fg),
                             wavy: true,
                         })
-                    } else if cell.underline {
+                    } else if cell.underline
+                        && !cell.double_underline
+                        && !cell.dotted_underline
+                        && !cell.dashed_underline
+                    {
                         Some(UnderlineStyle {
                             thickness: px(1.0),
                             color: Some(cell.fg),
@@ -576,7 +580,10 @@ impl Element for TerminalElement {
                                 && c.bold == cell.bold
                                 && c.italic == cell.italic
                                 && c.underline == cell.underline
+                                && c.double_underline == cell.double_underline
                                 && c.undercurl == cell.undercurl
+                                && c.dotted_underline == cell.dotted_underline
+                                && c.dashed_underline == cell.dashed_underline
                                 && c.strike == cell.strike
                             {
                                 text.push(c.ch);
