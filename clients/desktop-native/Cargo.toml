@@ -1,6 +1,6 @@
 [package]
 name = "gateterm-desktop-native"
-version = "0.2.8"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 description = "Gateterm Desktop GUI Client built with GPUI, gpui-component, and Alacritty"
@@ -23,7 +23,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.8"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 
