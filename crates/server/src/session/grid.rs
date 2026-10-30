@@ -254,6 +254,10 @@ impl SessionGrid {
         .union(Flags::DIM)
         .union(Flags::ITALIC)
         .union(Flags::UNDERLINE)
+        .union(Flags::DOUBLE_UNDERLINE)
+        .union(Flags::UNDERCURL)
+        .union(Flags::DOTTED_UNDERLINE)
+        .union(Flags::DASHED_UNDERLINE)
         .union(Flags::INVERSE)
         .union(Flags::STRIKEOUT)
         .union(Flags::HIDDEN);
@@ -527,14 +531,15 @@ fn sgr_string(fg: Color, bg: Color, flags: Flags) -> String {
     if flags.contains(Flags::ITALIC) {
         parts.push("3".into());
     }
-    // v1 起见,把所有花式下划线变体(双线/曲线/点线/虚线)都近似成普通下划线 SGR 4。
-    if flags.intersects(
-        Flags::UNDERLINE
-            | Flags::DOUBLE_UNDERLINE
-            | Flags::UNDERCURL
-            | Flags::DOTTED_UNDERLINE
-            | Flags::DASHED_UNDERLINE,
-    ) {
+    if flags.contains(Flags::DOUBLE_UNDERLINE) {
+        parts.push("4:2".into());
+    } else if flags.contains(Flags::UNDERCURL) {
+        parts.push("4:3".into());
+    } else if flags.contains(Flags::DOTTED_UNDERLINE) {
+        parts.push("4:4".into());
+    } else if flags.contains(Flags::DASHED_UNDERLINE) {
+        parts.push("4:5".into());
+    } else if flags.contains(Flags::UNDERLINE) {
         parts.push("4".into());
     }
     if flags.contains(Flags::INVERSE) {
@@ -892,5 +897,19 @@ mod tests {
 
         a.advance(b"\x1b[?5522h\x1bc");
         assert!(!a.snapshot_modes.kitty_clipboard_paste_mode);
+    }
+
+    #[test]
+    fn repaint_roundtrip_preserves_fancy_underlines() {
+        let mut a = SessionGrid::new(20, 5);
+        a.advance(b"\x1b[4:3mU\x1b[4:2mD\x1b[4:4mO\x1b[4:5mA\x1b[4mS\x1b[0mN");
+        let repaint = a.repaint();
+        let repaint_str = String::from_utf8_lossy(&repaint);
+        assert!(repaint_str.contains("4:3"), "expected 4:3 in {repaint_str:?}");
+        assert!(repaint_str.contains("4:2"), "expected 4:2 in {repaint_str:?}");
+
+        let mut b = SessionGrid::new(20, 5);
+        b.advance(&repaint);
+        assert_same_screen(&a, &b);
     }
 }

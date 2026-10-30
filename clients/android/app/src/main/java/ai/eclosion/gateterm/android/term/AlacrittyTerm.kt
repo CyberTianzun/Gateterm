@@ -95,6 +95,11 @@ class AlacrittyTerm(
         if (buf.remaining() >= PACKED_CELL_BYTES) unpackCell(buf) else Cell.blank()
     }
 
+    fun hyperlinkAt(col: Int, row: Int): String? = synchronized(lock) {
+        if (col !in 0 until cols || row !in 0 until rows) null
+        else engine.hyperlinkAt(col.toUInt(), row.toUInt())
+    }
+
     fun reset() = synchronized(lock) {
         applyState(engine.reset())
         generation++
@@ -245,6 +250,11 @@ object Attr {
     const val INVERSE = 16
     const val HIDDEN = 32
     const val STRIKE = 64
+    const val DOUBLE_UNDERLINE = 128
+    const val UNDERCURL = 256
+    const val DOTTED_UNDERLINE = 512
+    const val DASHED_UNDERLINE = 1024
+    const val HYPERLINK = 2048
 }
 
 object Color {

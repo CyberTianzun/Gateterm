@@ -42,6 +42,11 @@ pub mod attr {
     pub const INVERSE: u16 = 16;
     pub const HIDDEN: u16 = 32;
     pub const STRIKE: u16 = 64;
+    pub const DOUBLE_UNDERLINE: u16 = 128;
+    pub const UNDERCURL: u16 = 256;
+    pub const DOTTED_UNDERLINE: u16 = 512;
+    pub const DASHED_UNDERLINE: u16 = 1024;
+    pub const HYPERLINK: u16 = 2048;
 }
 
 /// 每个格子的固定二进制打包长度（字节）。
@@ -402,6 +407,22 @@ impl ClientTerm {
         self.cell_at_offset(x, y, self.viewport_offset())
     }
 
+    pub fn hyperlink_at(&self, col: usize, row: usize) -> Option<String> {
+        if col >= self.cols as usize || row >= self.rows as usize {
+            return None;
+        }
+        let grid = self.term.grid();
+        let line = Line(row as i32 - self.viewport_offset() as i32);
+        let cell = &grid[line][Column(col)];
+        let link = cell.hyperlink()?;
+        let uri = link.uri();
+        if is_safe_hyperlink_uri(uri) {
+            Some(uri.to_string())
+        } else {
+            None
+        }
+    }
+
     pub fn snapshot_packed(&self) -> Vec<u8> {
         let rows = self.rows as usize;
         let cols = self.cols as usize;
@@ -685,6 +706,13 @@ fn pack_cell(cell: &ClientCell, out: &mut Vec<u8>) {
 }
 
 fn convert_cell(cell: &TermCell, colors: &alacritty_terminal::term::color::Colors) -> ClientCell {
+    let mut attrs = map_flags(cell.flags);
+    if cell
+        .hyperlink()
+        .is_some_and(|link| is_safe_hyperlink_uri(link.uri()))
+    {
+        attrs |= attr::HYPERLINK;
+    }
     if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
         || cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
     {
@@ -694,7 +722,7 @@ fn convert_cell(cell: &TermCell, colors: &alacritty_terminal::term::color::Color
             codepoint: ' ' as u32,
             fg,
             bg,
-            attrs: map_flags(cell.flags),
+            attrs,
             width: 0,
             fg_index,
             bg_index,
@@ -708,11 +736,28 @@ fn convert_cell(cell: &TermCell, colors: &alacritty_terminal::term::color::Color
         codepoint: ch as u32,
         fg,
         bg,
-        attrs: map_flags(cell.flags),
+        attrs,
         width,
         fg_index,
         bg_index,
     }
+}
+
+fn is_safe_hyperlink_uri(uri: &str) -> bool {
+    if uri.is_empty() || uri.len() > 2048 {
+        return false;
+    }
+    if uri.bytes().any(|b| b <= 0x1f || b == 0x7f) {
+        return false;
+    }
+    uri.get(..8)
+        .is_some_and(|p| p.eq_ignore_ascii_case("https://"))
+        || uri
+            .get(..7)
+            .is_some_and(|p| p.eq_ignore_ascii_case("http://"))
+        || uri
+            .get(..7)
+            .is_some_and(|p| p.eq_ignore_ascii_case("mailto:"))
 }
 
 fn map_flags(flags: Flags) -> u16 {
@@ -734,6 +779,18 @@ fn map_flags(flags: Flags) -> u16 {
             | Flags::DASHED_UNDERLINE,
     ) {
         out |= attr::UNDERLINE;
+    }
+    if flags.contains(Flags::DOUBLE_UNDERLINE) {
+        out |= attr::DOUBLE_UNDERLINE;
+    }
+    if flags.contains(Flags::UNDERCURL) {
+        out |= attr::UNDERCURL;
+    }
+    if flags.contains(Flags::DOTTED_UNDERLINE) {
+        out |= attr::DOTTED_UNDERLINE;
+    }
+    if flags.contains(Flags::DASHED_UNDERLINE) {
+        out |= attr::DASHED_UNDERLINE;
     }
     if flags.contains(Flags::INVERSE) {
         out |= attr::INVERSE;
@@ -947,5 +1004,24 @@ mod tests {
         assert!(s.ends_with("\x1b[201~"));
         let inner = &s["\x1b[200~".len()..s.len() - "\x1b[201~".len()];
         assert!(!inner.contains('\x1b'), "inner payload still contains ESC: {inner:?}");
+    }
+
+    #[test]
+    fn preserves_fancy_underline_flags_and_validates_osc8_hyperlinks() {
+        let mut t = ClientTerm::new(40, 5, 100);
+        t.write(b"\x1b[4:3mU\x1b[4:2mD\x1b[0m");
+        assert_ne!(t.cell(0, 0).attrs & attr::UNDERCURL, 0);
+        assert_ne!(t.cell(0, 0).attrs & attr::UNDERLINE, 0);
+        assert_ne!(t.cell(1, 0).attrs & attr::DOUBLE_UNDERLINE, 0);
+
+        // 合法 https 链接允许返回，恶意 file:// 或 javascript: 或含控制字符链接被拦截
+        t.write(b"\x1b]8;;https://example.com/docs\x1b\\A\x1b]8;;\x1b\\");
+        t.write(b"\x1b]8;;file:///etc/passwd\x1b\\B\x1b]8;;\x1b\\");
+        assert_eq!(
+            t.hyperlink_at(2, 0).as_deref(),
+            Some("https://example.com/docs")
+        );
+        assert_ne!(t.cell(2, 0).attrs & attr::HYPERLINK, 0);
+        assert_eq!(t.hyperlink_at(3, 0), None);
     }
 }

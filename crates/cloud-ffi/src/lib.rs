@@ -284,6 +284,13 @@ impl TermEngine {
             .cell_packed(x as usize, y as usize)
     }
 
+    pub fn hyperlink_at(&self, col: u32, row: u32) -> Option<String> {
+        self.inner
+            .lock()
+            .unwrap()
+            .hyperlink_at(col as usize, row as usize)
+    }
+
     pub fn copy_viewport(&self, x0: i32, y0: i32, x1: i32, y1: i32) -> String {
         self.inner.lock().unwrap().copy_viewport(x0, y0, x1, y1)
     }

@@ -295,4 +295,12 @@ fn term_engine_encodes_kitty_and_win32_keys() {
             data: b"hello".to_vec(),
         }]
     );
+
+    // Validated OSC 8 hyperlinks
+    engine.write(b"\x1b]8;;https://example.com\x1b\\L\x1b]8;;\x1b\\".to_vec());
+    assert_eq!(
+        engine.hyperlink_at(0, 0).as_deref(),
+        Some("https://example.com")
+    );
+    assert_eq!(engine.hyperlink_at(1, 0), None);
 }
