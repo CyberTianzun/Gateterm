@@ -21,6 +21,7 @@ interface KeyLike {
   ctrlKey: boolean;
   altKey: boolean;
   metaKey: boolean;
+  repeat?: boolean;
   keyCode?: number;
   isComposing?: boolean;
   getModifierState?: (key: string) => boolean;
@@ -116,14 +117,31 @@ const otherKeys: Record<string, { code: number; plain: number[] }> = {
   Escape: { code: 27, plain: [0, 2] },
 };
 
+const kittyLetters: Record<string, string> = {
+  ArrowUp: "A", Up: "A",
+  ArrowDown: "B", Down: "B",
+  ArrowRight: "C", Right: "C",
+  ArrowLeft: "D", Left: "D",
+  Home: "H", End: "F",
+  F1: "P", F2: "Q", F3: "R", F4: "S",
+};
+
+const kittyTildes: Record<string, number> = {
+  Insert: 2, Delete: 3, PageUp: 5, PageDown: 6,
+  F5: 15, F6: 17, F7: 18, F8: 19, F9: 20, F10: 21, F11: 23, F12: 24,
+};
+
 /** 每个终端一份状态,避免丢焦点后修饰键保持按下、或孤立的 keyup 进 PTY。 */
 export class KeyboardAdapter {
   private pressed = new Map<string, PressedKey>();
-  /** modifyOtherKeys 路径在 keydown 截获过的键,用来吞掉对应的 keypress。 */
+  /** modifyOtherKeys 或 Kitty CSI-u 路径在 keydown 截获过的键,用来吞掉对应的 keypress。 */
   private modified = new Set<string>();
   private composing = false;
   private altGraph = false;
   private modifyOtherKeys = 0;
+  private mainKittyStack: number[] = [];
+  private altKittyStack: number[] = [];
+  private altScreen = false;
 
   /** macOS 的 Option 默认用于布局文本,只有功能键或 macOptionIsMeta 才作为 Alt。 */
   constructor(private readonly optionAsText = false) {}
@@ -134,17 +152,153 @@ export class KeyboardAdapter {
    *  终端 reset(RIS、resync)时由调用方置 0,resync 的重绘会再发回来。 */
   setModifyOtherKeys(level: number): void { this.modifyOtherKeys = level; }
 
+  private kittyStack(): number[] {
+    return this.altScreen ? this.altKittyStack : this.mainKittyStack;
+  }
+
+  private kittyFlags(): number {
+    const stack = this.kittyStack();
+    return stack.length > 0 ? stack[stack.length - 1] : 0;
+  }
+
+  pushKittyFlags(flags: number): void {
+    const stack = this.kittyStack();
+    if (stack.length >= 16) stack.shift();
+    stack.push((flags | 0) & 0x1f);
+  }
+
+  popKittyFlags(count = 1): void {
+    const stack = this.kittyStack();
+    const n = count > 0 ? count | 0 : 1;
+    stack.splice(Math.max(0, stack.length - n), n);
+  }
+
+  setKittyFlags(flags: number, mode = 1): void {
+    const clean = (flags | 0) & 0x1f;
+    const current = this.kittyFlags();
+    let next = current;
+    if (mode === 1) next = clean;
+    else if (mode === 2) next = current | clean;
+    else if (mode === 3) next = current & ~clean;
+    else return;
+    const stack = this.kittyStack();
+    if (stack.length === 0) stack.push(next);
+    else stack[stack.length - 1] = next;
+  }
+
+  setAltScreen(alt: boolean): void {
+    this.altScreen = alt;
+  }
+
+  resetKittyFlags(): void {
+    this.mainKittyStack = [];
+    this.altKittyStack = [];
+    this.altScreen = false;
+  }
+
   /** null = 交给 xterm;字符串 = 原样发 PTY 并取消事件;空串 = 只取消事件。 */
   encode(ev: KeyLike, serverOs: ServerOs, hasSelection = false, win32InputMode = false): string | null {
     if (serverOs === "windows" && win32InputMode) return this.encodeWindows(ev, hasSelection);
-    if (ev.type === "keyup") { this.modified.delete(ev.code); return null; }
+    const kittyFlags = this.kittyFlags();
+    if (ev.type === "keyup") {
+      this.modified.delete(ev.code);
+      if (kittyFlags > 0 && (kittyFlags & 2) !== 0 && this.intercepts(ev, hasSelection)) {
+        return this.encodeKitty(ev, kittyFlags);
+      }
+      return null;
+    }
     if (ev.type === "keypress") return this.modified.has(ev.code) ? "" : null;
-    if (ev.type !== "keydown" || !this.modifyOtherKeys || !this.intercepts(ev, hasSelection)) return null;
+    if (ev.type !== "keydown" || !this.intercepts(ev, hasSelection)) return null;
+    if (kittyFlags > 0) {
+      const seq = this.encodeKitty(ev, kittyFlags);
+      if (seq !== null) this.modified.add(ev.code);
+      return seq;
+    }
+    if (!this.modifyOtherKeys) return null;
     const key = otherKeys[ev.key];
     const mods = (ev.shiftKey ? 1 : 0) | (ev.altKey ? 2 : 0) | (ev.ctrlKey ? 4 : 0);
     if (!key || key.plain.includes(mods)) return null;
     this.modified.add(ev.code);
     return `\x1b[27;${mods + 1};${key.code}~`;
+  }
+
+  private encodeKitty(ev: KeyLike, flags: number): string | null {
+    const reportEvents = (flags & 2) !== 0;
+    const reportAlternate = (flags & 4) !== 0;
+    const reportAllAsEsc = (flags & 8) !== 0;
+    const reportText = (flags & 16) !== 0;
+
+    if (ev.type === "keyup" && !reportEvents) return null;
+
+    const mods = 1 + (ev.shiftKey ? 1 : 0) + (ev.altKey ? 2 : 0) + (ev.ctrlKey ? 4 : 0);
+    const eventType: number | null = reportEvents
+      ? ev.type === "keyup"
+        ? 3
+        : ev.repeat
+          ? 2
+          : null
+      : null;
+
+    const letter = kittyLetters[ev.key];
+    if (letter) {
+      if (eventType !== null) return `\x1b[1;${mods}:${eventType}${letter}`;
+      if (mods > 1) return `\x1b[1;${mods}${letter}`;
+      return null;
+    }
+
+    const tilde = kittyTildes[ev.key];
+    if (tilde !== undefined) {
+      if (eventType !== null) return `\x1b[${tilde};${mods}:${eventType}~`;
+      if (mods > 1) return `\x1b[${tilde};${mods}~`;
+      return `\x1b[${tilde}~`;
+    }
+
+    const keyLower = ev.key.toLowerCase();
+    const isEnterTabBs = keyLower === "enter" || keyLower === "tab" || keyLower === "backspace";
+    const shouldCsiU =
+      reportAllAsEsc ||
+      keyLower === "escape" ||
+      ev.ctrlKey ||
+      ev.altKey ||
+      (isEnterTabBs && ev.shiftKey) ||
+      ev.type === "keyup";
+
+    if (!shouldCsiU) {
+      if (keyLower === "enter") return "\r";
+      if (keyLower === "tab") return "\t";
+      if (keyLower === "backspace") return "\x7f";
+      return null;
+    }
+
+    let cp: number | null = null;
+    if (keyLower === "escape") cp = 27;
+    else if (keyLower === "enter") cp = 13;
+    else if (keyLower === "tab") cp = 9;
+    else if (keyLower === "backspace") cp = 127;
+    else if (keyLower === "space" || ev.key === " ") cp = 32;
+    else if (ev.key.length === 1) {
+      const code = ev.key.charCodeAt(0);
+      cp = code >= 65 && code <= 90 ? code + 32 : code;
+    }
+    if (cp === null) return null;
+
+    const shifted = ev.shiftKey && cp >= 97 && cp <= 122 ? cp - 32 : null;
+    const keyPart = reportAlternate && shifted !== null && shifted !== cp ? `${cp}:${shifted}` : `${cp}`;
+
+    const associatedText =
+      reportText && ev.type !== "keyup" && !ev.ctrlKey && !ev.altKey && cp >= 32 && cp !== 127
+        ? ev.shiftKey && shifted !== null
+          ? shifted
+          : cp
+        : null;
+
+    if (associatedText !== null) {
+      const modsPart = eventType !== null ? `${mods}:${eventType}` : mods > 1 ? `${mods}` : "";
+      return `\x1b[${keyPart};${modsPart};${associatedText}u`;
+    }
+    if (eventType !== null) return `\x1b[${keyPart};${mods}:${eventType}u`;
+    if (mods > 1) return `\x1b[${keyPart};${mods}u`;
+    return `\x1b[${keyPart}u`;
   }
 
   /** 两个后端共用:输入法、浏览器快捷键、布局文本这些都不该截获。 */

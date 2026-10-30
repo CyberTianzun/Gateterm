@@ -227,3 +227,59 @@ test("modifyOtherKeys 与 Windows 共用截获判断:输入法、浏览器快捷
   adapter.reset();
   assert.equal(adapter.encode(key({shiftKey:true}), "macos"), "\x1b[27;2;13~");
 });
+
+test("kitty keyboard protocol encodes CSI-u, respects alt-screen stack, and yields to win32-input-mode", () => {
+  const adapter = new KeyboardAdapter();
+  adapter.pushKittyFlags(3); // DISAMBIGUATE (1) | REPORT_EVENT_TYPES (2)
+  assert.equal(adapter.encode(key({ key: "Enter", code: "Enter", shiftKey: true }), "linux"), "\x1b[13;2u");
+  assert.equal(adapter.encode(key({ key: "Enter", code: "Enter" }), "linux"), "\r");
+  assert.equal(adapter.encode(key({ key: "Escape", code: "Escape" }), "linux"), "\x1b[27u");
+  assert.equal(adapter.encode(key({ key: "j", code: "KeyJ", ctrlKey: true }), "linux"), "\x1b[106;5u");
+  assert.equal(adapter.encode(key({ type: "keypress", key: "j", code: "KeyJ", ctrlKey: true }), "linux"), "");
+  assert.equal(adapter.encode(key({ type: "keyup", key: "j", code: "KeyJ", ctrlKey: true }), "linux"), "\x1b[106;5:3u");
+  assert.equal(adapter.encode(key({ type: "keypress", key: "j", code: "KeyJ", ctrlKey: true }), "linux"), null);
+
+  // Windows win32-input-mode still wins
+  assert.equal(
+    adapter.encode(key({ key: "Enter", code: "Enter", shiftKey: true }), "windows", false, true),
+    "\x1b[13;28;13;1;16;1_"
+  );
+
+  // Alt-screen stack isolation
+  adapter.setAltScreen(true);
+  adapter.pushKittyFlags(1);
+  assert.equal(adapter.encode(key({ type: "keyup", key: "j", code: "KeyJ", ctrlKey: true }), "linux"), null);
+  adapter.setAltScreen(false);
+  assert.equal(adapter.encode(key({ type: "keyup", key: "j", code: "KeyJ", ctrlKey: true }), "linux"), "\x1b[106;5:3u");
+  adapter.popKittyFlags(1);
+  assert.equal(adapter.encode(key({ key: "Enter", code: "Enter", shiftKey: true }), "linux"), null);
+});
+
+test("kitty keyboard protocol setKittyFlags modes, stack depth cap, resetKittyFlags, and 4-tier priority", () => {
+  const adapter = new KeyboardAdapter();
+  adapter.setModifyOtherKeys(2);
+
+  // Tier 3: modifyOtherKeys active when kitty flags == 0
+  assert.equal(adapter.encode(key({ key: "Enter", code: "Enter", shiftKey: true }), "linux"), "\x1b[27;2;13~");
+
+  // setKittyFlags mode 1 (replace), mode 2 (OR), mode 3 (AND NOT)
+  adapter.setKittyFlags(1, 1);
+  assert.equal(adapter.encode(key({ key: "Enter", code: "Enter", shiftKey: true }), "linux"), "\x1b[13;2u");
+  assert.equal(adapter.encode(key({ type: "keyup", key: "j", code: "KeyJ", ctrlKey: true }), "linux"), null);
+
+  adapter.setKittyFlags(2, 2); // 1 | 2 = 3
+  assert.equal(adapter.encode(key({ type: "keyup", key: "j", code: "KeyJ", ctrlKey: true }), "linux"), "\x1b[106;5:3u");
+
+  adapter.setKittyFlags(2, 3); // 3 & ~2 = 1
+  assert.equal(adapter.encode(key({ type: "keyup", key: "j", code: "KeyJ", ctrlKey: true }), "linux"), null);
+
+  // Alternate keys (4) + all as esc (8) + associated text (16)
+  adapter.setKittyFlags(1 | 4 | 8 | 16, 1);
+  assert.equal(adapter.encode(key({ key: "a", code: "KeyA", shiftKey: true }), "linux"), "\x1b[97:65;2;65u");
+
+  // Stack depth cap at 16
+  adapter.resetKittyFlags();
+  for (let i = 1; i <= 20; i++) adapter.pushKittyFlags(i & 31);
+  adapter.popKittyFlags(16);
+  assert.equal(adapter.encode(key({ key: "Escape", code: "Escape" }), "linux"), null);
+});

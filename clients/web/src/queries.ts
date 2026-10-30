@@ -27,6 +27,7 @@ export function swallowTerminalQueries(term: Terminal) {
     parser.registerCsiHandler({ prefix, intermediates: "$", final: "p" }, swallow); // DECRQM
   }
   parser.registerCsiHandler({ prefix: ">", final: "q" }, swallow); // XTVERSION
+  parser.registerCsiHandler({ prefix: "?", final: "u" }, swallow); // Kitty keyboard query
   parser.registerDcsHandler({ intermediates: "$", final: "q" }, swallow); // DECRQSS
   // 颜色:只拦查询(含 `?`),设色照常交给 xterm 去画。
   for (const ident of [4, 10, 11, 12]) {

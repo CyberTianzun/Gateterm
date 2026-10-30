@@ -469,8 +469,33 @@ function openTerminal(id: number) {
     }
     return false;
   });
+  terminal.parser.registerCsiHandler({ prefix: ">", final: "u" }, (params) => {
+    const flags = typeof params[0] === "number" ? params[0] : 0;
+    adapter.pushKittyFlags(flags);
+    return false;
+  });
+  terminal.parser.registerCsiHandler({ prefix: "<", final: "u" }, (params) => {
+    const count = typeof params[0] === "number" && params[0] > 0 ? params[0] : 1;
+    adapter.popKittyFlags(count);
+    return false;
+  });
+  terminal.parser.registerCsiHandler({ prefix: "=", final: "u" }, (params) => {
+    const flags = typeof params[0] === "number" ? params[0] : 0;
+    const mode = params.length > 1 && typeof params[1] === "number" && params[1] > 0 ? params[1] : 1;
+    adapter.setKittyFlags(flags, mode);
+    return false;
+  });
+  terminal.parser.registerCsiHandler({ prefix: "?", final: "h" }, (params) => {
+    if (params.some((p) => p === 47 || p === 1047 || p === 1049)) adapter.setAltScreen(true);
+    return false;
+  });
+  terminal.parser.registerCsiHandler({ prefix: "?", final: "l" }, (params) => {
+    if (params.some((p) => p === 47 || p === 1047 || p === 1049)) adapter.setAltScreen(false);
+    return false;
+  });
   terminal.parser.registerEscHandler({ final: "c" }, () => {
     adapter.setModifyOtherKeys(0);
+    adapter.resetKittyFlags();
     return false;
   });
   terminal.textarea!.addEventListener("compositionstart", () => adapter.setComposing(true));
@@ -1330,6 +1355,7 @@ client.onControl = (msg) => {
       term?.reset();
       // term.reset() 不经过解析器;重绘会把 modifyOtherKeys 再发回来
       keyboard?.setModifyOtherKeys(0);
+      keyboard?.resetKittyFlags();
       break;
     case "session-exited":
       if (msg.channel === termChannel) closeTerminal();

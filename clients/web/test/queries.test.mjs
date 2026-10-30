@@ -44,7 +44,7 @@ test("queries are swallowed so xterm never answers them", () => {
   swallowTerminalQueries(term);
   const key = ({ prefix = "", intermediates = "", final }) => prefix + intermediates + final;
   const csiKeys = csi.map(([id]) => key(id));
-  for (const k of ["c", ">c", "=c", "n", "?n", "$p", "?$p", ">q"]) assert.ok(csiKeys.includes(k), k);
+  for (const k of ["c", ">c", "=c", "n", "?n", "$p", "?$p", ">q", "?u"]) assert.ok(csiKeys.includes(k), k);
   assert.ok(csi.every(([, cb]) => cb() === true));
   assert.deepEqual(dcs.map(([id]) => key(id)), ["$q"]);
   for (const ident of [4, 10, 11, 12]) assert.ok(osc.has(ident), `osc ${ident}`);
