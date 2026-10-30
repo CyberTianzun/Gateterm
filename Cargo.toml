@@ -3,8 +3,12 @@ resolver = "2"
 members = ["crates/protocol", "crates/server", "crates/client-core", "clients/desktop-web", "crates/cloud-client", "crates/cloud-ffi"]
 
 [workspace.package]
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
+
+[workspace.metadata.android]
+version_code = 10
 
 [profile.release]
 opt-level = 'z'      # Optimize for size, even at the cost of some performance
@@ -12,5 +16,3 @@ strip = true         # Strip debug symbols from the binary
 lto = true           # Enable Link Time Optimization (LTO)
 codegen-units = 1    # Force single code generation unit for maximum optimization
 panic = "abort"
-
-

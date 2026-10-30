@@ -16,8 +16,8 @@ ICON="$ROOT/clients/desktop-web/assets/icon.icns"
 # 1. gateterm-desktop-web.app
 WEB_APP="$ROOT/target/bundle/gateterm-desktop-web.app"
 WEB_BIN="$ROOT/target/$TARGET/release/gateterm-desktop-web"
-WEB_VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$ROOT/clients/desktop-web/Cargo.toml" | head -1)"
-[ -n "$WEB_VERSION" ] || { echo "无法从 clients/desktop-web/Cargo.toml 读出 version" >&2; exit 1; }
+WEB_VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$ROOT/Cargo.toml" "$ROOT/clients/desktop-web/Cargo.toml" | head -1)"
+[ -n "$WEB_VERSION" ] || { echo "无法从 Cargo.toml 读出 version" >&2; exit 1; }
 [ -f "$WEB_BIN" ] || { echo "找不到 $WEB_BIN,先跑 cargo build --release --target $TARGET -p gateterm-desktop-web" >&2; exit 1; }
 
 rm -rf "$WEB_APP"

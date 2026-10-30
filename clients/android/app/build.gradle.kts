@@ -97,8 +97,8 @@ android {
         applicationId = applicationPackage
         minSdk = 26
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.3.0"
+        versionCode = Regex("""(?m)^version_code\s*=\s*(\d+)""").find(File(repoRoot, "Cargo.toml").readText())?.groupValues?.get(1)?.toInt() ?: error("Missing version_code in root Cargo.toml")
+        versionName = Regex("""(?m)^version\s*=\s*"([^"]+)"""").find(File(repoRoot, "Cargo.toml").readText())?.groupValues?.get(1) ?: error("Missing version in root Cargo.toml")
         ndk { abiFilters += "arm64-v8a" }
     }
 
