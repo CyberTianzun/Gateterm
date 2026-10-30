@@ -88,9 +88,15 @@ body[data-sidebar-position="right"] #sidebar { order: 2; border-right: 0; border
   gap: 6px;
   font-weight: 600;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
   padding-right: 56px;
+}
+.srow .sname-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .srow.active .sname { color: var(--accent); }
 .srow.has-chat .sname { padding-right: 84px; }
@@ -514,12 +520,10 @@ body[data-sidebar-position="hidden"] #menu { display: none; }
 .scard-open { padding: 3px 12px; cursor: pointer; }
 
 
-/* ---------- 状态胶囊 ---------- */
+/* ---------- Agent 品牌图标 (.aicon) 与独立状态标签 (.atag) ---------- */
 
-/* 一个字符的圆点扫一眼看不见。这里要回答的是「哪台在等我」,所以给底色、给文字,
-   并且让 waiting 明显重于其它档 —— 其它状态是「它在忙」,只有 waiting 是「该你了」。*/
-.apill {
-  position: relative;
+/* 1. 纯净的 Agent 品牌图标:固定使用醒目的品牌色,绝不被运行状态覆盖 */
+.aicon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -528,65 +532,80 @@ body[data-sidebar-position="hidden"] #menu { display: none; }
   height: 20px;
   padding: 0;
   border-radius: 5px;
-  background: rgba(128, 128, 128, 0.18);
-  border: 1px solid rgba(128, 128, 128, 0.3);
-  color: inherit;
+  background: rgba(78, 161, 255, 0.2);
+  border: 1px solid rgba(78, 161, 255, 0.45);
+  color: #60a5fa;
 }
-.apill svg {
+.aicon svg {
   width: 13px;
   height: 13px;
   display: block;
 }
-.apill-dot {
-  display: none;
-  position: absolute;
-  right: -2px;
-  bottom: -2px;
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  border: 1px solid var(--panel);
-}
-.apill.a-working .apill-dot { display: block; background: currentColor; }
-.apill.a-thinking .apill-dot { display: block; background: #9a8cff; }
-.apill.a-waiting .apill-dot { display: block; background: #ffb020; }
-.apill.a-error .apill-dot { display: block; background: #ff6b6b; }
-.apill.a-waiting {
-  background: #ffb020;
-  border-color: #ffb020;
-  color: #241a00;
-  /* 唯一会动的一档:它是唯一需要人动手的状态 */
-  animation: apill-pulse 1.6s ease-in-out infinite;
-}
-.apill.a-error { background: #ff6b6b; border-color: #ff6b6b; color: #2a0000; }
-.apill.a-working { background: rgba(78, 161, 255, 0.28); }
-.apill.a-thinking { background: rgba(154, 140, 255, 0.28); }
-.apill.a-idle { background: rgba(128, 128, 128, 0.14); opacity: 0.88; }
-.apill:not(.a-waiting):not(.a-error)[data-agent*="claude"] { background: rgba(224, 122, 95, 0.2); color: #f29d82; border-color: rgba(224, 122, 95, 0.42); }
-.apill:not(.a-waiting):not(.a-error)[data-agent*="codex"] { background: rgba(16, 185, 129, 0.2); color: #34d399; border-color: rgba(16, 185, 129, 0.42); }
-.apill:not(.a-waiting):not(.a-error)[data-agent*="gemini"] { background: rgba(139, 92, 246, 0.2); color: #a78bfa; border-color: rgba(139, 92, 246, 0.42); }
-.apill:not(.a-waiting):not(.a-error)[data-agent*="opencode"] { background: rgba(6, 182, 212, 0.2); color: #22d3ee; border-color: rgba(6, 182, 212, 0.42); }
-.apill:not(.a-waiting):not(.a-error)[data-agent="pi"] { background: rgba(236, 72, 153, 0.2); color: #f472b6; border-color: rgba(236, 72, 153, 0.42); }
-.apill:not(.a-waiting):not(.a-error)[data-agent*="grok"] { background: rgba(168, 85, 247, 0.2); color: #c084fc; border-color: rgba(168, 85, 247, 0.42); }
-.apill:not(.a-waiting):not(.a-error)[data-agent*="agy"], .apill:not(.a-waiting):not(.a-error)[data-agent*="antigravity"] { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border-color: rgba(59, 130, 246, 0.42); }
+.aicon[data-agent*="claude"] { background: rgba(224, 122, 95, 0.2); color: #f29d82; border-color: rgba(224, 122, 95, 0.45); }
+.aicon[data-agent*="codex"] { background: rgba(16, 185, 129, 0.2); color: #34d399; border-color: rgba(16, 185, 129, 0.45); }
+.aicon[data-agent*="gemini"] { background: rgba(139, 92, 246, 0.2); color: #a78bfa; border-color: rgba(139, 92, 246, 0.45); }
+.aicon[data-agent*="opencode"] { background: rgba(6, 182, 212, 0.2); color: #22d3ee; border-color: rgba(6, 182, 212, 0.45); }
+.aicon[data-agent="pi"], .aicon[data-agent^="pi-"] { background: rgba(236, 72, 153, 0.2); color: #f472b6; border-color: rgba(236, 72, 153, 0.45); }
+.aicon[data-agent*="grok"] { background: rgba(168, 85, 247, 0.2); color: #c084fc; border-color: rgba(168, 85, 247, 0.45); }
+.aicon[data-agent*="agy"], .aicon[data-agent*="antigravity"] { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border-color: rgba(59, 130, 246, 0.45); }
 
-@keyframes apill-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.55; }
-}
-
-/* 侧边栏里的图标徽章紧凑对齐标题左侧 */
-.srow .apill {
+.srow .aicon {
   width: 18px;
   height: 18px;
 }
-.srow .apill svg {
+.srow .aicon svg {
   width: 12px;
   height: 12px;
 }
 
+/* 2. 独立的状态标签 (.atag):仅表达当前运行状态,与 Agent 图标彻底解耦 */
+.atag {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+  background: rgba(128, 128, 128, 0.14);
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  color: var(--dim);
+}
+.atag.a-waiting {
+  background: #ffb020;
+  border-color: #ffb020;
+  color: #241a00;
+  animation: atag-pulse 1.6s ease-in-out infinite;
+}
+.atag.a-error {
+  background: #ff6b6b;
+  border-color: #ff6b6b;
+  color: #2a0000;
+}
+.atag.a-working {
+  background: rgba(78, 161, 255, 0.2);
+  border-color: rgba(78, 161, 255, 0.45);
+  color: #6eb5ff;
+}
+.atag.a-thinking {
+  background: rgba(154, 140, 255, 0.2);
+  border-color: rgba(154, 140, 255, 0.45);
+  color: #b8aeff;
+}
+.atag.a-idle {
+  background: rgba(128, 128, 128, 0.14);
+  border-color: rgba(128, 128, 128, 0.28);
+  color: var(--dim);
+}
+
+@keyframes atag-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .apill.a-waiting { animation: none; }
+  .atag.a-waiting { animation: none; }
 }
 
 /* ---------- 选择题 ---------- */

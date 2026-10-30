@@ -335,12 +335,15 @@ function renderSidebar() {
         <button data-act="rename" title="${t("session.rename")}">✎</button>
         <button data-act="kill" title="${t("session.kill")}">✕</button>
       </div>`;
-    row.querySelector(".sname")!.textContent = s.name;
+    const snameEl = row.querySelector(".sname")!;
+    const titleSpan = document.createElement("span");
+    titleSpan.className = "sname-title";
+    titleSpan.textContent = s.name;
+    snameEl.appendChild(titleSpan);
     const agent = forSession(agents, s.id);
     if (agent) {
-      // 一个字符的圆点太轻,扫一眼看不见 —— 这里要的是「哪台在等我」,
-      // 所以做成有底色的胶囊,`waiting` 用最扎眼的一档(见 style.css)。
-      row.querySelector(".sname")!.prepend(agentBadge(agent));
+      snameEl.prepend(agentBrandIcon(agent));
+      snameEl.appendChild(agentStatusTag(agent));
     }
     const smeta = row.querySelector<HTMLElement>(".smeta")!;
     const cwdShort = shortCwd(s.cwd);
@@ -847,16 +850,42 @@ function renderChat(prepend = false) {
 }
 
 /** 状态图标徽章。列表页和侧边栏共用同一个,排在会话标题左边,悬停提示完整状态。 */
-function agentBadge(a: AgentSession): HTMLElement {
-  const pill = document.createElement("span");
-  pill.className = `apill a-${a.state}`;
-  pill.dataset.agent = a.agent_id.toLowerCase();
+function agentBrandIcon(a: AgentSession): HTMLElement {
+  const icon = document.createElement("span");
+  icon.className = "aicon";
+  icon.dataset.agent = a.agent_id.toLowerCase();
   const brand = agentBrandLabel(a.agent_id);
-  const label = `${brand} · ${stateText(a)}`;
-  pill.innerHTML = `${agentBrandIconSvg(a.agent_id)}<i class="apill-dot"></i>`;
-  pill.title = label;
-  pill.setAttribute("aria-label", label);
-  return pill;
+  icon.innerHTML = agentBrandIconSvg(a.agent_id);
+  icon.title = brand;
+  icon.setAttribute("aria-label", brand);
+  return icon;
+}
+
+function shortStateLabel(a: AgentSession): string {
+  switch (a.state) {
+    case "waiting":
+      return t(a.pending ? "agent.state.waiting" : "agent.state.waitingTerminal");
+    case "working":
+      return t("agent.state.working");
+    case "thinking":
+      return t("agent.state.thinking");
+    case "error":
+      return t("agent.state.error");
+    case "done":
+      return t("agent.state.done");
+    default:
+      return t("agent.state.idle");
+  }
+}
+
+function agentStatusTag(a: AgentSession): HTMLElement {
+  const tag = document.createElement("span");
+  tag.className = `atag a-${a.state}`;
+  tag.textContent = shortStateLabel(a);
+  const full = stateText(a);
+  tag.title = full;
+  tag.setAttribute("aria-label", full);
+  return tag;
 }
 
 /**
@@ -886,11 +915,12 @@ function renderSessionList() {
     const head = document.createElement("div");
     head.className = "scard-head";
     const agent = forSession(agents, s.id);
-    if (agent) head.appendChild(agentBadge(agent));
+    if (agent) head.appendChild(agentBrandIcon(agent));
     const name = document.createElement("span");
     name.className = "scard-name";
     name.textContent = s.name;
     head.appendChild(name);
+    if (agent) head.appendChild(agentStatusTag(agent));
     const meta = document.createElement("div");
     meta.className = "scard-meta";
     const cwdShort = shortCwd(s.cwd);

@@ -2693,87 +2693,99 @@ impl GatetermWorkbench {
                 let sid = sess.id;
                 let sname = sess.name.clone();
 
-                let leading_icon: AnyElement =
-                    if let Some(ag) = best_agent_for_session(&conn.agent_sessions, sid) {
-                        let (_, brand_color) = agent_brand_style(&ag.agent_id, cx);
-                        let dot_col = match ag.state {
-                            AgentState::Waiting => Some(cx.theme().warning),
-                            AgentState::Working => Some(brand_color),
-                            AgentState::Thinking => Some(gpui::Hsla::from(gpui::rgb(0x9A8CFF))),
-                            AgentState::Error => Some(cx.theme().danger),
-                            AgentState::Idle | AgentState::Done => None,
-                        };
-                        let (badge_bg, badge_border, icon_col) = match ag.state {
-                            AgentState::Waiting => (
-                                gpui::Hsla::from(gpui::rgb(0xFFB020)),
-                                gpui::Hsla::from(gpui::rgb(0xFFB020)),
-                                gpui::Hsla::from(gpui::rgb(0x241A00)),
-                            ),
-                            AgentState::Error => (
-                                gpui::Hsla::from(gpui::rgb(0xFF6B6B)),
-                                gpui::Hsla::from(gpui::rgb(0xFF6B6B)),
-                                gpui::Hsla::from(gpui::rgb(0x2A0000)),
-                            ),
-                            AgentState::Working | AgentState::Thinking => (
-                                brand_color.opacity(0.22),
-                                brand_color.opacity(0.45),
-                                brand_color,
-                            ),
-                            AgentState::Idle | AgentState::Done => (
-                                brand_color.opacity(0.14),
-                                brand_color.opacity(0.30),
-                                brand_color,
-                            ),
-                        };
-                        div()
-                            .relative()
-                            .w(px(18.0))
-                            .h(px(18.0))
-                            .flex_shrink_0()
-                            .rounded(px(4.5))
-                            .bg(badge_bg)
-                            .border_1()
-                            .border_color(badge_border)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                Icon::new(GatetermIcon::for_agent(&ag.agent_id))
-                                    .xsmall()
-                                    .text_color(icon_col),
+                let active_agent = best_agent_for_session(&conn.agent_sessions, sid);
+                let leading_icon: AnyElement = if let Some(ref ag) = active_agent {
+                    let (_, brand_color) = agent_brand_style(&ag.agent_id, cx);
+                    div()
+                        .w(px(18.0))
+                        .h(px(18.0))
+                        .flex_shrink_0()
+                        .rounded(px(4.5))
+                        .bg(brand_color.opacity(0.20))
+                        .border_1()
+                        .border_color(brand_color.opacity(0.45))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            Icon::new(GatetermIcon::for_agent(&ag.agent_id))
+                                .xsmall()
+                                .text_color(brand_color),
+                        )
+                        .into_any_element()
+                } else {
+                    div()
+                        .w(px(18.0))
+                        .h(px(18.0))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            Icon::new(GatetermIcon::Terminal)
+                                .xsmall()
+                                .text_color(if is_current {
+                                    cx.theme().primary
+                                } else {
+                                    cx.theme().muted_foreground
+                                }),
+                        )
+                        .into_any_element()
+                };
+
+                let status_tag: Option<AnyElement> = active_agent.map(|ag| {
+                    let (tag_label, tag_bg, tag_border, tag_fg) = match ag.state {
+                        AgentState::Waiting => (
+                            locale.t("等待确认", "Waiting"),
+                            gpui::Hsla::from(gpui::rgb(0xFFB020)),
+                            gpui::Hsla::from(gpui::rgb(0xFFB020)),
+                            gpui::Hsla::from(gpui::rgb(0x241A00)),
+                        ),
+                        AgentState::Error => (
+                            locale.t("出错", "Error"),
+                            gpui::Hsla::from(gpui::rgb(0xFF6B6B)),
+                            gpui::Hsla::from(gpui::rgb(0xFF6B6B)),
+                            gpui::Hsla::from(gpui::rgb(0x2A0000)),
+                        ),
+                        AgentState::Working => {
+                            let col = gpui::Hsla::from(gpui::rgb(0x4EA1FF));
+                            (
+                                locale.t("工作中", "Working"),
+                                col.opacity(0.20),
+                                col.opacity(0.45),
+                                col,
                             )
-                            .children(dot_col.map(|col| {
-                                div()
-                                    .absolute()
-                                    .right(px(-2.0))
-                                    .bottom(px(-2.0))
-                                    .w(px(6.0))
-                                    .h(px(6.0))
-                                    .rounded(px(99.0))
-                                    .bg(col)
-                                    .border_1()
-                                    .border_color(cx.theme().sidebar)
-                            }))
-                            .into_any_element()
-                    } else {
-                        div()
-                            .w(px(18.0))
-                            .h(px(18.0))
-                            .flex_shrink_0()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                Icon::new(GatetermIcon::Terminal)
-                                    .xsmall()
-                                    .text_color(if is_current {
-                                        cx.theme().primary
-                                    } else {
-                                        cx.theme().muted_foreground
-                                    }),
+                        }
+                        AgentState::Thinking => {
+                            let col = gpui::Hsla::from(gpui::rgb(0x9A8CFF));
+                            (
+                                locale.t("思考中", "Thinking"),
+                                col.opacity(0.20),
+                                col.opacity(0.45),
+                                col,
                             )
-                            .into_any_element()
+                        }
+                        AgentState::Idle | AgentState::Done => (
+                            locale.t("空闲", "Idle"),
+                            cx.theme().muted_foreground.opacity(0.14),
+                            cx.theme().border,
+                            cx.theme().muted_foreground,
+                        ),
                     };
+                    div()
+                        .flex_shrink_0()
+                        .px_1p5()
+                        .py(px(1.0))
+                        .rounded(px(4.0))
+                        .bg(tag_bg)
+                        .border_1()
+                        .border_color(tag_border)
+                        .text_size(px(10.0))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(tag_fg)
+                        .child(tag_label)
+                        .into_any_element()
+                });
 
                 let is_renaming =
                     self.renaming_session.as_ref() == Some(&(active_srv_id.clone(), sid));
@@ -2856,7 +2868,8 @@ impl GatetermWorkbench {
                                                 })
                                                 .text_color(cx.theme().foreground)
                                                 .child(SharedString::from(sess.name.clone())),
-                                        ),
+                                        )
+                                        .children(status_tag),
                                 )
                                 .child(
                                     div()

@@ -50,6 +50,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ai.eclosion.gateterm.android.R
 import ai.eclosion.gateterm.android.ui.components.AppBarTitle
+import ai.eclosion.gateterm.android.ui.components.AgentStateTag
 import ai.eclosion.gateterm.android.ui.components.AgentStatusBadge
 import ai.eclosion.gateterm.android.agent.AgentSession
 import ai.eclosion.gateterm.android.agent.AgentSessions
@@ -331,7 +332,9 @@ private fun SessionRow(
                     text = session.name.ifBlank { "#${session.id}" },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
                 )
+                if (agent != null) AgentStateTag(agent)
             }
         },
         supportingContent = {
