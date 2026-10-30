@@ -48,6 +48,24 @@ pub fn encode_keystroke(
     has_selection: bool,
     win32_input_mode: bool,
 ) -> Option<Vec<u8>> {
+    encode_keystroke_with_kind(
+        ks,
+        term_state,
+        server_os,
+        has_selection,
+        win32_input_mode,
+        KeyEventKind::Press,
+    )
+}
+
+pub fn encode_keystroke_with_kind(
+    ks: &Keystroke,
+    term_state: &ClientTermState,
+    server_os: &str,
+    has_selection: bool,
+    win32_input_mode: bool,
+    kind: KeyEventKind,
+) -> Option<Vec<u8>> {
     if is_workbench_or_clipboard_shortcut(ks, has_selection) {
         return None;
     }
@@ -69,7 +87,7 @@ pub fn encode_keystroke(
         alt: m.alt,
         ctrl: m.control,
         super_key: m.platform,
-        kind: KeyEventKind::Press,
+        kind,
     };
 
     let bytes = encode_key(&input, term_state, server_os, win32_input_mode);

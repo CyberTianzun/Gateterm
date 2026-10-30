@@ -1335,7 +1335,7 @@ client.onControl = (msg) => {
     case "hello-ok":
       keyboard?.reset();
       serverOs = typeof msg.os === "string" ? msg.os : "";
-      win32InputMode = msg.win32_input_mode === true;
+      win32InputMode = typeof msg.win32_input_mode === "boolean" ? msg.win32_input_mode : serverOs.toLowerCase() === "windows";
       break;
     case "sessions":
       sessions = msg.sessions;

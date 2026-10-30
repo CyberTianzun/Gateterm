@@ -13,10 +13,10 @@ use gateterm_client_core::graphics::ViewportImage;
 use gateterm_client_core::term::ClientTerm;
 use gpui::{
     App, Bounds, ClipboardEntry, ClipboardItem, Context, EntityInputHandler, FocusHandle,
-    Focusable, Image, ImageFormat, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render,
-    RenderImage, ScrollWheelEvent, SharedString, Styled as _, UTF16Selection, Window, div, point,
-    px,
+    Focusable, Image, ImageFormat, InteractiveElement as _, IntoElement, KeyDownEvent, KeyUpEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point,
+    Render, RenderImage, ScrollWheelEvent, SharedString, Styled as _, UTF16Selection, Window, div,
+    point, px,
 };
 use gpui_component::{
     ActiveTheme as _, Sizable as _,
@@ -25,7 +25,7 @@ use gpui_component::{
 };
 
 use super::element::TerminalElement;
-use super::input::encode_keystroke;
+use super::input::{KeyEventKind, encode_keystroke_with_kind};
 use crate::client::api::GateHttpClient;
 use crate::config::LOCAL_SERVER_ID;
 use crate::gpui_tokio::Tokio;
@@ -113,8 +113,8 @@ impl TerminalView {
             viewport_origin: point(px(0.0), px(0.0)),
             cell_width: px(8.4),
             line_height: px(18.0),
-            requested_cols: 80,
-            requested_rows: 24,
+            requested_cols: 0,
+            requested_rows: 0,
             selection_anchor: None,
             selection_head: None,
             dragging_selection: false,
@@ -127,6 +127,13 @@ impl TerminalView {
             on_resize: None,
             http_client: None,
         }
+    }
+
+    pub fn with_initial_size(mut self, cols: u16, rows: u16) -> Self {
+        let cols = cols.max(20);
+        let rows = rows.max(5);
+        self.term.resize(cols, rows);
+        self
     }
 
     pub fn with_callbacks(
@@ -255,7 +262,19 @@ impl TerminalView {
     }
 
     pub fn desired_size(&self) -> (u16, u16) {
-        (self.requested_cols, self.requested_rows)
+        if self.requested_cols > 0 && self.requested_rows > 0 {
+            (self.requested_cols, self.requested_rows)
+        } else {
+            let st = self.term.state();
+            (st.cols as u16, st.rows as u16)
+        }
+    }
+
+    pub fn force_send_resize(&mut self, cx: &mut Context<Self>) {
+        let (cols, rows) = self.desired_size();
+        if let Some(cb) = self.on_resize.clone() {
+            cb(cols, rows, cx);
+        }
     }
 
     pub(crate) fn update_viewport_geometry(
@@ -684,15 +703,41 @@ impl TerminalView {
         }
 
         let state = self.term.state();
-        if let Some(bytes) = encode_keystroke(
+        let kind = if ev.is_held {
+            KeyEventKind::Repeat
+        } else {
+            KeyEventKind::Press
+        };
+        if let Some(bytes) = encode_keystroke_with_kind(
             ks,
             &state,
             &self.server_os,
             self.has_selection(),
             self.win32_input_mode,
+            kind,
         ) {
             self.term.scroll_to_bottom();
             self.clear_selection();
+            self.send_bytes(&bytes, cx);
+            cx.notify();
+            window.prevent_default();
+            cx.stop_propagation();
+        }
+    }
+
+    fn on_key_up(&mut self, ev: &KeyUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.ime_marked_text.is_some() {
+            return;
+        }
+        let state = self.term.state();
+        if let Some(bytes) = encode_keystroke_with_kind(
+            &ev.keystroke,
+            &state,
+            &self.server_os,
+            self.has_selection(),
+            self.win32_input_mode,
+            KeyEventKind::Release,
+        ) {
             self.send_bytes(&bytes, cx);
             cx.notify();
             window.prevent_default();
@@ -943,6 +988,7 @@ impl Render for TerminalView {
             .flex()
             .flex_col()
             .on_key_down(cx.listener(Self::on_key_down))
+            .on_key_up(cx.listener(Self::on_key_up))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::on_mouse_down))
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::on_mouse_down))
@@ -1299,5 +1345,19 @@ mod tests {
                 &[encode_osc5522_read_reply("text/plain", b"hello")]
             );
         });
+    }
+
+    #[gpui::test]
+    fn first_layout_and_force_send_resize_emit_viewport_proposal(cx: &mut TestAppContext) {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let view = terminal_view(cx, requests.clone());
+        view.update(cx, |view, cx| {
+            assert_eq!(view.desired_size(), (80, 24));
+            // Even when first measured layout matches default 80x24, on_resize must fire once.
+            view.update_viewport_geometry(point(px(0.0), px(0.0)), px(8.0), px(16.0), 80, 24, cx);
+            // Re-focusing an already-attached pane via sidebar can force a fresh resize proposal.
+            view.force_send_resize(cx);
+        });
+        assert_eq!(*requests.borrow(), vec![(80, 24), (80, 24)]);
     }
 }

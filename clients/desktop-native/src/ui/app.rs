@@ -156,6 +156,9 @@ pub struct GatetermWorkbench {
 
     pub system_tray: Option<crate::system::tray::SystemTray>,
     pub quitting: bool,
+    pub window_hidden_to_tray: bool,
+    pub last_viewport_size: (u16, u16),
+    pub last_remembered_session: Option<(String, u64)>,
     pub pending_focus_terminal: bool,
     pub last_window_title: String,
     pub cloud_abort: Option<tokio::task::AbortHandle>,
@@ -386,13 +389,15 @@ impl GatetermWorkbench {
                 !wb.quitting && wb.config.close_to_tray && wb.system_tray.is_some()
             };
             if should_hide {
+                entity.update(cx, |wb, cx| {
+                    wb.window_hidden_to_tray = true;
+                    wb.detach_all_tabs(cx);
+                });
                 crate::system::window_ext::hide_window_to_tray(window, cx);
                 false
             } else {
-                entity.update(cx, |wb, _| {
-                    if let Some(mut sup) = wb.local_supervisor.take() {
-                        sup.shutdown_all();
-                    }
+                entity.update(cx, |wb, cx| {
+                    wb.shutdown_all_connections(cx);
                 });
                 true
             }
@@ -434,6 +439,9 @@ impl GatetermWorkbench {
             cloud_code_input,
             system_tray,
             quitting: false,
+            window_hidden_to_tray: false,
+            last_viewport_size: (100, 30),
+            last_remembered_session: None,
             pending_focus_terminal: true,
             last_window_title: "Gateterm".to_string(),
             cloud_abort: None,
@@ -472,6 +480,7 @@ impl GatetermWorkbench {
         match action {
             TrayAction::ShowWindow => {
                 crate::system::window_ext::show_and_focus_window(window, cx);
+                self.restore_session_after_show(cx);
             }
             TrayAction::OpenWeb => {
                 let url = self
@@ -503,6 +512,7 @@ impl GatetermWorkbench {
             }
             TrayAction::OpenSettings => {
                 crate::system::window_ext::show_and_focus_window(window, cx);
+                self.restore_session_after_show(cx);
                 self.open_settings_modal(cx);
             }
             TrayAction::ViewLogs => {
@@ -510,9 +520,7 @@ impl GatetermWorkbench {
             }
             TrayAction::Quit => {
                 self.quitting = true;
-                if let Some(mut sup) = self.local_supervisor.take() {
-                    sup.shutdown_all();
-                }
+                self.shutdown_all_connections(cx);
                 cx.quit();
             }
         }
@@ -671,6 +679,22 @@ impl GatetermWorkbench {
     }
 
     pub fn disconnect_server(&mut self, server_id: &str, cx: &mut Context<Self>) {
+        let views_to_close: Vec<Entity<TerminalView>> = self
+            .channel_views
+            .iter()
+            .filter_map(|((srv, _), v)| (srv == server_id).then(|| v.clone()))
+            .collect();
+        for view in views_to_close {
+            if let Some(idx) = self
+                .tabs
+                .iter()
+                .position(|t| t.root.contains_terminal(&view))
+            {
+                self.close_pane_or_tab(idx, Some(view), cx);
+            } else {
+                self.detach_terminal_view(&view, cx);
+            }
+        }
         if let Some(conn) = self.servers.get_mut(server_id) {
             if let Some(tx) = conn.cmd_tx.take() {
                 let _ = tx.send(WsCommand::Disconnect);
@@ -679,6 +703,24 @@ impl GatetermWorkbench {
             conn.state = WsConnectionState::Disconnected;
             cx.notify();
         }
+    }
+
+    pub fn select_server(&mut self, server_id: &str, cx: &mut Context<Self>) {
+        if self.active_server_id == server_id && !self.tabs.is_empty() {
+            return;
+        }
+        self.active_server_id = server_id.to_string();
+        self.detach_all_tabs(cx);
+        if !self.window_hidden_to_tray {
+            let first_sid = self
+                .servers
+                .get(server_id)
+                .and_then(|c| c.sessions.first().map(|s| s.id));
+            if let Some(sid) = first_sid {
+                self.open_session_in_new_tab(server_id, sid, cx);
+            }
+        }
+        cx.notify();
     }
 
     fn handle_ws_event(&mut self, server_id: String, event: WsEvent, cx: &mut Context<Self>) {
@@ -756,7 +798,10 @@ impl GatetermWorkbench {
 
                 if let Some(conn) = self.servers.get_mut(&server_id) {
                     conn.sessions = sessions;
-                    if server_id == self.active_server_id && self.tabs.is_empty() {
+                    if !self.window_hidden_to_tray
+                        && server_id == self.active_server_id
+                        && self.tabs.is_empty()
+                    {
                         if let Some(first) = conn.sessions.first() {
                             first_session_to_open = Some(first.id);
                         } else if !conn.auto_created_initial {
@@ -778,6 +823,7 @@ impl GatetermWorkbench {
             }
             ServerMsg::SessionEvent { event, session } => {
                 let mut newly_created_id = None;
+                let mut closed_session_id = None;
                 if let Some(conn) = self.servers.get_mut(&server_id) {
                     match event {
                         SessionEventKind::Created => {
@@ -804,21 +850,29 @@ impl GatetermWorkbench {
                         }
                         SessionEventKind::Closed => {
                             conn.sessions.retain(|s| s.id != session.id);
+                            closed_session_id = Some(session.id);
                         }
                     }
                 }
 
+                if let Some(closed_sid) = closed_session_id {
+                    self.close_views_for_session(&server_id, closed_sid, cx);
+                    self.open_fallback_session_if_needed(&server_id, cx);
+                }
+
                 if let Some(sid) = newly_created_id {
                     let split = self.pending_create_split.remove(&server_id).flatten();
-                    if let Some(axis) = split {
-                        self.split_active_tab_with_session(&server_id, sid, axis, cx);
-                    } else if server_id == self.active_server_id {
-                        let already_attached = self
-                            .channel_views
-                            .iter()
-                            .any(|((srv, _), v)| srv == &server_id && v.read(cx).session_id == sid);
-                        if !already_attached {
-                            self.open_session_in_new_tab(&server_id, sid, cx);
+                    if !self.window_hidden_to_tray {
+                        if let Some(axis) = split {
+                            self.split_active_tab_with_session(&server_id, sid, axis, cx);
+                        } else if server_id == self.active_server_id {
+                            let already_attached = self
+                                .channel_views
+                                .iter()
+                                .any(|((srv, _), v)| srv == &server_id && v.read(cx).session_id == sid);
+                            if !already_attached {
+                                self.open_session_in_new_tab(&server_id, sid, cx);
+                            }
                         }
                     }
                 }
@@ -855,11 +909,27 @@ impl GatetermWorkbench {
                 }
             }
             ServerMsg::ResyncEnd { .. } | ServerMsg::PreviewData { .. } => {}
-            ServerMsg::SessionExited { channel, .. } => {
-                if let Some(view) = self.channel_views.get(&(server_id, channel)).cloned() {
+            ServerMsg::SessionExited { id, channel, .. } => {
+                if let Some(conn) = self.servers.get_mut(&server_id) {
+                    conn.sessions.retain(|s| s.id != id);
+                }
+                if let Some(view) = self.channel_views.get(&(server_id.clone(), channel)).cloned() {
                     view.update(cx, |v, cx| {
                         v.mark_exited(cx);
                     });
+                    if let Some(idx) = self
+                        .tabs
+                        .iter()
+                        .position(|t| t.root.contains_terminal(&view))
+                    {
+                        self.close_pane_or_tab(idx, Some(view), cx);
+                    } else {
+                        self.detach_terminal_view(&view, cx);
+                    }
+                }
+                self.open_fallback_session_if_needed(&server_id, cx);
+                if server_id == LOCAL_SERVER_ID {
+                    self.refresh_tray_status();
                 }
                 cx.notify();
             }
@@ -1082,6 +1152,7 @@ impl GatetermWorkbench {
         let max_scrollback = self.config.max_scrollback;
         let srv_id = server_id.to_string();
         let http = conn.http.clone();
+        let (init_cols, init_rows) = self.last_viewport_size;
 
         let view = cx.new(|cx| {
             TerminalView::new(
@@ -1097,6 +1168,7 @@ impl GatetermWorkbench {
                 max_scrollback,
                 cx,
             )
+            .with_initial_size(init_cols, init_rows)
             .with_callbacks(on_input, on_resize)
             .with_http_client(http)
         });
@@ -1108,12 +1180,86 @@ impl GatetermWorkbench {
         let _ = cmd_tx.send(WsCommand::Attach {
             session_id,
             channel,
-            cols: 100,
-            rows: 30,
+            cols: init_cols,
+            rows: init_rows,
             colors,
         });
 
         Some(view)
+    }
+
+    fn detach_terminal_view(&mut self, view: &Entity<TerminalView>, cx: &App) {
+        let term = view.read(cx);
+        let (cols, rows) = term.desired_size();
+        if cols >= 20 && rows >= 5 {
+            self.last_viewport_size = (cols, rows);
+        }
+        let srv = term.server_id.clone();
+        let ch = term.channel;
+        self.channel_views.remove(&(srv.clone(), ch));
+        if let Some(conn) = self.servers.get(&srv) {
+            if let Some(tx) = &conn.cmd_tx {
+                let _ = tx.send(WsCommand::Detach { channel: ch });
+            }
+        }
+    }
+
+    pub fn detach_all_tabs(&mut self, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tabs.get(self.active_tab_idx) {
+            self.last_remembered_session = Some(tab.active_session_key(cx));
+        }
+        let removed_tabs = std::mem::take(&mut self.tabs);
+        self.active_tab_idx = 0;
+        for tab in removed_tabs {
+            for v in tab.root.terminals() {
+                self.detach_terminal_view(&v, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    pub fn restore_session_after_show(&mut self, cx: &mut Context<Self>) {
+        self.window_hidden_to_tray = false;
+        if !self.tabs.is_empty() {
+            return;
+        }
+        let srv_id = self.active_server_id.clone();
+        let sid_opt = self.servers.get(&srv_id).and_then(|conn| {
+            if let Some((ref rem_srv, rem_sid)) = self.last_remembered_session {
+                if rem_srv == &srv_id && conn.sessions.iter().any(|s| s.id == rem_sid) {
+                    return Some(rem_sid);
+                }
+            }
+            conn.sessions.first().map(|s| s.id)
+        });
+        if let Some(sid) = sid_opt {
+            self.open_session_in_new_tab(&srv_id, sid, cx);
+        }
+    }
+
+    pub fn shutdown_all_connections(&mut self, cx: &mut Context<Self>) {
+        self.detach_all_tabs(cx);
+        let srv_ids: Vec<String> = self.servers.keys().cloned().collect();
+        for srv_id in srv_ids {
+            self.disconnect_server(&srv_id, cx);
+        }
+        if let Some(mut sup) = self.local_supervisor.take() {
+            sup.shutdown_all();
+        }
+    }
+
+    fn open_fallback_session_if_needed(&mut self, server_id: &str, cx: &mut Context<Self>) {
+        if self.window_hidden_to_tray || !self.tabs.is_empty() || server_id != self.active_server_id
+        {
+            return;
+        }
+        let next_sid = self
+            .servers
+            .get(server_id)
+            .and_then(|c| c.sessions.first().map(|s| s.id));
+        if let Some(sid) = next_sid {
+            self.open_session_in_new_tab(server_id, sid, cx);
+        }
     }
 
     pub fn open_session_in_new_tab(
@@ -1122,9 +1268,11 @@ impl GatetermWorkbench {
         session_id: u64,
         cx: &mut Context<Self>,
     ) {
+        self.detach_all_tabs(cx);
         let Some(view) = self.spawn_terminal_view_for_session(server_id, session_id, cx) else {
             return;
         };
+        self.last_remembered_session = Some((server_id.to_string(), session_id));
         let tab_id = self.next_tab_id;
         self.next_tab_id += 1;
         self.tabs.push(WorkspaceTab::new(tab_id, view));
@@ -1175,13 +1323,13 @@ impl GatetermWorkbench {
             return;
         }
 
-        for (idx, tab) in self.tabs.iter_mut().enumerate() {
+        if let Some(tab) = self.tabs.get_mut(self.active_tab_idx) {
             if let Some(found) = tab.root.terminals().into_iter().find(|v| {
                 let term = v.read(cx);
                 term.server_id == server_id && term.session_id == session_id
             }) {
-                self.active_tab_idx = idx;
-                tab.active_terminal = found;
+                tab.active_terminal = found.clone();
+                found.update(cx, |v, cx| v.force_send_resize(cx));
                 tab.focus_active(window, cx);
                 cx.notify();
                 return;
@@ -1205,31 +1353,16 @@ impl GatetermWorkbench {
         };
         let target = target_opt.unwrap_or_else(|| tab.active_terminal.clone());
 
-        let detach_view = |view: &Entity<TerminalView>,
-                           servers: &BTreeMap<String, ServerConnection>,
-                           channel_views: &mut HashMap<(String, u32), Entity<TerminalView>>,
-                           cx: &App| {
-            let term = view.read(cx);
-            let srv = term.server_id.clone();
-            let ch = term.channel;
-            channel_views.remove(&(srv.clone(), ch));
-            if let Some(conn) = servers.get(&srv) {
-                if let Some(tx) = &conn.cmd_tx {
-                    let _ = tx.send(WsCommand::Detach { channel: ch });
-                }
-            }
-        };
-
         match tab.root.remove_terminal(&target) {
             Ok(true) => {
-                detach_view(&target, &self.servers, &mut self.channel_views, cx);
                 tab.active_terminal = tab.root.first_terminal();
                 tab.zoomed_terminal = None;
+                self.detach_terminal_view(&target, cx);
             }
             Err(()) => {
                 let removed_tab = self.tabs.remove(tab_idx);
                 for v in removed_tab.root.terminals() {
-                    detach_view(&v, &self.servers, &mut self.channel_views, cx);
+                    self.detach_terminal_view(&v, cx);
                 }
                 if self.active_tab_idx >= self.tabs.len() && !self.tabs.is_empty() {
                     self.active_tab_idx = self.tabs.len() - 1;
@@ -1240,10 +1373,12 @@ impl GatetermWorkbench {
         cx.notify();
     }
 
-    pub fn kill_session(&mut self, server_id: &str, session_id: u64, cx: &mut Context<Self>) {
-        if let Some(conn) = self.servers.get(server_id) {
-            conn.send_client_msg(ClientMsg::KillSession { id: session_id });
-        }
+    pub fn close_views_for_session(
+        &mut self,
+        server_id: &str,
+        session_id: u64,
+        cx: &mut Context<Self>,
+    ) {
         let matching_views: Vec<Entity<TerminalView>> = self
             .channel_views
             .values()
@@ -1260,8 +1395,19 @@ impl GatetermWorkbench {
                 .position(|t| t.root.contains_terminal(&view))
             {
                 self.close_pane_or_tab(idx, Some(view), cx);
+            } else {
+                self.detach_terminal_view(&view, cx);
             }
         }
+    }
+
+    pub fn kill_session(&mut self, server_id: &str, session_id: u64, cx: &mut Context<Self>) {
+        if let Some(conn) = self.servers.get_mut(server_id) {
+            conn.sessions.retain(|s| s.id != session_id);
+            conn.send_client_msg(ClientMsg::KillSession { id: session_id });
+        }
+        self.close_views_for_session(server_id, session_id, cx);
+        self.open_fallback_session_if_needed(server_id, cx);
         cx.notify();
     }
 
@@ -1641,6 +1787,7 @@ impl GatetermWorkbench {
         let _ = self.config.save();
         self.servers
             .insert(id.clone(), ServerConnection::new(profile));
+        self.detach_all_tabs(cx);
         self.active_server_id = id.clone();
         self.server_dialog.open = false;
         self.connect_server(&id, cx);
@@ -1651,12 +1798,13 @@ impl GatetermWorkbench {
         if server_id == LOCAL_SERVER_ID {
             return;
         }
+        let was_active = self.active_server_id == server_id;
         self.disconnect_server(server_id, cx);
         self.servers.remove(server_id);
         self.config.remove_server(server_id);
         let _ = self.config.save();
-        if self.active_server_id == server_id {
-            self.active_server_id = LOCAL_SERVER_ID.to_string();
+        if was_active {
+            self.select_server(LOCAL_SERVER_ID, cx);
         }
         cx.notify();
     }
@@ -2604,8 +2752,7 @@ impl GatetermWorkbench {
                 })
                 .hover(|s| s.bg(cx.theme().secondary))
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.active_server_id = srv_select.clone();
-                    cx.notify();
+                    this.select_server(&srv_select, cx);
                 }))
                 .child(
                     h_flex()

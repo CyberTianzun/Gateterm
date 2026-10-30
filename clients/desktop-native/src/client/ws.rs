@@ -219,10 +219,16 @@ pub fn spawn_ws_worker(
                                             continue;
                                         };
                                         match &server_msg {
-                                            ServerMsg::Error { message, .. } => {
+                                            ServerMsg::Error { message, channel } => {
                                                 if !auth_ok {
                                                     pre_hello_error = Some(message.clone());
                                                 }
+                                                if let Some(ch) = channel {
+                                                    attachments.remove(ch);
+                                                }
+                                            }
+                                            ServerMsg::SessionExited { channel, .. } => {
+                                                attachments.remove(channel);
                                             }
                                             ServerMsg::HelloOk { os, win32_input_mode, cloud_server_id, .. } => {
                                                 auth_ok = true;

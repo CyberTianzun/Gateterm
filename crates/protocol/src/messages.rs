@@ -96,7 +96,7 @@ pub struct TermColors {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
+#[serde(tag = "type", rename_all = "kebab-case", from = "RawServerMsg")]
 pub enum ServerMsg {
     /// `os` 是服务端的 `std::env::consts::OS`("windows" / "macos" / "linux" …)。
     /// 客户端需要它来决定键盘编码:Windows 上中间隔着 ConPTY,传统 VT 字节会
@@ -106,7 +106,8 @@ pub enum ServerMsg {
         proto: u32,
         #[serde(default)]
         os: String,
-        /// Windows 10 的系统 ConPTY 不支持精确按键包;缺省 false,安全回退普通 VT。
+        /// Windows 10 的系统 ConPTY 不支持精确按键包;显式为 false 时安全回退普通 VT。
+        /// 若旧版 Windows 服务端省略了该字段,默认按 `os == "windows"` 启用。
         #[serde(default)]
         win32_input_mode: bool,
         /// 本机登录 Gateterm Cloud 后的 server_id。手机收到推送时用它找回本地保存的连接。
@@ -169,6 +170,126 @@ pub enum ServerMsg {
     },
 }
 
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+enum RawServerMsg {
+    HelloOk {
+        proto: u32,
+        #[serde(default)]
+        os: String,
+        #[serde(default)]
+        win32_input_mode: Option<bool>,
+        #[serde(default)]
+        cloud_server_id: Option<String>,
+    },
+    Error {
+        message: String,
+        #[serde(default)]
+        channel: Option<u32>,
+    },
+    Sessions {
+        sessions: Vec<SessionInfo>,
+    },
+    SessionEvent {
+        event: SessionEventKind,
+        session: SessionInfo,
+    },
+    PreviewData {
+        id: u64,
+        data: String,
+    },
+    Attached {
+        channel: u32,
+        seq: u64,
+        mode: AttachMode,
+    },
+    Resized {
+        channel: u32,
+        cols: u16,
+        rows: u16,
+    },
+    ResyncBegin {
+        channel: u32,
+    },
+    ResyncEnd {
+        channel: u32,
+        seq: u64,
+    },
+    SessionExited {
+        channel: u32,
+        id: u64,
+    },
+    AgentEvent {
+        agent_id: String,
+        agent_session_id: String,
+        #[serde(default)]
+        session: Option<u64>,
+        state: AgentState,
+        #[serde(default)]
+        pending: Option<String>,
+        #[serde(default)]
+        detail: Option<String>,
+    },
+}
+
+impl From<RawServerMsg> for ServerMsg {
+    fn from(raw: RawServerMsg) -> Self {
+        match raw {
+            RawServerMsg::HelloOk {
+                proto,
+                os,
+                win32_input_mode,
+                cloud_server_id,
+            } => {
+                let win32_input_mode =
+                    win32_input_mode.unwrap_or_else(|| os.eq_ignore_ascii_case("windows"));
+                Self::HelloOk {
+                    proto,
+                    os,
+                    win32_input_mode,
+                    cloud_server_id,
+                }
+            }
+            RawServerMsg::Error { message, channel } => Self::Error { message, channel },
+            RawServerMsg::Sessions { sessions } => Self::Sessions { sessions },
+            RawServerMsg::SessionEvent { event, session } => {
+                Self::SessionEvent { event, session }
+            }
+            RawServerMsg::PreviewData { id, data } => Self::PreviewData { id, data },
+            RawServerMsg::Attached { channel, seq, mode } => {
+                Self::Attached { channel, seq, mode }
+            }
+            RawServerMsg::Resized {
+                channel,
+                cols,
+                rows,
+            } => Self::Resized {
+                channel,
+                cols,
+                rows,
+            },
+            RawServerMsg::ResyncBegin { channel } => Self::ResyncBegin { channel },
+            RawServerMsg::ResyncEnd { channel, seq } => Self::ResyncEnd { channel, seq },
+            RawServerMsg::SessionExited { channel, id } => Self::SessionExited { channel, id },
+            RawServerMsg::AgentEvent {
+                agent_id,
+                agent_session_id,
+                session,
+                state,
+                pending,
+                detail,
+            } => Self::AgentEvent {
+                agent_id,
+                agent_session_id,
+                session,
+                state,
+                pending,
+                detail,
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,6 +325,17 @@ mod tests {
     fn hello_ok_accepts_old_servers_and_reports_os() {
         let old: ServerMsg = serde_json::from_str(r#"{"type":"hello-ok","proto":1}"#).unwrap();
         assert_eq!(old, ServerMsg::HelloOk { proto: 1, os: String::new(), win32_input_mode: false, cloud_server_id: None });
+        let old_win: ServerMsg =
+            serde_json::from_str(r#"{"type":"hello-ok","proto":1,"os":"windows"}"#).unwrap();
+        assert_eq!(
+            old_win,
+            ServerMsg::HelloOk {
+                proto: 1,
+                os: "windows".into(),
+                win32_input_mode: true,
+                cloud_server_id: None,
+            }
+        );
         let current = ServerMsg::HelloOk { proto: 1, os: "windows".into(), win32_input_mode: true, cloud_server_id: None };
         let json = serde_json::to_value(&current).unwrap();
         assert_eq!(json["os"], "windows");
