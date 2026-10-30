@@ -332,20 +332,25 @@ private fun SessionRow(
                     text = session.name.ifBlank { "#${session.id}" },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
                 )
-                if (agent != null) AgentStateTag(agent)
             }
         },
         supportingContent = {
-            val size = "${session.cols}×${session.rows}"
             val cwdShort = shortCwd(session.cwd)
             val metaParts = buildList {
                 if (cwdShort != null) add(cwdShort)
-                add(size)
                 if (open) add(stringResource(R.string.session_open))
             }
-            Text(metaParts.joinToString(" · "))
+            if (metaParts.isNotEmpty() || agent != null) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (metaParts.isNotEmpty()) {
+                        Text(metaParts.joinToString(" · "))
+                    }
+                    if (agent != null) {
+                        AgentStateTag(agent)
+                    }
+                }
+            }
         },
         trailingContent = {
             Box {

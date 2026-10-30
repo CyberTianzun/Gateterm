@@ -330,6 +330,7 @@ function renderSidebar() {
     row.innerHTML = `
       <div class="sname"></div>
       <div class="smeta"></div>
+      <div class="sstatus" hidden></div>
       <div class="sacts">
         ${showChat ? '<button type="button" data-act="view-toggle" aria-controls="chat-view"></button>' : ""}
         <button data-act="rename" title="${t("session.rename")}">✎</button>
@@ -341,15 +342,15 @@ function renderSidebar() {
     titleSpan.textContent = s.name;
     snameEl.appendChild(titleSpan);
     const agent = forSession(agents, s.id);
+    const sstatusEl = row.querySelector<HTMLElement>(".sstatus")!;
     if (agent) {
       snameEl.prepend(agentBrandIcon(agent));
-      snameEl.appendChild(agentStatusTag(agent));
+      sstatusEl.hidden = false;
+      sstatusEl.appendChild(agentStatusTag(agent));
     }
     const smeta = row.querySelector<HTMLElement>(".smeta")!;
     const cwdShort = shortCwd(s.cwd);
-    smeta.textContent = cwdShort
-      ? `${cwdShort} · ${s.cols}×${s.rows}`
-      : `${s.cols}×${s.rows} · ${fmtTime(s.created_at)}`;
+    smeta.textContent = cwdShort || fmtTime(s.created_at);
     if (s.cwd) smeta.title = s.cwd;
     row.addEventListener("click", (ev) => {
       const act = (ev.target as Element).closest<HTMLButtonElement>("button[data-act]")?.dataset.act;
@@ -920,19 +921,25 @@ function renderSessionList() {
     name.className = "scard-name";
     name.textContent = s.name;
     head.appendChild(name);
-    if (agent) head.appendChild(agentStatusTag(agent));
     const meta = document.createElement("div");
     meta.className = "scard-meta";
     const cwdShort = shortCwd(s.cwd);
     meta.textContent = cwdShort
-      ? `${cwdShort} · ${s.cols}×${s.rows} · ${fmtTime(s.created_at)}`
-      : `${s.cols}×${s.rows} · ${fmtTime(s.created_at)}`;
+      ? `${cwdShort} · ${fmtTime(s.created_at)}`
+      : fmtTime(s.created_at);
     if (s.cwd) meta.title = s.cwd;
     const open = document.createElement("button");
     open.className = "scard-open";
     open.textContent = t("session.open");
     open.addEventListener("click", () => openTerminal(s.id));
-    card.append(head, meta, open);
+    if (agent) {
+      const statusRow = document.createElement("div");
+      statusRow.className = "scard-status";
+      statusRow.appendChild(agentStatusTag(agent));
+      card.append(head, meta, statusRow, open);
+    } else {
+      card.append(head, meta, open);
+    }
     // 整张卡都可点,按钮只是给「这里可以点」一个明确的落点
     card.addEventListener("click", (ev) => {
       if ((ev.target as HTMLElement).tagName !== "BUTTON") openTerminal(s.id);

@@ -2790,12 +2790,12 @@ impl GatetermWorkbench {
                 let is_renaming =
                     self.renaming_session.as_ref() == Some(&(active_srv_id.clone(), sid));
 
-                let meta_sub: SharedString = match sess.cwd.as_deref().map(format_short_cwd) {
-                    Some(short_cwd) if !short_cwd.is_empty() => {
-                        format!("{short_cwd} · {}×{}", sess.cols, sess.rows).into()
-                    }
-                    _ => format!("{}×{}", sess.cols, sess.rows).into(),
-                };
+                let meta_sub: Option<SharedString> = sess
+                    .cwd
+                    .as_deref()
+                    .map(format_short_cwd)
+                    .filter(|s| !s.is_empty())
+                    .map(SharedString::from);
 
                 let item = if is_renaming {
                     h_flex()
@@ -2868,16 +2868,19 @@ impl GatetermWorkbench {
                                                 })
                                                 .text_color(cx.theme().foreground)
                                                 .child(SharedString::from(sess.name.clone())),
-                                        )
-                                        .children(status_tag),
+                                        ),
                                 )
-                                .child(
+                                .children(meta_sub.map(|sub| {
                                     div()
                                         .pl_6()
+                                        .truncate()
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
-                                        .child(meta_sub),
-                                ),
+                                        .child(sub)
+                                }))
+                                .children(status_tag.map(|tag| {
+                                    h_flex().pl_6().pt(px(2.0)).items_center().child(tag)
+                                })),
                         )
                         .child(
                             h_flex()
