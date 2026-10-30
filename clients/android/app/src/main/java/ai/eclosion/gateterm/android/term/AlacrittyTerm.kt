@@ -144,6 +144,28 @@ class AlacrittyTerm(
         engine.encodePaste(text)
     }
 
+    fun encodeKey(
+        key: String,
+        codepoint: Int,
+        shift: Boolean,
+        alt: Boolean,
+        ctrl: Boolean,
+        isRelease: Boolean,
+        serverOs: String,
+        win32InputMode: Boolean,
+    ): ByteArray = synchronized(lock) {
+        engine.encodeKey(
+            key,
+            codepoint.toUInt(),
+            shift,
+            alt,
+            ctrl,
+            isRelease,
+            serverOs,
+            win32InputMode,
+        )
+    }
+
     override fun close() {
         engine.close()
     }

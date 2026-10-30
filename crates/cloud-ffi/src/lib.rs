@@ -8,6 +8,7 @@ uniffi::setup_scaffolding!();
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use gateterm_client_core::keyboard::{KeyEventKind, KeyInput};
 use gateterm_client_core::term::{ClientTerm, ClientTermState};
 use gateterm_cloud_client::ops::{self, OpsError};
 use gateterm_cloud_client::{ClientKind, CloudClient, CloudError, CodePurpose};
@@ -269,6 +270,31 @@ impl TermEngine {
 
     pub fn encode_paste(&self, text: String) -> Vec<u8> {
         self.inner.lock().unwrap().encode_paste(&text)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode_key(
+        &self,
+        key: String,
+        codepoint: u32,
+        shift: bool,
+        alt: bool,
+        ctrl: bool,
+        is_release: bool,
+        server_os: String,
+        win32_input_mode: bool,
+    ) -> Vec<u8> {
+        let kind = if is_release {
+            KeyEventKind::Release
+        } else {
+            KeyEventKind::Press
+        };
+        let cp = if codepoint == 0 { None } else { Some(codepoint) };
+        let input = KeyInput::simple(key, cp, shift, alt, ctrl, kind);
+        self.inner
+            .lock()
+            .unwrap()
+            .encode_key(&input, &server_os, win32_input_mode)
     }
 
     pub fn encode_pointer(

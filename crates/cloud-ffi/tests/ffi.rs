@@ -4,7 +4,7 @@ use axum::Router;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post, put};
-use gateterm_cloud_ffi::{CloudAccount, CloudFfiError, Purpose};
+use gateterm_cloud_ffi::{CloudAccount, CloudFfiError, Purpose, TermEngine};
 use serde_json::{Value, json};
 
 type Seen = Arc<Mutex<Vec<(String, Option<String>, Value)>>>;
@@ -230,4 +230,57 @@ async fn api_error_maps_code() {
     let acct = CloudAccount::new(dir.path().join("cloud.json").display().to_string(), "p".into());
     let err = acct.login(url, "a@example.com".into(), "wrongpw".into()).await.unwrap_err();
     assert!(matches!(&err, CloudFfiError::Api { code } if code == "wrong_password"), "{err:?}");
+}
+
+
+#[test]
+fn term_engine_encodes_kitty_and_win32_keys() {
+    let engine = TermEngine::new(80, 24, 1000);
+    assert_eq!(engine.state().kitty_keyboard_flags, 0);
+
+    // Push Kitty keyboard mode flags = 3 (DISAMBIGUATE_ESC_CODES | REPORT_EVENT_TYPES)
+    let st = engine.write(b"\x1b[>3u".to_vec());
+    assert_eq!(st.kitty_keyboard_flags, 3);
+
+    // Shift+Enter -> CSI 13;2u
+    let shift_enter = engine.encode_key(
+        "enter".into(),
+        13,
+        true,
+        false,
+        false,
+        false,
+        "linux".into(),
+        false,
+    );
+    assert_eq!(shift_enter, b"\x1b[13;2u");
+
+    // Ctrl+J release -> CSI 106;5:3u
+    let ctrl_j_rel = engine.encode_key(
+        "j".into(),
+        b'j' as u32,
+        false,
+        false,
+        true,
+        true,
+        "linux".into(),
+        false,
+    );
+    assert_eq!(ctrl_j_rel, b"\x1b[106;5:3u");
+
+    // Windows win32-input-mode takes precedence over Kitty flags
+    let win32_shift_enter = engine.encode_key(
+        "enter".into(),
+        13,
+        true,
+        false,
+        false,
+        false,
+        "windows".into(),
+        true,
+    );
+    assert_eq!(
+        win32_shift_enter,
+        b"\x1b[13;28;13;1;16;1_\x1b[13;28;13;0;16;1_"
+    );
 }

@@ -107,7 +107,12 @@ data class KeyStroke(
 
 /** One instance per session. Physical key-up uses the identity saved at key-down. */
 class TerminalKeyboard(val serverOs: String, val win32InputMode: Boolean = false) {
-    private data class Pressed(val stroke: KeyStroke, val win32: Boolean, val character: Int)
+    private data class Pressed(
+        val stroke: KeyStroke,
+        val win32: Boolean,
+        val character: Int,
+        val kittyFlags: Int = 0,
+    )
     private val pressed = linkedMapOf<Long, Pressed>()
 
     fun hasPressed(id: Long): Boolean = pressed.containsKey(id)
@@ -117,31 +122,65 @@ class TerminalKeyboard(val serverOs: String, val win32InputMode: Boolean = false
         stroke: KeyStroke,
         applicationCursor: Boolean = false,
         modifyOtherKeys: Int = 0,
+        kittyKeyboardFlags: Int = 0,
     ): ByteArray {
         val win32 = serverOs == "windows" && win32InputMode && stroke.codePoint in 0..127
-        pressed[id] = Pressed(stroke, win32, character(stroke))
-        return if (win32) packet(stroke, true) else legacy(stroke, applicationCursor, modifyOtherKeys)
+        val isRepeat = pressed.containsKey(id)
+        pressed[id] = Pressed(stroke, win32, character(stroke), kittyKeyboardFlags)
+        return if (win32) {
+            packet(stroke, true)
+        } else {
+            legacy(
+                stroke,
+                applicationCursor,
+                modifyOtherKeys,
+                kittyKeyboardFlags,
+                eventType = if (isRepeat) 2 else 1,
+            )
+        }
     }
 
-    fun keyUp(id: Long, modifiers: KeyModifiers): ByteArray? {
+    fun keyUp(id: Long, modifiers: KeyModifiers, kittyKeyboardFlags: Int = 0): ByteArray? {
         val previous = pressed.remove(id) ?: return null
-        return if (previous.win32) {
-            packet(previous.stroke.copy(modifiers = modifiers), false, previous.character)
-        } else byteArrayOf()
+        if (previous.win32) {
+            return packet(previous.stroke.copy(modifiers = modifiers), false, previous.character)
+        }
+        val flags = if (kittyKeyboardFlags != 0) kittyKeyboardFlags else previous.kittyFlags
+        if (flags and 2 != 0) {
+            return encodeKitty(previous.stroke.copy(modifiers = modifiers), flags, eventType = 3)
+                ?: byteArrayOf()
+        }
+        return byteArrayOf()
     }
 
-    fun tap(stroke: KeyStroke, applicationCursor: Boolean = false, modifyOtherKeys: Int = 0): ByteArray =
+    fun tap(
+        stroke: KeyStroke,
+        applicationCursor: Boolean = false,
+        modifyOtherKeys: Int = 0,
+        kittyKeyboardFlags: Int = 0,
+    ): ByteArray =
         if (serverOs == "windows" && win32InputMode && stroke.codePoint in 0..127) {
             packet(stroke, true) + packet(stroke, false)
-        } else legacy(stroke, applicationCursor, modifyOtherKeys)
+        } else {
+            legacy(stroke, applicationCursor, modifyOtherKeys, kittyKeyboardFlags, eventType = 1)
+        }
 
     /** IME commits are text, never bracketed paste. Explicit modifiers apply to one ASCII key. */
-    fun committedText(text: String, modifiers: KeyModifiers = KeyModifiers(), modifyOtherKeys: Int = 0): ByteArray {
+    fun committedText(
+        text: String,
+        modifiers: KeyModifiers = KeyModifiers(),
+        modifyOtherKeys: Int = 0,
+        kittyKeyboardFlags: Int = 0,
+    ): ByteArray {
         if (text.length == 1 && text[0].code < 128) {
             val key = TerminalKey.fromAscii(text[0])
             if (key != null && (modifiers.active || text == "\n" || text == "\r" || text == "\t")) {
                 val cp = if (modifiers.shift && text[0] in 'a'..'z') text[0].uppercaseChar().code else text[0].code
-                return tap(KeyStroke(key, cp, modifiers), modifyOtherKeys = modifyOtherKeys)
+                return tap(
+                    KeyStroke(key, cp, modifiers),
+                    modifyOtherKeys = modifyOtherKeys,
+                    kittyKeyboardFlags = kittyKeyboardFlags,
+                )
             }
         }
         return text.toByteArray(Charsets.UTF_8)
@@ -184,11 +223,20 @@ class TerminalKeyboard(val serverOs: String, val win32InputMode: Boolean = false
         }
     }
 
-    private fun legacy(stroke: KeyStroke, applicationCursor: Boolean, modifyOtherKeys: Int): ByteArray {
+    private fun legacy(
+        stroke: KeyStroke,
+        applicationCursor: Boolean,
+        modifyOtherKeys: Int,
+        kittyKeyboardFlags: Int = 0,
+        eventType: Int = 1,
+    ): ByteArray {
+        if (kittyKeyboardFlags != 0) {
+            encodeKitty(stroke, kittyKeyboardFlags, eventType)?.let { return it }
+        }
         val key = stroke.key
         val m = stroke.modifiers
         val modifier = 1 + (if (m.shift) 1 else 0) + (if (m.alt) 2 else 0) + (if (m.ctrl) 4 else 0)
-        if (modifyOtherKeys != 0) {
+        if (kittyKeyboardFlags == 0 && modifyOtherKeys != 0) {
             val other = OTHER_KEYS[key]
             if (other != null && modifier - 1 !in other.second) {
                 return "\u001b[27;$modifier;${other.first}~".toByteArray(Charsets.US_ASCII)
@@ -222,6 +270,68 @@ class TerminalKeyboard(val serverOs: String, val win32InputMode: Boolean = false
         val cp = if (key == TerminalKey.Backspace) { if (m.ctrl) 8 else 127 } else character(stroke)
         val text = String(Character.toChars(cp))
         return ((if (m.alt) "\u001b" else "") + text).toByteArray(Charsets.UTF_8)
+    }
+
+    private fun encodeKitty(stroke: KeyStroke, flags: Int, eventType: Int): ByteArray? {
+        val key = stroke.key
+        val m = stroke.modifiers
+        val modifier = 1 + (if (m.shift) 1 else 0) + (if (m.alt) 2 else 0) + (if (m.ctrl) 4 else 0)
+        val reportEvents = (flags and 2) != 0
+        val reportAllAsEsc = (flags and 8) != 0
+        val etSuffix = if (reportEvents && eventType > 1) ":$eventType" else ""
+
+        val letter = when (key) {
+            TerminalKey.Up -> 'A'; TerminalKey.Down -> 'B'; TerminalKey.Right -> 'C'; TerminalKey.Left -> 'D'
+            TerminalKey.Home -> 'H'; TerminalKey.End -> 'F'
+            TerminalKey.F1 -> 'P'; TerminalKey.F2 -> 'Q'; TerminalKey.F3 -> 'R'; TerminalKey.F4 -> 'S'
+            else -> null
+        }
+        if (letter != null) {
+            if (modifier != 1 || etSuffix.isNotEmpty()) {
+                return "\u001b[1;$modifier$etSuffix$letter".toByteArray(Charsets.US_ASCII)
+            }
+            return null
+        }
+
+        val number = when (key) {
+            TerminalKey.Insert -> 2; TerminalKey.Delete -> 3; TerminalKey.PageUp -> 5; TerminalKey.PageDown -> 6
+            TerminalKey.F5 -> 15; TerminalKey.F6 -> 17; TerminalKey.F7 -> 18; TerminalKey.F8 -> 19
+            TerminalKey.F9 -> 20; TerminalKey.F10 -> 21; TerminalKey.F11 -> 23; TerminalKey.F12 -> 24
+            else -> null
+        }
+        if (number != null) {
+            return if (modifier != 1 || etSuffix.isNotEmpty()) {
+                "\u001b[$number;$modifier$etSuffix~".toByteArray(Charsets.US_ASCII)
+            } else {
+                "\u001b[$number~".toByteArray(Charsets.US_ASCII)
+            }
+        }
+
+        val isEnterTabBs = key == TerminalKey.Enter || key == TerminalKey.NumpadEnter ||
+            key == TerminalKey.Tab || key == TerminalKey.Backspace
+        val shouldCsiU = reportAllAsEsc || key == TerminalKey.Escape ||
+            m.ctrl || m.alt || (isEnterTabBs && m.shift) || eventType == 3
+        if (!shouldCsiU) return null
+
+        val cp = when (key) {
+            TerminalKey.Escape -> 27
+            TerminalKey.Enter, TerminalKey.NumpadEnter -> 13
+            TerminalKey.Tab -> 9
+            TerminalKey.Backspace -> 127
+            TerminalKey.Space -> 32
+            else -> {
+                val raw = if (stroke.codePoint != 0) stroke.codePoint else key.character
+                if (raw in 65..90) raw + 32 else raw
+            }
+        }
+        if (cp <= 0) return null
+
+        val modPart = when {
+            etSuffix.isNotEmpty() -> ";$modifier$etSuffix"
+            modifier > 1 -> ";$modifier"
+            else -> ""
+        }
+        return "\u001b[$cp${modPart}u".toByteArray(Charsets.US_ASCII)
     }
 
     private companion object {

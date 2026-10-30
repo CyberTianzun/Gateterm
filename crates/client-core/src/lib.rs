@@ -1,3 +1,4 @@
+pub mod keyboard;
 pub mod term;
 
 use std::time::Duration;

@@ -490,6 +490,15 @@ impl ClientTerm {
         }
     }
 
+    pub fn encode_key(
+        &self,
+        input: &crate::keyboard::KeyInput,
+        server_os: &str,
+        win32_input_mode: bool,
+    ) -> Vec<u8> {
+        crate::keyboard::encode_key(input, &self.state(), server_os, win32_input_mode)
+    }
+
     pub fn encode_pointer(
         &self,
         col: i32,
