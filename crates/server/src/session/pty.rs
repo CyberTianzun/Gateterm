@@ -32,6 +32,28 @@ fn parse_hex_color(s: &str) -> Result<Rgb> {
 }
 
 pub const BROADCAST_CAP: usize = 256;
+const PTY_READ_BUF_LEN: usize = 8192;
+const COALESCE_PARSE_MAX: usize = 64 * 1024;
+
+/// 贪婪合并排队中的 PTY 字节切片，在单次 `shared.lock()` 中批量推进 VT 解析与环形缓冲。
+fn coalesce_pty_chunks(
+    first: Vec<u8>,
+    rx: &std::sync::mpsc::Receiver<Vec<u8>>,
+    cap: usize,
+) -> Vec<u8> {
+    let mut batch = first;
+    let mut last_len = batch.len().max(1);
+    while batch.len().saturating_add(last_len) <= cap {
+        match rx.try_recv() {
+            Ok(next) => {
+                last_len = next.len().max(1);
+                batch.extend_from_slice(&next);
+            }
+            Err(_) => break,
+        }
+    }
+    batch
+}
 
 /// 尺寸下界:某个客户端上报 1×1(手机上软键盘顶掉整个视口时真会发生)不该把
 /// 会话压死,更不该让别人跟着一起被压死。
@@ -305,26 +327,48 @@ impl Session {
             next_viewport: AtomicU64::new(1),
         });
 
-        // 阻塞读线程:pty 输出 → grid + 环形缓冲 + 广播
-        let s = session.clone();
-        std::thread::spawn(move || {
-            let mut buf = [0u8; 8192];
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) => {
-                        tracing::debug!(session = s.id, "pty read eof");
-                        break;
+        let (chunk_tx, chunk_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(BROADCAST_CAP);
+
+        // PTY 排空线程:只执行 reader.read 并送入有界通道,不碰 shared 锁,
+        // 防止慢解析或快照竞争反压内核 PTY 缓冲。
+        let drain_session_id = session.id;
+        std::thread::Builder::new()
+            .name(format!("pty-drain-{id}"))
+            .spawn(move || {
+                let mut buf = [0u8; PTY_READ_BUF_LEN];
+                loop {
+                    match reader.read(&mut buf) {
+                        Ok(0) => {
+                            tracing::debug!(session = drain_session_id, "pty read eof");
+                            break;
+                        }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(e) => {
+                            tracing::warn!(session = drain_session_id, error = %e, "pty read ended");
+                            break;
+                        }
+                        Ok(n) => {
+                            if chunk_tx.send(buf[..n].to_vec()).is_err() {
+                                break;
+                            }
+                        }
                     }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(e) => {
-                        tracing::warn!(session = s.id, error = %e, "pty read ended");
-                        break;
-                    }
-                    Ok(n) => s.process_output(&buf[..n]),
                 }
-            }
-            s.mark_exited();
-        });
+            })
+            .context("spawn pty drain thread")?;
+
+        // VT 解析线程:合并排队切片后单次加锁推进 grid + 环形缓冲 + 广播
+        let s = session.clone();
+        let parse_handle = std::thread::Builder::new()
+            .name(format!("pty-parse-{id}"))
+            .spawn(move || {
+                while let Ok(first) = chunk_rx.recv() {
+                    let batch = coalesce_pty_chunks(first, &chunk_rx, COALESCE_PARSE_MAX);
+                    s.process_output_batch(batch);
+                }
+                s.mark_exited();
+            })
+            .context("spawn pty parse thread")?;
 
         // Windows ConPTY:子进程退出后读端经常不 EOF。必须另线程 wait,再关掉
         // PTY 才能让读线程结束、会话从 manager 里摘掉。
@@ -341,22 +385,28 @@ impl Session {
                 Err(e) => tracing::warn!(session = s.id, error = %e, "wait on child failed"),
             }
             s.force_close_pty();
+            let _ = parse_handle.join();
             s.mark_exited();
         });
 
         Ok(session)
     }
 
+    #[cfg(test)]
     fn process_output(&self, bytes: &[u8]) {
+        self.process_output_batch(bytes.to_vec());
+    }
+
+    fn process_output_batch(&self, batch: Vec<u8>) {
         let replies = {
             let mut shared = self.shared.lock().unwrap();
-            shared.grid.advance(bytes);
-            shared.buffer.append(bytes);
+            shared.grid.advance(&batch);
+            shared.buffer.append(&batch);
             // Publication shares the model lock with resize and snapshot so
             // every subscriber observes the same output/geometry ordering.
             let _ = self.tx.send(SessionOutput::Data {
                 end_seq: shared.buffer.end_seq(),
-                bytes: Bytes::copy_from_slice(bytes),
+                bytes: Bytes::from(batch),
             });
             shared.grid.take_pty_replies()
         };
@@ -626,6 +676,25 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coalesces_queued_pty_chunks_up_to_cap_without_dropping_tail() {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(256);
+        for _ in 0..10 {
+            tx.send(vec![b'a'; 1024]).unwrap();
+        }
+        drop(tx);
+        let first = rx.recv().unwrap();
+        let batch = coalesce_pty_chunks(first, &rx, 4096);
+        assert_eq!(batch.len(), 4096);
+        let second = rx.recv().unwrap();
+        let batch2 = coalesce_pty_chunks(second, &rx, 4096);
+        assert_eq!(batch2.len(), 4096);
+        let third = rx.recv().unwrap();
+        let batch3 = coalesce_pty_chunks(third, &rx, 4096);
+        assert_eq!(batch3.len(), 2048);
+        assert!(rx.recv().is_err());
+    }
 
     #[test]
     fn output_is_published_before_a_blocked_query_reply_and_subsequent_resize() {
