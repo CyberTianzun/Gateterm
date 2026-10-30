@@ -1,4 +1,5 @@
 pub mod clipboard;
+pub mod graphics;
 pub mod keyboard;
 pub mod term;
 

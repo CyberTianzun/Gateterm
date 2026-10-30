@@ -9,6 +9,7 @@ use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, Handler, ModifyOtherKeys, NamedColor, Processor, Rgb};
 
 use crate::clipboard::{ClipboardEvent, Osc5522Parser};
+use crate::graphics::{KittyGraphicsState, ViewportImage};
 
 pub const COLOR_INDEX_DEFAULT: i32 = -1;
 pub const COLOR_INDEX_RGB: i32 = -2;
@@ -247,6 +248,7 @@ pub struct ClientTerm {
     key_modes_parser: Processor,
     csi_filter: CsiColonFilter,
     osc5522: Osc5522Parser,
+    graphics: KittyGraphicsState,
     clipboard_events: Arc<Mutex<Vec<ClipboardEvent>>>,
     cols: u16,
     rows: u16,
@@ -279,6 +281,7 @@ impl ClientTerm {
             key_modes_parser: Processor::new(),
             csi_filter: CsiColonFilter::default(),
             osc5522: Osc5522Parser::new(),
+            graphics: KittyGraphicsState::new(),
             clipboard_events,
             cols,
             rows,
@@ -293,15 +296,33 @@ impl ClientTerm {
         let key_modes = &mut self.key_modes;
         let key_modes_parser = &mut self.key_modes_parser;
         let csi_filter = &mut self.csi_filter;
+        let graphics = &mut self.graphics;
         let clipboard_events = &self.clipboard_events;
+        let cols = self.cols;
+        let rows = self.rows;
         self.osc5522.filter(
             bytes,
             |ev| clipboard_events.lock().unwrap().push(ev),
             |passthrough| {
-                csi_filter.filter(passthrough, |chunk| {
-                    parser.advance(term, chunk);
-                    key_modes_parser.advance(key_modes, chunk);
-                });
+                graphics.filter(
+                    passthrough,
+                    |non_apc| {
+                        if !non_apc.is_empty() {
+                            csi_filter.filter(non_apc, |chunk| {
+                                parser.advance(term, chunk);
+                                key_modes_parser.advance(key_modes, chunk);
+                            });
+                        }
+                        let grid = term.grid();
+                        let cursor = grid.cursor.point;
+                        let cursor_col =
+                            (cursor.column.0 as u32).min(cols.saturating_sub(1) as u32);
+                        let cursor_line = cursor.line.0.max(0) as i64;
+                        let abs_cursor_row = grid.history_size() as i64 + cursor_line;
+                        (cursor_col, abs_cursor_row, cols as u32, rows as u32)
+                    },
+                    |_reply| {},
+                );
             },
         );
         self.clamp_scroll_offset();
@@ -328,12 +349,19 @@ impl ClientTerm {
         self.key_modes_parser = Processor::new();
         self.csi_filter.reset();
         self.osc5522.reset();
+        self.graphics.reset();
         self.scroll_offset = 0;
         self.state()
     }
 
     pub fn drain_clipboard_events(&mut self) -> Vec<ClipboardEvent> {
         std::mem::take(&mut *self.clipboard_events.lock().unwrap())
+    }
+
+    pub fn visible_images(&self) -> Vec<ViewportImage> {
+        let viewport_top_abs_row = self.history_size() as i64 - self.viewport_offset() as i64;
+        self.graphics
+            .visible_images(viewport_top_abs_row, self.rows as usize)
     }
 
     pub fn resize(&mut self, new_cols: u16, new_rows: u16) -> ClientTermState {

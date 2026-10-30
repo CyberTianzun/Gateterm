@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use gateterm_client_core::clipboard::{
     ClipboardEvent, encode_osc5522_paste_offer, encode_osc5522_read_reply,
 };
+use gateterm_client_core::graphics::ViewportImage;
 use gateterm_client_core::keyboard::{KeyEventKind, KeyInput};
 use gateterm_client_core::term::{ClientTerm, ClientTermState};
 use gateterm_cloud_client::ops::{self, OpsError};
@@ -215,6 +216,37 @@ impl From<ClipboardEvent> for FfiClipboardEvent {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiViewportImage {
+    pub image_id: u32,
+    pub placement_id: u32,
+    pub col: u32,
+    pub row: i32,
+    pub cols: u32,
+    pub rows: u32,
+    pub z_index: i32,
+    pub width_px: u32,
+    pub height_px: u32,
+    pub rgba: Vec<u8>,
+}
+
+impl From<ViewportImage> for FfiViewportImage {
+    fn from(img: ViewportImage) -> Self {
+        Self {
+            image_id: img.image_id,
+            placement_id: img.placement_id,
+            col: img.col,
+            row: img.row,
+            cols: img.cols,
+            rows: img.rows,
+            z_index: img.z_index,
+            width_px: img.width_px,
+            height_px: img.height_px,
+            rgba: (*img.rgba).clone(),
+        }
+    }
+}
+
 /// 基于 `alacritty_terminal` 的客户端终端内核，供 Android / iOS 渲染层共用。
 #[derive(uniffi::Object)]
 pub struct TermEngine {
@@ -308,6 +340,16 @@ impl TermEngine {
             .lock()
             .unwrap()
             .drain_clipboard_events()
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+
+    pub fn visible_images(&self) -> Vec<FfiViewportImage> {
+        self.inner
+            .lock()
+            .unwrap()
+            .visible_images()
             .into_iter()
             .map(Into::into)
             .collect()

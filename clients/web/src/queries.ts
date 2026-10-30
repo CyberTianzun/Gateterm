@@ -33,6 +33,9 @@ export function swallowTerminalQueries(term: Terminal) {
   for (const ident of [4, 10, 11, 12]) {
     parser.registerOscHandler(ident, (data) => data.includes("?"));
   }
+  // Kitty Graphics (APC G):只由服务端应答,客户端吞掉避免重放或双答。
+  const apcParser = parser as { registerApcHandler?: (ident: number, callback: () => boolean) => unknown };
+  apcParser.registerApcHandler?.(0x47, swallow);
 }
 
 /** xterm 主题缺省时的前景/背景,和 xterm.js 自己的默认一致。 */

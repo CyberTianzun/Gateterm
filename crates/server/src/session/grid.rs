@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::{Event, EventListener};
-use alacritty_terminal::grid::{Cursor, Grid};
+use alacritty_terminal::grid::{Cursor, Dimensions, Grid};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::test::TermSize;
@@ -10,6 +10,7 @@ use alacritty_terminal::vte::ansi::{
     CharsetIndex, Color, Handler, ModifyOtherKeys, NamedColor, NamedPrivateMode, PrivateMode,
     Processor, Rgb, StandardCharset, Timeout,
 };
+use gateterm_client_core::graphics::KittyGraphicsState;
 
 use super::stream_tail::StreamTail;
 
@@ -122,6 +123,7 @@ pub struct SessionGrid {
     snapshot_modes: SnapshotModes,
     snapshot_modes_parser: Processor<Immediate>,
     stream_tail: StreamTail,
+    graphics: KittyGraphicsState,
     /// Primary screen saved on entry to the alternate screen. Keep its history
     /// too: shrinking and growing the hidden grid can reveal those rows again.
     primary_grid: Option<Grid<Cell>>,
@@ -152,6 +154,7 @@ impl SessionGrid {
             snapshot_modes: SnapshotModes::default(),
             snapshot_modes_parser: Processor::new(),
             stream_tail: StreamTail::new(),
+            graphics: KittyGraphicsState::new(),
             primary_grid: None,
             cols,
             rows,
@@ -161,35 +164,69 @@ impl SessionGrid {
     }
 
     pub fn advance(&mut self, bytes: &[u8]) {
-        // Split only at screen switches, so we can retain the primary screen
-        // immediately before Term switches to its otherwise inaccessible grid.
-        let mut start = 0;
-        let mut metadata_start = 0;
-        for (i, byte) in bytes.iter().enumerate() {
-            // These are the only final bytes which can switch/reset screens.
-            // Feed the metadata parser in chunks rather than one byte at a time.
-            if !matches!(byte, b'h' | b'l' | b'c') {
-                continue;
-            }
-            let was_alt = self.snapshot_modes.alt_screen;
-            self.snapshot_modes_parser
-                .advance(&mut self.snapshot_modes, &bytes[metadata_start..=i]);
-            metadata_start = i + 1;
-            if was_alt != self.snapshot_modes.alt_screen {
-                self.parser.advance(&mut self.term, &bytes[start..i]);
-                self.primary_grid = if self.snapshot_modes.alt_screen {
-                    Some(self.term.grid().clone())
-                } else {
-                    None
-                };
-                self.parser.advance(&mut self.term, &bytes[i..=i]);
-                start = i + 1;
-            }
-        }
-        self.snapshot_modes_parser
-            .advance(&mut self.snapshot_modes, &bytes[metadata_start..]);
-        self.parser.advance(&mut self.term, &bytes[start..]);
-        self.stream_tail.advance(bytes);
+        let Self {
+            term,
+            parser,
+            snapshot_modes,
+            snapshot_modes_parser,
+            stream_tail,
+            graphics,
+            primary_grid,
+            cols,
+            rows,
+            pty_replies,
+            ..
+        } = self;
+        let cols_val = *cols;
+        let rows_val = *rows;
+
+        graphics.filter(
+            bytes,
+            |chunk| {
+                if !chunk.is_empty() {
+                    // Split only at screen switches, so we can retain the primary screen
+                    // immediately before Term switches to its otherwise inaccessible grid.
+                    let mut start = 0;
+                    let mut metadata_start = 0;
+                    for (i, byte) in chunk.iter().enumerate() {
+                        // These are the only final bytes which can switch/reset screens.
+                        // Feed the metadata parser in chunks rather than one byte at a time.
+                        if !matches!(byte, b'h' | b'l' | b'c') {
+                            continue;
+                        }
+                        let was_alt = snapshot_modes.alt_screen;
+                        snapshot_modes_parser
+                            .advance(snapshot_modes, &chunk[metadata_start..=i]);
+                        metadata_start = i + 1;
+                        if was_alt != snapshot_modes.alt_screen {
+                            parser.advance(term, &chunk[start..i]);
+                            *primary_grid = if snapshot_modes.alt_screen {
+                                Some(term.grid().clone())
+                            } else {
+                                None
+                            };
+                            parser.advance(term, &chunk[i..=i]);
+                            start = i + 1;
+                        }
+                    }
+                    snapshot_modes_parser.advance(snapshot_modes, &chunk[metadata_start..]);
+                    parser.advance(term, &chunk[start..]);
+                }
+                let grid = term.grid();
+                let cursor = grid.cursor.point;
+                let cursor_col =
+                    (cursor.column.0 as u32).min(cols_val.saturating_sub(1) as u32);
+                let cursor_line = cursor.line.0.max(0) as i64;
+                let abs_cursor_row = grid.history_size() as i64 + cursor_line;
+                (cursor_col, abs_cursor_row, cols_val as u32, rows_val as u32)
+            },
+            |reply| {
+                if let Ok(text) = String::from_utf8(reply) {
+                    pty_replies.lock().unwrap().push(PendingReply::Text(text));
+                }
+            },
+        );
+        stream_tail.advance(bytes);
     }
 
     /// 取走累积的查询应答,按查询到达的顺序拼好。
@@ -911,5 +948,27 @@ mod tests {
         let mut b = SessionGrid::new(20, 5);
         b.advance(&repaint);
         assert_same_screen(&a, &b);
+    }
+
+    #[test]
+    fn kitty_graphics_apc_produces_pty_replies_and_respects_quiet_flags() {
+        let mut g = SessionGrid::new(80, 24);
+        g.advance(b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\");
+        assert_eq!(
+            String::from_utf8(g.take_pty_replies()).unwrap(),
+            "\x1b_Gi=31;OK\x1b\\"
+        );
+
+        g.advance(b"\x1b_Ga=T,t=f,i=3;L2V0Yy9wYXNzd2Q=\x1b\\");
+        assert_eq!(
+            String::from_utf8(g.take_pty_replies()).unwrap(),
+            "\x1b_Gi=3;EINVAL:file transmission disabled\x1b\\"
+        );
+
+        g.advance(b"\x1b_Ga=T,f=32,s=1,v=1,i=4,q=1;/wAA/w==\x1b\\");
+        assert!(g.take_pty_replies().is_empty());
+
+        g.advance(b"\x1b_Ga=T,t=f,i=6,q=2;L2V0Yy9wYXNzd2Q=\x1b\\");
+        assert!(g.take_pty_replies().is_empty());
     }
 }

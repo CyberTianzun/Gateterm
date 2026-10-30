@@ -31,16 +31,18 @@ function fakeTerminal() {
   const csi = [];
   const dcs = [];
   const osc = new Map();
+  const apc = new Map();
   const parser = {
     registerCsiHandler: (id, cb) => csi.push([id, cb]),
     registerDcsHandler: (id, cb) => dcs.push([id, cb]),
     registerOscHandler: (ident, cb) => osc.set(ident, cb),
+    registerApcHandler: (ident, cb) => apc.set(ident, cb),
   };
-  return { term: { parser }, csi, dcs, osc };
+  return { term: { parser }, csi, dcs, osc, apc };
 }
 
 test("queries are swallowed so xterm never answers them", () => {
-  const { term, csi, dcs, osc } = fakeTerminal();
+  const { term, csi, dcs, osc, apc } = fakeTerminal();
   swallowTerminalQueries(term);
   const key = ({ prefix = "", intermediates = "", final }) => prefix + intermediates + final;
   const csiKeys = csi.map(([id]) => key(id));
@@ -48,6 +50,7 @@ test("queries are swallowed so xterm never answers them", () => {
   assert.ok(csi.every(([, cb]) => cb() === true));
   assert.deepEqual(dcs.map(([id]) => key(id)), ["$q"]);
   for (const ident of [4, 10, 11, 12]) assert.ok(osc.has(ident), `osc ${ident}`);
+  assert.equal(apc.get(0x47)?.(), true);
 });
 
 test("color sets still reach xterm, only color queries are swallowed", () => {

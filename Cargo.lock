@@ -1355,6 +1355,8 @@ version = "0.3.1"
 dependencies = [
  "alacritty_terminal",
  "base64",
+ "flate2",
+ "png",
 ]
 
 [[package]]
@@ -1447,6 +1449,7 @@ dependencies = [
  "clap",
  "directories",
  "futures-util",
+ "gateterm-client-core",
  "gateterm-cloud-client",
  "gateterm-protocol",
  "if-addrs",
