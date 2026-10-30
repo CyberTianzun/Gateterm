@@ -1,11 +1,30 @@
 use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::{Event, EventListener};
+use alacritty_terminal::grid::{Cursor, Grid};
 use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term, TermMode};
-use alacritty_terminal::vte::ansi::{Color, Handler, ModifyOtherKeys, NamedColor, Processor, Rgb};
+use alacritty_terminal::vte::ansi::{
+    CharsetIndex, Color, Handler, ModifyOtherKeys, NamedColor, NamedPrivateMode, PrivateMode,
+    Processor, Rgb, StandardCharset, Timeout,
+};
+
+use super::stream_tail::StreamTail;
+
+/// The server is a state replica, not a renderer. Buffering synchronized updates
+/// here would advance the byte ledger ahead of the screen represented by a snapshot.
+#[derive(Default)]
+struct Immediate;
+
+impl Timeout for Immediate {
+    fn set_timeout(&mut self, _: std::time::Duration) {}
+    fn clear_timeout(&mut self) {}
+    fn pending_timeout(&self) -> bool {
+        false
+    }
+}
 
 /// 终端查询一律由这里应答,客户端不应答(见 clients/web/src/queries.ts)。
 ///
@@ -36,15 +55,39 @@ impl EventListener for ReplyListener {
     }
 }
 
-/// alacritty 不实现 XTMODKEYS,Term 收到 `CSI > 4 ; Pv m` 就丢了。这里单独
-/// 记下来,好让 resync 重绘把它带回去:浏览器端的 xterm.js 靠它决定
-/// Shift+Enter 之类的按键编码(见 clients/web/src/keys.ts)。
+/// State not exposed by Term's snapshot API: scroll margins, active character
+/// set, and screen switches. XTMODKEYS is also tracked here because Term ignores it.
 #[derive(Default)]
-struct KeyModes {
+struct SnapshotModes {
     modify_other_keys: u8,
+    alt_screen: bool,
+    scroll_region: Option<(usize, Option<usize>)>,
+    active_charset: CharsetIndex,
 }
 
-impl Handler for KeyModes {
+impl Handler for SnapshotModes {
+    fn set_active_charset(&mut self, charset: CharsetIndex) {
+        self.active_charset = charset;
+    }
+    fn set_private_mode(&mut self, mode: PrivateMode) {
+        if mode == PrivateMode::Named(NamedPrivateMode::SwapScreenAndSetRestoreCursor) {
+            self.alt_screen = true;
+        }
+    }
+
+    fn unset_private_mode(&mut self, mode: PrivateMode) {
+        if mode == PrivateMode::Named(NamedPrivateMode::SwapScreenAndSetRestoreCursor) {
+            self.alt_screen = false;
+        }
+    }
+
+    fn set_scrolling_region(&mut self, top: usize, bottom: Option<usize>) {
+        // Invalid regions are ignored by Term as well.
+        if bottom.is_none_or(|bottom| top < bottom) {
+            self.scroll_region = Some((top, bottom));
+        }
+    }
+
     fn set_modify_other_keys(&mut self, mode: ModifyOtherKeys) {
         self.modify_other_keys = match mode {
             ModifyOtherKeys::Reset => 0,
@@ -61,11 +104,14 @@ impl Handler for KeyModes {
 
 pub struct SessionGrid {
     term: Term<ReplyListener>,
-    parser: Processor,
-    /// 第二个解析器只喂 KeyModes。Handler 有几十个方法,包一层转发给 Term
-    /// 不值得;多解析一遍的开销相对 PTY 吞吐可以忽略。
-    key_modes: KeyModes,
-    key_modes_parser: Processor,
+    parser: Processor<Immediate>,
+    /// A small second handler tracks metadata without forwarding every Term operation.
+    snapshot_modes: SnapshotModes,
+    snapshot_modes_parser: Processor<Immediate>,
+    stream_tail: StreamTail,
+    /// Primary screen saved on entry to the alternate screen. Keep its history
+    /// too: shrinking and growing the hidden grid can reveal those rows again.
+    primary_grid: Option<Grid<Cell>>,
     cols: u16,
     rows: u16,
     pty_replies: Arc<Mutex<Vec<PendingReply>>>,
@@ -80,13 +126,17 @@ impl SessionGrid {
         let term = Term::new(
             Config::default(),
             &size,
-            ReplyListener { pending: pty_replies.clone() },
+            ReplyListener {
+                pending: pty_replies.clone(),
+            },
         );
         Self {
             term,
             parser: Processor::new(),
-            key_modes: KeyModes::default(),
-            key_modes_parser: Processor::new(),
+            snapshot_modes: SnapshotModes::default(),
+            snapshot_modes_parser: Processor::new(),
+            stream_tail: StreamTail::default(),
+            primary_grid: None,
             cols,
             rows,
             pty_replies,
@@ -95,8 +145,35 @@ impl SessionGrid {
     }
 
     pub fn advance(&mut self, bytes: &[u8]) {
-        self.parser.advance(&mut self.term, bytes);
-        self.key_modes_parser.advance(&mut self.key_modes, bytes);
+        // Split only at screen switches, so we can retain the primary screen
+        // immediately before Term switches to its otherwise inaccessible grid.
+        let mut start = 0;
+        let mut metadata_start = 0;
+        for (i, byte) in bytes.iter().enumerate() {
+            // These are the only final bytes which can switch/reset screens.
+            // Feed the metadata parser in chunks rather than one byte at a time.
+            if !matches!(byte, b'h' | b'l' | b'c') {
+                continue;
+            }
+            let was_alt = self.snapshot_modes.alt_screen;
+            self.snapshot_modes_parser
+                .advance(&mut self.snapshot_modes, &bytes[metadata_start..=i]);
+            metadata_start = i + 1;
+            if was_alt != self.snapshot_modes.alt_screen {
+                self.parser.advance(&mut self.term, &bytes[start..i]);
+                self.primary_grid = if self.snapshot_modes.alt_screen {
+                    Some(self.term.grid().clone())
+                } else {
+                    None
+                };
+                self.parser.advance(&mut self.term, &bytes[i..=i]);
+                start = i + 1;
+            }
+        }
+        self.snapshot_modes_parser
+            .advance(&mut self.snapshot_modes, &bytes[metadata_start..]);
+        self.parser.advance(&mut self.term, &bytes[start..]);
+        self.stream_tail.advance(bytes);
     }
 
     /// 取走累积的查询应答,按查询到达的顺序拼好。
@@ -137,9 +214,17 @@ impl SessionGrid {
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
+        if (self.cols, self.rows) == (cols, rows) {
+            return;
+        }
         self.cols = cols;
         self.rows = rows;
-        self.term.resize(TermSize::new(cols as usize, rows as usize));
+        self.term
+            .resize(TermSize::new(cols as usize, rows as usize));
+        self.snapshot_modes.scroll_region = None;
+        if let Some(primary) = &mut self.primary_grid {
+            primary.resize(true, rows as usize, cols as usize);
+        }
     }
 
     pub fn size(&self) -> (u16, u16) {
@@ -163,7 +248,12 @@ impl SessionGrid {
         let cell = &self.term.grid()[Line(line as i32)][Column(col)];
         (
             cell.c,
-            format!("{:?}|{:?}|{:?}", cell.fg, cell.bg, cell.flags & Self::SGR_FLAGS),
+            format!(
+                "{:?}|{:?}|{:?}",
+                cell.fg,
+                cell.bg,
+                cell.flags & Self::SGR_FLAGS
+            ),
         )
     }
 
@@ -173,35 +263,33 @@ impl SessionGrid {
     }
 
     pub fn repaint(&self) -> Vec<u8> {
-        let mut out = String::from("\x1b[0m\x1b[?25l\x1b[2J\x1b[H");
+        let mut out = String::from("\x1b[0m\x1b[?25l\x1b[?6l\x1b[r\x1b[4l\x1b[20l\x1b[?7h");
         let grid = self.term.grid();
-        let mut last_sgr = String::new();
-        for line in 0..self.rows as usize {
-            out.push_str(&format!("\x1b[{};1H", line + 1));
-            for col in 0..self.cols as usize {
-                let cell = &grid[Line(line as i32)][Column(col)];
-                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
-                    continue;
-                }
-                let sgr = sgr_string(cell.fg, cell.bg, cell.flags);
-                if sgr != last_sgr {
-                    out.push_str(&sgr);
-                    last_sgr = sgr;
-                }
-                out.push(if cell.c == '\0' { ' ' } else { cell.c });
-            }
+        if let Some(primary) = &self.primary_grid {
+            paint_grid(&mut out, primary, self.cols, self.rows);
+            paint_cursor(&mut out, primary, &primary.cursor, 0);
+            out.push_str("\x1b[?1049h");
         }
-        out.push_str("\x1b[0m");
-        let cursor = grid.cursor.point;
-        out.push_str(&format!("\x1b[{};{}H", cursor.line.0 + 1, cursor.column.0 + 1));
-        if self.term.mode().contains(TermMode::SHOW_CURSOR) {
-            out.push_str("\x1b[?25h");
+        paint_grid(&mut out, grid, self.cols, self.rows);
+        paint_cursor(&mut out, grid, &grid.saved_cursor, 0);
+        out.push_str("\x1b7");
+        let (top, bottom) = self
+            .snapshot_modes
+            .scroll_region
+            .map(|(top, bottom)| {
+                (
+                    top.min(self.rows as usize),
+                    bottom.unwrap_or(self.rows as usize).min(self.rows as usize),
+                )
+            })
+            .unwrap_or((1, self.rows as usize));
+        if top < bottom {
+            out.push_str(&format!("\x1b[{top};{bottom}r"));
         }
-        // 恢复常用终端模式,让重连后的应用(vim/less/tmux 等)不必自己重新
-        // 设置就能继续正常工作。v1 已知限制:不恢复 alt-screen 与滚动区域
-        // (DECSTBM)——见 README「已知限制」一节,应用可在弱网重连后按
-        // Ctrl-L 或自行触发重绘来兜底。
         let mode = self.term.mode();
+        if mode.contains(TermMode::ORIGIN) {
+            out.push_str("\x1b[?6h");
+        }
         if mode.contains(TermMode::APP_CURSOR) {
             out.push_str("\x1b[?1h");
         }
@@ -226,27 +314,159 @@ impl SessionGrid {
         if mode.contains(TermMode::UTF8_MOUSE) {
             out.push_str("\x1b[?1005h");
         }
-        if self.key_modes.modify_other_keys != 0 {
-            out.push_str(&format!("\x1b[>4;{}m", self.key_modes.modify_other_keys));
+        if self.snapshot_modes.modify_other_keys != 0 {
+            out.push_str(&format!(
+                "\x1b[>4;{}m",
+                self.snapshot_modes.modify_other_keys
+            ));
         }
-        out.into_bytes()
+        paint_cursor(
+            &mut out,
+            grid,
+            &grid.cursor,
+            if mode.contains(TermMode::ORIGIN) {
+                top - 1
+            } else {
+                0
+            },
+        );
+        if !mode.contains(TermMode::LINE_WRAP) {
+            out.push_str("\x1b[?7l");
+        }
+        if mode.contains(TermMode::INSERT) {
+            out.push_str("\x1b[4h");
+        }
+        if mode.contains(TermMode::LINE_FEED_NEW_LINE) {
+            out.push_str("\x1b[20h");
+        }
+        if mode.contains(TermMode::FOCUS_IN_OUT) {
+            out.push_str("\x1b[?1004h");
+        }
+        out.push_str(match self.snapshot_modes.active_charset {
+            CharsetIndex::G0 => "",
+            CharsetIndex::G1 => "\x0e",
+            CharsetIndex::G2 => "\x1bn",
+            CharsetIndex::G3 => "\x1bo",
+        });
+        if mode.contains(TermMode::SHOW_CURSOR) {
+            out.push_str("\x1b[?25h");
+        }
+        let mut out = out.into_bytes();
+        out.extend_from_slice(self.stream_tail.pending());
+        out
+    }
+}
+
+fn paint_cell(out: &mut String, cell: &Cell) {
+    out.push_str(&sgr_string(cell.fg, cell.bg, cell.flags));
+    out.push(if cell.c == '\0' { ' ' } else { cell.c });
+    if let Some(extra) = cell.zerowidth() {
+        out.extend(extra);
+    }
+}
+
+fn paint_grid(out: &mut String, grid: &Grid<Cell>, cols: u16, rows: u16) {
+    out.push_str("\x0f\x1b(B\x1b[0m\x1b[2J\x1b[H");
+    let mut last_sgr = String::new();
+    for row in 0..rows as i32 {
+        if row == 0
+            || !grid[Line(row - 1)][Column(cols as usize - 1)]
+                .flags
+                .contains(Flags::WRAPLINE)
+        {
+            out.push_str(&format!("\x1b[{};1H", row + 1));
+        }
+        for col in 0..cols as usize {
+            let cell = &grid[Line(row)][Column(col)];
+            if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                continue;
+            }
+            let sgr = sgr_string(cell.fg, cell.bg, cell.flags);
+            if sgr != last_sgr {
+                out.push_str(&sgr);
+                last_sgr = sgr;
+            }
+            out.push(if cell.c == '\0' { ' ' } else { cell.c });
+            if let Some(extra) = cell.zerowidth() {
+                out.extend(extra);
+            }
+        }
+    }
+}
+
+fn paint_cursor(out: &mut String, grid: &Grid<Cell>, cursor: &Cursor<Cell>, origin_top: usize) {
+    let point = cursor.point;
+    let row = (point.line.0 as usize).saturating_sub(origin_top) + 1;
+    let mut col = point.column.0;
+    if cursor.input_needs_wrap && grid[point].flags.contains(Flags::WIDE_CHAR_SPACER) {
+        col = col.saturating_sub(1);
+    }
+    restore_charsets(out, cursor);
+    out.push_str(&sgr_string(
+        cursor.template.fg,
+        cursor.template.bg,
+        cursor.template.flags,
+    ));
+    out.push_str(&format!("\x1b[{row};{}H", col + 1));
+    if cursor.input_needs_wrap {
+        out.push_str("\x0f\x1b(B");
+        paint_cell(out, &grid[point.line][Column(col)]);
+        restore_charsets(out, cursor);
+        out.push_str(&sgr_string(
+            cursor.template.fg,
+            cursor.template.bg,
+            cursor.template.flags,
+        ));
+    }
+}
+
+fn restore_charsets(out: &mut String, cursor: &Cursor<Cell>) {
+    for (index, introducer) in [
+        CharsetIndex::G0,
+        CharsetIndex::G1,
+        CharsetIndex::G2,
+        CharsetIndex::G3,
+    ]
+    .into_iter()
+    .zip(['(', ')', '*', '+'])
+    {
+        let charset = match cursor.charsets[index] {
+            StandardCharset::Ascii => 'B',
+            StandardCharset::SpecialCharacterAndLineDrawing => '0',
+        };
+        out.push_str(&format!("\x1b{introducer}{charset}"));
     }
 }
 
 fn base_index(n: NamedColor) -> Option<(u8, bool)> {
     use NamedColor::*;
     Some(match n {
-        Black => (0, false), Red => (1, false), Green => (2, false), Yellow => (3, false),
-        Blue => (4, false), Magenta => (5, false), Cyan => (6, false), White => (7, false),
-        BrightBlack => (0, true), BrightRed => (1, true), BrightGreen => (2, true),
-        BrightYellow => (3, true), BrightBlue => (4, true), BrightMagenta => (5, true),
-        BrightCyan => (6, true), BrightWhite => (7, true),
+        Black => (0, false),
+        Red => (1, false),
+        Green => (2, false),
+        Yellow => (3, false),
+        Blue => (4, false),
+        Magenta => (5, false),
+        Cyan => (6, false),
+        White => (7, false),
+        BrightBlack => (0, true),
+        BrightRed => (1, true),
+        BrightGreen => (2, true),
+        BrightYellow => (3, true),
+        BrightBlue => (4, true),
+        BrightMagenta => (5, true),
+        BrightCyan => (6, true),
+        BrightWhite => (7, true),
         _ => return None,
     })
 }
 
 fn color_params(c: Color, fg: bool) -> String {
-    let (default, base, bright_base, ext) = if fg { ("39", 30, 90, "38") } else { ("49", 40, 100, "48") };
+    let (default, base, bright_base, ext) = if fg {
+        ("39", 30, 90, "38")
+    } else {
+        ("49", 40, 100, "48")
+    };
     match c {
         Color::Named(n) => match base_index(n) {
             Some((i, false)) => format!("{}", base + i as u16),
@@ -260,9 +480,15 @@ fn color_params(c: Color, fg: bool) -> String {
 
 fn sgr_string(fg: Color, bg: Color, flags: Flags) -> String {
     let mut parts = vec!["0".to_string()];
-    if flags.contains(Flags::BOLD) { parts.push("1".into()); }
-    if flags.contains(Flags::DIM) { parts.push("2".into()); }
-    if flags.contains(Flags::ITALIC) { parts.push("3".into()); }
+    if flags.contains(Flags::BOLD) {
+        parts.push("1".into());
+    }
+    if flags.contains(Flags::DIM) {
+        parts.push("2".into());
+    }
+    if flags.contains(Flags::ITALIC) {
+        parts.push("3".into());
+    }
     // v1 起见,把所有花式下划线变体(双线/曲线/点线/虚线)都近似成普通下划线 SGR 4。
     if flags.intersects(
         Flags::UNDERLINE
@@ -273,9 +499,15 @@ fn sgr_string(fg: Color, bg: Color, flags: Flags) -> String {
     ) {
         parts.push("4".into());
     }
-    if flags.contains(Flags::INVERSE) { parts.push("7".into()); }
-    if flags.contains(Flags::STRIKEOUT) { parts.push("9".into()); }
-    if flags.contains(Flags::HIDDEN) { parts.push("8".into()); }
+    if flags.contains(Flags::INVERSE) {
+        parts.push("7".into());
+    }
+    if flags.contains(Flags::STRIKEOUT) {
+        parts.push("9".into());
+    }
+    if flags.contains(Flags::HIDDEN) {
+        parts.push("8".into());
+    }
     parts.push(color_params(fg, true));
     parts.push(color_params(bg, false));
     format!("\x1b[{}m", parts.join(";"))
@@ -284,6 +516,111 @@ fn sgr_string(fg: Color, bg: Color, flags: Flags) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_same_screen(a: &SessionGrid, b: &SessionGrid) {
+        for row in 0..a.rows as usize {
+            for col in 0..a.cols as usize {
+                assert_eq!(a.cell_at(row, col), b.cell_at(row, col), "cell {row},{col}");
+            }
+        }
+        assert_eq!(a.term.grid().cursor.point, b.term.grid().cursor.point);
+    }
+
+    fn resume_after(prefix: &[u8], suffix: &[u8]) {
+        let mut live = SessionGrid::new(12, 5);
+        live.advance(prefix);
+        let mut resumed = SessionGrid::new(12, 5);
+        resumed.advance(&live.repaint());
+        live.advance(suffix);
+        resumed.advance(suffix);
+        assert_same_screen(&live, &resumed);
+    }
+
+    #[test]
+    fn resync_during_synchronized_update_keeps_received_content() {
+        resume_after(
+            b"HEADER\x1b[?2026h\x1b[2;1HFIRST",
+            b"\x1b[3;1HSECOND\x1b[?2026l",
+        );
+    }
+
+    #[test]
+    fn resync_inside_csi_and_utf8_preserves_continuation() {
+        resume_after(b"HEADER\x1b[3;", b"4HCONTENT");
+        resume_after(b"HEADER\xe4\xbd", b"\xa0 ok");
+    }
+
+    #[test]
+    fn resync_preserves_scroll_region_and_origin() {
+        resume_after(
+            b"HEADER\x1b[2;1Hone\x1b[3;1Htwo\x1b[4;1Hthree\x1b[5;1HFOOTER\x1b[2;4r\x1b[4;1H",
+            b"\r\nnext",
+        );
+        resume_after(b"HEADER\x1b[2;4r\x1b[?6h\x1b[2;1Hinside", b"\x1b[1;1Hnew");
+    }
+
+    #[test]
+    fn resync_preserves_alternate_screen_and_primary_on_exit() {
+        resume_after(
+            b"SHELL\x1b[?1049h\x1b[HHEADER\x1b[3;1HCONTENT",
+            b"\x1b[?1049h\x1b[4;1Hdelta",
+        );
+        resume_after(b"SHELL\x1b[?1049h\x1b[HCONTENT", b"\x1b[?1049l next");
+    }
+
+    #[test]
+    fn resync_preserves_cursor_attributes_and_saved_cursor() {
+        resume_after(b"\x1b[31mRED", b"NEXT");
+        resume_after(
+            b"\x1b[3;4H\x1b[32m\x1b7\x1b[1;1H\x1b[31mHEADER",
+            b"\x1b8saved",
+        );
+    }
+
+    #[test]
+    fn resync_preserves_disabled_wrap_insert_and_pending_wrap() {
+        resume_after(b"\x1b[?7l\x1b[1;10Habc", b"XYZ");
+        resume_after(b"ABCDEFGHIJKL", b"next");
+        resume_after(b"ABCDEFGHIJ\x1b[1;3H\x1b[4h", b"xy");
+    }
+
+    #[test]
+    fn resync_preserves_drawing_charset_for_followup_output() {
+        resume_after(b"\x1b(0lqqk", b"\x1b[2;1Hx  x");
+    }
+
+    #[test]
+    fn resync_matches_live_output_at_every_byte_boundary() {
+        let stream = "SHELL\x1b[?1049h\x1b[H\x1b[31m标题 e\u{301}\x1b[2;4r\x1b[?6h\x1b[2;1Hone\r\ntwo\x1b[?2026h\x1b[1;1Hnext\x1b[?2026l\x1b[?6l\x1b[?1049l done".as_bytes();
+        for split in 0..=stream.len() {
+            resume_after(&stream[..split], &stream[split..]);
+        }
+    }
+
+    #[test]
+    fn resync_preserves_primary_screen_after_alt_screen_resize() {
+        let mut a = SessionGrid::new(12, 5);
+        a.advance(b"abcdefghijklmnop\r\nSHELL\x1b[?1049h\x1b[HCONTENT");
+        a.resize(8, 6);
+        let mut b = SessionGrid::new(8, 6);
+        b.advance(&a.repaint());
+        a.advance(b"\x1b[?1049l next");
+        b.advance(b"\x1b[?1049l next");
+        assert_same_screen(&a, &b);
+    }
+
+    #[test]
+    fn resync_keeps_primary_rows_revealed_by_growing_alt_screen() {
+        let mut a = SessionGrid::new(12, 5);
+        a.advance(b"one\r\ntwo\r\nthree\r\nfour\r\nfive\x1b[?1049hALT");
+        a.resize(12, 3);
+        a.resize(12, 5);
+        let mut b = SessionGrid::new(12, 5);
+        b.advance(&a.repaint());
+        a.advance(b"\x1b[?1049lNEXT");
+        b.advance(b"\x1b[?1049lNEXT");
+        assert_same_screen(&a, &b);
+    }
 
     #[test]
     fn dsr_cursor_query_produces_pty_reply() {
@@ -302,7 +639,18 @@ mod tests {
         g.advance(b"\x1b]11;?\x1b\\");
         assert!(g.take_pty_replies().is_empty());
 
-        g.set_default_colors(Rgb { r: 0xd4, g: 0xd4, b: 0xd4 }, Rgb { r: 0x19, g: 0x1a, b: 0x1b });
+        g.set_default_colors(
+            Rgb {
+                r: 0xd4,
+                g: 0xd4,
+                b: 0xd4,
+            },
+            Rgb {
+                r: 0x19,
+                g: 0x1a,
+                b: 0x1b,
+            },
+        );
         g.advance(b"\x1b]11;?\x1b\\");
         assert_eq!(
             String::from_utf8(g.take_pty_replies()).unwrap(),
@@ -391,7 +739,11 @@ mod tests {
         let mut a = SessionGrid::new(20, 5);
         a.advance(b"abc\x1b[3;4H"); // 光标移到 3 行 4 列
         let repaint = String::from_utf8(a.repaint()).unwrap();
-        assert!(repaint.ends_with("\x1b[3;4H\x1b[?25h"), "got tail: {:?}", &repaint[repaint.len().saturating_sub(24)..]);
+        assert!(
+            repaint.ends_with("\x1b[3;4H\x1b[?25h"),
+            "got tail: {:?}",
+            &repaint[repaint.len().saturating_sub(24)..]
+        );
     }
 
     #[test]
@@ -406,8 +758,16 @@ mod tests {
         let mut b = SessionGrid::new(20, 5);
         b.advance(&repaint);
 
-        assert!(b.mode().contains(TermMode::BRACKETED_PASTE), "mode: {:?}", b.mode());
-        assert!(b.mode().contains(TermMode::APP_CURSOR), "mode: {:?}", b.mode());
+        assert!(
+            b.mode().contains(TermMode::BRACKETED_PASTE),
+            "mode: {:?}",
+            b.mode()
+        );
+        assert!(
+            b.mode().contains(TermMode::APP_CURSOR),
+            "mode: {:?}",
+            b.mode()
+        );
     }
 
     #[test]
@@ -417,18 +777,22 @@ mod tests {
         a.advance(b"\x1b[>4;2m");
         let mut b = SessionGrid::new(20, 5);
         b.advance(&a.repaint());
-        assert_eq!(b.key_modes.modify_other_keys, 2);
+        assert_eq!(b.snapshot_modes.modify_other_keys, 2);
         a.advance(b"\x1b[>4;1m");
-        assert!(String::from_utf8(a.repaint()).unwrap().contains("\x1b[>4;1m"));
+        assert!(
+            String::from_utf8(a.repaint())
+                .unwrap()
+                .contains("\x1b[>4;1m")
+        );
         // 省略 Pv 即复位;RIS 也复位
         a.advance(b"\x1b[>4m");
-        assert_eq!(a.key_modes.modify_other_keys, 0);
+        assert_eq!(a.snapshot_modes.modify_other_keys, 0);
         a.advance(b"\x1b[>4;2m\x1bc");
-        assert_eq!(a.key_modes.modify_other_keys, 0);
+        assert_eq!(a.snapshot_modes.modify_other_keys, 0);
         // 跨 read 边界切开的序列也能识别
         a.advance(b"\x1b[>4");
         a.advance(b";2m");
-        assert_eq!(a.key_modes.modify_other_keys, 2);
+        assert_eq!(a.snapshot_modes.modify_other_keys, 2);
     }
 
     #[test]
@@ -441,7 +805,15 @@ mod tests {
         let mut b = SessionGrid::new(20, 5);
         b.advance(&repaint);
 
-        assert!(b.mode().contains(TermMode::SGR_MOUSE), "mode: {:?}", b.mode());
-        assert!(b.mode().contains(TermMode::MOUSE_MOTION), "mode: {:?}", b.mode());
+        assert!(
+            b.mode().contains(TermMode::SGR_MOUSE),
+            "mode: {:?}",
+            b.mode()
+        );
+        assert!(
+            b.mode().contains(TermMode::MOUSE_MOTION),
+            "mode: {:?}",
+            b.mode()
+        );
     }
 }

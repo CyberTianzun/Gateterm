@@ -55,7 +55,7 @@ import {
 
 const $ = (id: string) => document.getElementById(id)!;
 const client = new GateClient();
-const TERM_CHANNEL = 1;
+let termChannel = 0;
 
 let sessions: any[] = [];
 let attachedId: number | null = null;
@@ -64,6 +64,7 @@ let serverOs: ServerOs = "";
 let win32InputMode = false;
 let keyboard: KeyboardAdapter | null = null;
 let term: Terminal | null = null;
+let finishTerminalWrite: (() => void) | null = null;
 let fit: FitAddon | null = null;
 let webgl: WebglAddon | null = null;
 let mousePolicy: MouseEventPolicy | null = null;
@@ -279,7 +280,7 @@ syncFont(config.font.family);
     term.options = toTerminalOptions(config);
     mousePolicy?.setBlocked(config.terminal.blockMouseEvents);
     applyRenderer(term);
-    client.setColors(TERM_CHANNEL, termColors(term.options.theme));
+    client.setColors(termChannel, termColors(term.options.theme));
     // 字号/行高/字距一变,cell 尺寸就变了,能放下的 cols×rows 也跟着变。xterm
     // 要一帧才把新的 cell 尺寸量出来,这里等一帧再上报,否则量到的还是旧值。
     requestAnimationFrame(refit);
@@ -436,10 +437,12 @@ function openTerminal(id: number) {
   }
   if (attachedId !== null) {
     releaseKeyboard();
-    client.detach(TERM_CHANNEL);
+    client.detach(termChannel);
     disposeTerminal();
   }
   attachedId = id;
+  // Never reuse a channel while frames from its previous session can be in flight.
+  const channel = ++termChannel;
   // 换了会话,上一份对话记录与这一份无关
   resetChatPages();
   chatFallback = null;
@@ -453,7 +456,7 @@ function openTerminal(id: number) {
   applyRenderer(term);
   // onData 只该带用户输入;终端查询由服务端应答,见 queries.ts
   swallowTerminalQueries(term);
-  term.onData((d) => client.sendInput(TERM_CHANNEL, new TextEncoder().encode(d)));
+  term.onData((d) => client.sendInput(channel, new TextEncoder().encode(d)));
   const terminal = term;
   const adapter = keyboard = new KeyboardAdapter(
     /Mac/.test(navigator.platform) && !terminal.options.macOptionIsMeta,
@@ -485,7 +488,7 @@ function openTerminal(id: number) {
       // 复制/粘贴/浏览器命令要保留默认动作,也不能再让 xterm 发 Ctrl+V 等字节。
       return serverOs !== "windows" || !browserShortcut(ev, selected);
     }
-    if (seq) client.sendInput(TERM_CHANNEL, new TextEncoder().encode(seq));
+    if (seq) client.sendInput(channel, new TextEncoder().encode(seq));
     if (ev.type === "keydown" && !["Shift", "Control", "Alt", "CapsLock", "NumLock", "ScrollLock"].includes(ev.key)) {
       if (terminal.options.scrollOnUserInput) terminal.scrollToBottom();
       if (ev.key === "Enter" || (ev.ctrlKey && ev.key.toLowerCase() === "c")) terminal.textarea!.value = "";
@@ -497,7 +500,7 @@ function openTerminal(id: number) {
   const want = proposeSize();
   client.attach(
     id,
-    TERM_CHANNEL,
+    termChannel,
     want?.cols ?? term.cols,
     want?.rows ?? term.rows,
     termColors(term.options.theme),
@@ -529,12 +532,15 @@ function disposeWebgl() {
 
 function releaseKeyboard() {
   const seq = keyboard?.releaseAll();
-  if (seq) client.sendInput(TERM_CHANNEL, new TextEncoder().encode(seq));
+  if (seq) client.sendInput(termChannel, new TextEncoder().encode(seq));
 }
 
 /** addon 必须先于 Terminal 释放:0.18.0 的恢复路径会去碰 `_core._renderService`,
  *  Terminal 先没了就是对着一个拆掉的 render service 操作。 */
 function disposeTerminal() {
+  // Disposed xterm instances may never call their queued write callbacks.
+  // Release receive dispatch so the replacement terminal can begin attaching.
+  finishTerminalWrite?.();
   keyboard?.reset();
   keyboard = null;
   mousePolicy?.dispose();
@@ -548,7 +554,7 @@ function disposeTerminal() {
 function closeTerminal() {
   if (attachedId !== null) {
     releaseKeyboard();
-    client.detach(TERM_CHANNEL);
+    client.detach(termChannel);
   }
   attachedId = null;
   disposeTerminal();
@@ -572,7 +578,7 @@ function proposeSize(): { cols: number; rows: number } | null {
 
 function refit() {
   const want = proposeSize();
-  if (want) client.resize(TERM_CHANNEL, want.cols, want.rows);
+  if (want) client.resize(termChannel, want.cols, want.rows);
 }
 
 window.addEventListener("resize", refit);
@@ -603,7 +609,7 @@ $("terminal-wrap").addEventListener(
         const quoted = /[\s"'&()[\]$;]/.test(data.path)
           ? `"${data.path.replace(/"/g, '\\"')}" `
           : `${data.path} `;
-        client.sendInput(TERM_CHANNEL, new TextEncoder().encode(quoted));
+        client.sendInput(termChannel, new TextEncoder().encode(quoted));
       } catch (err) {
         console.warn("gateterm: image paste upload failed", err);
       }
@@ -1268,9 +1274,16 @@ async function refreshAgents() {
 }
 
 client.onChannelData = (channel, payload) => {
-  if (channel === TERM_CHANNEL && term) {
-    term.write(payload);
-    client.noteData(channel, payload.length);
+  if (channel === termChannel && term) {
+    const terminal = term;
+    return new Promise<void>(resolve => {
+      const finish = () => {
+        if (finishTerminalWrite === finish) finishTerminalWrite = null;
+        resolve();
+      };
+      finishTerminalWrite = finish;
+      terminal.write(payload, finish);
+    });
   }
 };
 client.onControl = (msg) => {
@@ -1310,22 +1323,23 @@ client.onControl = (msg) => {
     case "resized":
       // 服务端说了算:字节流是按这个尺寸换行的,自作主张按视口大小渲染会错位。
       // 视口比它大的部分留白(见 style.css 的居中),小则出现滚动条。
-      if (msg.channel === TERM_CHANNEL) term?.resize(msg.cols, msg.rows);
+      if (msg.channel === termChannel) term?.resize(msg.cols, msg.rows);
       break;
     case "resync-begin":
+      if (msg.channel !== termChannel) break;
       term?.reset();
       // term.reset() 不经过解析器;重绘会把 modifyOtherKeys 再发回来
       keyboard?.setModifyOtherKeys(0);
       break;
     case "session-exited":
-      if (msg.channel === TERM_CHANNEL) closeTerminal();
+      if (msg.channel === termChannel) closeTerminal();
       break;
     case "error":
       console.warn("gateterm error:", msg.message);
       showError(msg.message);
       // 重连打到一个已经不存在的会话上(channel 对应的 attach 失败):
       // 该终端已没有意义,退回空态,而不是停留在一个死连接上。
-      if (msg.channel === TERM_CHANNEL && attachedId !== null) closeTerminal();
+      if (msg.channel === termChannel && attachedId !== null) closeTerminal();
       break;
   }
 };

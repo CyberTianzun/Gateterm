@@ -23,14 +23,12 @@ export class GateClient {
   private backoffMs = 250;
   private closed = false;
   private attachments = new Map<number, AttachState>();
-  /** 本次拨号是否已经收到过 hello-ok;每次 dial() 重置。 */
-  private authOk = false;
-  /** hello-ok 之前收到的 error 消息(比如坏 token),用来判断断线是不是因为
-   *  认证失败——认证失败没有重试的意义,重连只会一次次白白触发同样的拒绝。 */
-  private preHelloError: string | null = null;
+  // xterm applies writes asynchronously. Keep controls and reconnect anchors behind
+  // the parser callback, including frames received in the same browser turn.
+  private receiving: Promise<void> = Promise.resolve();
 
-  onControl: (msg: any) => void = () => {};
-  onChannelData: (channel: number, payload: Uint8Array) => void = () => {};
+  onControl: (msg: any) => void | Promise<void> = () => {};
+  onChannelData: (channel: number, payload: Uint8Array) => void | Promise<void> = () => {};
   onOpen: () => void = () => {};
   onReconnecting: () => void = () => {};
   /** 认证失败等不可重试的错误:调用后连接不会再自动重连。 */
@@ -48,23 +46,53 @@ export class GateClient {
   }
 
   private dial() {
-    this.authOk = false;
-    this.preHelloError = null;
+    // Close events must see authentication facts immediately, even while an old
+    // terminal write blocks receive dispatch. Each socket owns its own facts.
+    let authOk = false;
+    let preHelloError: string | null = null;
+    let socketClosed = false;
     const ws = new WebSocket(this.url);
     ws.binaryType = "arraybuffer";
     this.ws = ws;
     ws.onopen = () => {
       ws.send(encodeControl({ type: "hello", token: this.token, proto: PROTO_VERSION }));
     };
-    ws.onmessage = (ev) => this.handle(ev.data as ArrayBuffer);
+    ws.onmessage = (ev) => {
+      if (this.ws !== ws) return;
+      const frame = decodeFrame(ev.data as ArrayBuffer);
+      const msg = frame.channel === CONTROL_CHANNEL ? decodeControl(frame.payload) as any : null;
+      if (msg?.type === "hello-ok") {
+        authOk = true;
+        this.backoffMs = 250;
+      } else if (msg?.type === "error" && !authOk) {
+        preHelloError = msg.message;
+      }
+      const channel = msg?.channel ?? frame.channel;
+      const attachment = this.attachments.get(channel);
+      if (channel !== CONTROL_CHANNEL && !attachment) return;
+      this.receiving = this.receiving.then(async () => {
+        if (msg?.type === "hello-ok" && socketClosed) return;
+        if ((msg?.type === "hello-ok" || msg?.type === "error") && this.ws !== ws) return;
+        // A switch can dispose the old terminal while its write is pending.
+        if (channel !== CONTROL_CHANNEL && this.attachments.get(channel) !== attachment) return;
+        if (msg !== null) {
+          await this.handleControl(msg);
+        } else {
+          await this.onChannelData(channel, frame.payload);
+          if (this.attachments.get(channel) === attachment) this.noteData(channel, frame.payload.length);
+        }
+      }).catch(err => console.error("gateterm: terminal receive failed", err));
+    };
     ws.onclose = () => {
+      socketClosed = true;
+      if (this.ws !== ws) return;
       if (this.closed) return;
       // 这次拨号连 hello-ok 都没等到,而且服务端在那之前就已经报过错(典型情况:
       // token 不对)——重试没有意义,停止重连并让上层提示用户。
-      if (!this.authOk && this.preHelloError !== null) {
+      if (!authOk && preHelloError !== null) {
         this.closed = true;
         try { localStorage.removeItem("gateterm-token"); } catch { /* Storage can be disabled. */ }
-        this.onFatal(this.preHelloError);
+        this.onFatal(preHelloError);
         return;
       }
       this.onReconnecting();
@@ -74,20 +102,10 @@ export class GateClient {
     };
   }
 
-  private handle(data: ArrayBuffer) {
-    const frame = decodeFrame(data);
-    if (frame.channel !== CONTROL_CHANNEL) {
-      this.onChannelData(frame.channel, frame.payload);
-      return;
-    }
-    const msg = decodeControl(frame.payload) as any;
+  private async handleControl(msg: any) {
+    const attachment = this.attachments.get(msg.channel);
     switch (msg.type) {
-      case "error":
-        if (!this.authOk) this.preHelloError = msg.message;
-        break;
       case "hello-ok": {
-        this.authOk = true;
-        this.backoffMs = 250;
         // 重连后恢复所有 attach
         for (const [channel, a] of this.attachments) {
           this.send({
@@ -108,14 +126,18 @@ export class GateClient {
         // 已经等于本端发出的 last_seq(重连恢复点),后续 noteData 按字节推进即可。
         // 绝不能在这里用 msg.seq 覆盖 lastSeq —— 见 GateClient 类上方的 seq 记账不变式注释。
         break;
-      case "resync-end":
-        this.trackSeq(msg.channel, msg.seq);
+      case "resync-begin":
+        // A partial synthetic snapshot is not a resumable byte-stream position.
+        this.trackSeq(msg.channel, null);
         break;
     }
-    this.onControl(msg);
+    await this.onControl(msg);
+    if (msg.type === "resync-end" && this.attachments.get(msg.channel) === attachment) {
+      this.trackSeq(msg.channel, msg.seq);
+    }
   }
 
-  private trackSeq(channel: number, seq: number) {
+  private trackSeq(channel: number, seq: number | null) {
     const a = this.attachments.get(channel);
     if (a) a.lastSeq = seq;
   }

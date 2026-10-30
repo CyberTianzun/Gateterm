@@ -6,10 +6,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use alacritty_terminal::vte::ansi::Rgb;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use gateterm_protocol::{SessionInfo, TermColors};
-use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tokio::sync::broadcast;
 
 use crate::config::WindowSize;
@@ -24,7 +24,11 @@ fn parse_hex_color(s: &str) -> Result<Rgb> {
         bail!("expected #rrggbb, got {s:?}");
     }
     let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).context("not hex");
-    Ok(Rgb { r: channel(0)?, g: channel(2)?, b: channel(4)? })
+    Ok(Rgb {
+        r: channel(0)?,
+        g: channel(2)?,
+        b: channel(4)?,
+    })
 }
 
 pub const BROADCAST_CAP: usize = 256;
@@ -36,10 +40,17 @@ const MIN_ROWS: u16 = 5;
 
 #[derive(Debug, Clone)]
 pub enum SessionOutput {
-    Data { end_seq: u64, bytes: Bytes },
+    Data {
+        end_seq: u64,
+        bytes: Bytes,
+    },
     /// 权威尺寸变了(见 `Session::apply_size`)。每个 attach 的泵都会把它转成
     /// `ServerMsg::Resized` 发给自己那一端。
-    Resized { cols: u16, rows: u16 },
+    Resized {
+        cols: u16,
+        rows: u16,
+        revision: u64,
+    },
     Exited,
 }
 
@@ -49,6 +60,17 @@ pub struct Snapshot {
     /// 这份重绘是按哪个尺寸渲染的——和 repaint 取自同一次加锁,不会错配。
     pub cols: u16,
     pub rows: u16,
+    /// Internal watermark for resize events represented by this snapshot.
+    pub resize_revision: u64,
+}
+
+/// Replay bytes and geometry captured under the same model lock.
+pub(crate) struct Replay {
+    pub end_seq: u64,
+    pub bytes: Vec<u8>,
+    pub cols: u16,
+    pub rows: u16,
+    pub resize_revision: u64,
 }
 
 /// 一个 attach 的尺寸诉求。`ord` 单调递增,Latest 策略据此挑出最近的那个。
@@ -65,6 +87,8 @@ struct Shared {
     buffer: SeqBuffer,
     viewports: HashMap<u64, Desired>,
     next_ord: u64,
+    resize_revision: u64,
+    last_resize_seq: u64,
 }
 
 pub struct Session {
@@ -120,7 +144,12 @@ impl Viewport {
 
 impl Drop for Viewport {
     fn drop(&mut self) {
-        self.session.shared.lock().unwrap().viewports.remove(&self.id);
+        self.session
+            .shared
+            .lock()
+            .unwrap()
+            .viewports
+            .remove(&self.id);
         if let Err(e) = self.session.apply_size() {
             tracing::debug!(session = self.session.id, error = %e, "resize after detach failed");
         }
@@ -176,7 +205,9 @@ impl Session {
     ) -> Result<Arc<Session>> {
         // 只有 Windows 分支会改写 argv
         #[allow(unused_mut)]
-        let mut argv = launch.command.unwrap_or_else(crate::launcher::builtin::default_command);
+        let mut argv = launch
+            .command
+            .unwrap_or_else(crate::launcher::builtin::default_command);
         if argv.is_empty() || argv[0].is_empty() {
             bail!("empty command");
         }
@@ -205,7 +236,12 @@ impl Session {
         tracing::info!(session = id, ?argv, cwd = ?cwd, "spawning session");
 
         let pty = native_pty_system()
-            .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+            .openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
             .with_context(|| format!("openpty failed for session {id}"))?;
 
         let mut cmd = CommandBuilder::new(&argv[0]);
@@ -258,6 +294,8 @@ impl Session {
                 buffer: SeqBuffer::new(buffer_cap),
                 viewports: HashMap::new(),
                 next_ord: 0,
+                resize_revision: 0,
+                last_resize_seq: 0,
             }),
             writer: Mutex::new(Some(writer)),
             master: Mutex::new(Some(pty.master)),
@@ -282,35 +320,7 @@ impl Session {
                         tracing::warn!(session = s.id, error = %e, "pty read ended");
                         break;
                     }
-                    Ok(n) => {
-                        let (end_seq, replies) = {
-                            let mut shared = s.shared.lock().unwrap();
-                            shared.grid.advance(&buf[..n]);
-                            shared.buffer.append(&buf[..n]);
-                            let replies = shared.grid.take_pty_replies();
-                            (shared.buffer.end_seq(), replies)
-                        };
-                        // 必须在释放 grid 锁之后回写,避免和 write_input 锁顺序缠死
-                        if !replies.is_empty() {
-                            if let Err(e) = s.write_input(&replies) {
-                                tracing::warn!(
-                                    session = s.id,
-                                    error = %e,
-                                    "failed to write terminal query reply"
-                                );
-                            } else {
-                                tracing::debug!(
-                                    session = s.id,
-                                    bytes = replies.len(),
-                                    "wrote terminal query reply"
-                                );
-                            }
-                        }
-                        let _ = s.tx.send(SessionOutput::Data {
-                            end_seq,
-                            bytes: Bytes::copy_from_slice(&buf[..n]),
-                        });
-                    }
+                    Ok(n) => s.process_output(&buf[..n]),
                 }
             }
             s.mark_exited();
@@ -335,6 +345,37 @@ impl Session {
         });
 
         Ok(session)
+    }
+
+    fn process_output(&self, bytes: &[u8]) {
+        let replies = {
+            let mut shared = self.shared.lock().unwrap();
+            shared.grid.advance(bytes);
+            shared.buffer.append(bytes);
+            // Publication shares the model lock with resize and snapshot so
+            // every subscriber observes the same output/geometry ordering.
+            let _ = self.tx.send(SessionOutput::Data {
+                end_seq: shared.buffer.end_seq(),
+                bytes: Bytes::copy_from_slice(bytes),
+            });
+            shared.grid.take_pty_replies()
+        };
+        // 必须在释放 grid 锁之后回写,避免和 write_input 锁顺序缠死
+        if !replies.is_empty() {
+            if let Err(e) = self.write_input(&replies) {
+                tracing::warn!(
+                    session = self.id,
+                    error = %e,
+                    "failed to write terminal query reply"
+                );
+            } else {
+                tracing::debug!(
+                    session = self.id,
+                    bytes = replies.len(),
+                    "wrote terminal query reply"
+                );
+            }
+        }
     }
 
     fn mark_exited(&self) {
@@ -381,7 +422,10 @@ impl Session {
     /// 登记一个 attach 的尺寸诉求,返回它在尺寸表里的席位(析构即摘除)。
     pub fn viewport(self: &Arc<Self>, cols: u16, rows: u16) -> Viewport {
         let id = self.next_viewport.fetch_add(1, Ordering::SeqCst);
-        let vp = Viewport { session: self.clone(), id };
+        let vp = Viewport {
+            session: self.clone(),
+            id,
+        };
         // pty 已经关掉的会话仍然允许 attach:客户端马上会收到 session-exited。
         let _ = vp.set(cols, rows);
         vp
@@ -411,11 +455,21 @@ impl Session {
         {
             let guard = self.master.lock().unwrap();
             let master = guard.as_ref().context("session pty closed")?;
-            master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })?;
+            master.resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })?;
         }
         shared.grid.resize(cols, rows);
-        drop(shared);
-        let _ = self.tx.send(SessionOutput::Resized { cols, rows });
+        shared.resize_revision += 1;
+        shared.last_resize_seq = shared.buffer.end_seq();
+        let _ = self.tx.send(SessionOutput::Resized {
+            cols,
+            rows,
+            revision: shared.resize_revision,
+        });
         Ok(())
     }
 
@@ -426,12 +480,38 @@ impl Session {
     pub fn snapshot(&self) -> Snapshot {
         let shared = self.shared.lock().unwrap();
         let (cols, rows) = shared.grid.size();
-        Snapshot { end_seq: shared.buffer.end_seq(), repaint: shared.grid.repaint(), cols, rows }
+        Snapshot {
+            end_seq: shared.buffer.end_seq(),
+            repaint: shared.grid.repaint(),
+            cols,
+            rows,
+            resize_revision: shared.resize_revision,
+        }
     }
 
     pub fn replay_from(&self, seq: u64) -> Option<(u64, Vec<u8>)> {
+        self.replay_snapshot_from(seq)
+            .map(|replay| (replay.end_seq, replay.bytes))
+    }
+
+    pub(crate) fn replay_snapshot_from(&self, seq: u64) -> Option<Replay> {
         let shared = self.shared.lock().unwrap();
-        shared.buffer.read_from(seq).map(|b| (shared.buffer.end_seq(), b))
+        // Raw bytes cannot reproduce a geometry change within their range.
+        // At equality, the byte anchor cannot identify which resize revisions
+        // the client applied. A shrink/grow roundtrip can change screen contents
+        // without emitting bytes or changing the final dimensions.
+        if shared.resize_revision != 0 && seq <= shared.last_resize_seq {
+            return None;
+        }
+        let bytes = shared.buffer.read_from(seq)?;
+        let (cols, rows) = shared.grid.size();
+        Some(Replay {
+            end_seq: shared.buffer.end_seq(),
+            bytes,
+            cols,
+            rows,
+            resize_revision: shared.resize_revision,
+        })
     }
 
     pub fn info(&self) -> SessionInfo {
@@ -463,8 +543,179 @@ impl Session {
 }
 
 #[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+
+    struct Master(Mutex<PtySize>);
+
+    impl MasterPty for Master {
+        fn resize(&self, size: PtySize) -> Result<()> {
+            *self.0.lock().unwrap() = size;
+            Ok(())
+        }
+
+        fn get_size(&self) -> Result<PtySize> {
+            Ok(*self.0.lock().unwrap())
+        }
+
+        fn try_clone_reader(&self) -> Result<Box<dyn Read + Send>> {
+            Ok(Box::new(std::io::empty()))
+        }
+
+        fn take_writer(&self) -> Result<Box<dyn Write + Send>> {
+            Ok(Box::new(std::io::sink()))
+        }
+
+        #[cfg(unix)]
+        fn process_group_leader(&self) -> Option<i32> {
+            None
+        }
+        #[cfg(unix)]
+        fn as_raw_fd(&self) -> Option<i32> {
+            None
+        }
+        #[cfg(unix)]
+        fn tty_name(&self) -> Option<PathBuf> {
+            None
+        }
+    }
+
+    #[derive(Debug)]
+    struct Killer;
+
+    impl ChildKiller for Killer {
+        fn kill(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+            Box::new(Killer)
+        }
+    }
+
+    pub(crate) fn session() -> Arc<Session> {
+        let (tx, _) = broadcast::channel(BROADCAST_CAP);
+        Arc::new(Session {
+            id: 1,
+            process_id: None,
+            created_at: 0,
+            window_size: WindowSize::Latest,
+            shared: Mutex::new(Shared {
+                name: "test".into(),
+                cwd: None,
+                grid: SessionGrid::new(80, 24),
+                buffer: SeqBuffer::new(1 << 20),
+                viewports: HashMap::new(),
+                next_ord: 0,
+                resize_revision: 0,
+                last_resize_seq: 0,
+            }),
+            writer: Mutex::new(Some(Box::new(std::io::sink()))),
+            master: Mutex::new(Some(Box::new(Master(Mutex::new(PtySize::default()))))),
+            killer: Mutex::new(Box::new(Killer)),
+            tx,
+            exited: AtomicBool::new(false),
+            next_viewport: AtomicU64::new(1),
+        })
+    }
+
+    pub(crate) fn output(session: &Session, bytes: &[u8]) {
+        session.process_output(bytes);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_is_published_before_a_blocked_query_reply_and_subsequent_resize() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        struct GateWriter {
+            entered: mpsc::Sender<Vec<u8>>,
+            release: mpsc::Receiver<()>,
+        }
+
+        impl Write for GateWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.entered.send(bytes.to_vec()).unwrap();
+                self.release.recv().unwrap();
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let session = test_support::session();
+        let mut rx = session.subscribe();
+        let (entered, waiting) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        *session.writer.lock().unwrap() = Some(Box::new(GateWriter {
+            entered,
+            release: released,
+        }));
+        let reader = session.clone();
+        let thread = std::thread::spawn(move || reader.process_output(b"before\x1b[6nafter"));
+        let reply = waiting
+            .recv_timeout(Duration::from_secs(5))
+            .expect("query reply writer was not entered");
+        // A blocked query reply must leave the model lock available to resizing.
+        let viewport = session.viewport(100, 30);
+        let snapshot = session.snapshot();
+        release.send(()).unwrap();
+        thread.join().unwrap();
+
+        assert_eq!(reply, b"\x1b[1;7R");
+        assert_eq!((snapshot.cols, snapshot.rows), (100, 30));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionOutput::Data { end_seq: 15, .. }
+        ));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionOutput::Resized {
+                cols: 100,
+                rows: 30,
+                ..
+            }
+        ));
+        drop(viewport);
+    }
+
+    #[test]
+    fn raw_replay_crossing_a_resize_requires_snapshot_recovery() {
+        let session = test_support::session();
+        session.process_output(b"before");
+        let viewport = session.viewport(100, 30);
+        session.process_output(b"after");
+        assert!(
+            session.replay_from(0).is_none(),
+            "raw bytes cannot recreate a resize within the replay range"
+        );
+        assert!(session.replay_from(6).is_none());
+        assert_eq!(session.replay_from(7).unwrap(), (11, b"fter".to_vec()));
+        drop(viewport);
+    }
+
+    #[test]
+    fn replay_at_resize_anchor_requires_snapshot_after_no_output_resize_roundtrip() {
+        let session = test_support::session();
+        let viewport = session.viewport(80, 24);
+        session.process_output(b"\x1b[?1049h\x1b[23;1Hrow23\x1b[24;1Hrow24");
+        let seq = session.snapshot().end_seq;
+        viewport.set(80, 5).unwrap();
+        viewport.set(80, 24).unwrap();
+        assert_eq!(session.size(), (80, 24));
+        assert_eq!(session.snapshot().end_seq, seq);
+        assert!(
+            session.replay_from(seq).is_none(),
+            "byte progress cannot identify which resize revisions the client applied"
+        );
+        drop(viewport);
+    }
 
     #[test]
     fn default_cwd_is_existing_dir() {
@@ -482,7 +733,10 @@ mod tests {
 
     #[test]
     fn empty_command_is_rejected() {
-        let launch = Launch { command: Some(vec![]), cwd: None };
+        let launch = Launch {
+            command: Some(vec![]),
+            cwd: None,
+        };
         let spawn = Session::spawn(1, "t".into(), 80, 24, launch, 64, WindowSize::default());
         let err = match spawn {
             Ok(_) => panic!("empty command should fail"),
@@ -518,8 +772,10 @@ mod tests {
     /// 不存在的 cwd 不该让 spawn 失败 —— profile 里的目录可能来自另一台机器。
     #[test]
     fn nonexistent_cwd_falls_back_instead_of_failing() {
-        let launch =
-            Launch { command: None, cwd: Some("/definitely/not/a/real/dir/for/gateterm".into()) };
+        let launch = Launch {
+            command: None,
+            cwd: Some("/definitely/not/a/real/dir/for/gateterm".into()),
+        };
         let session = Session::spawn(1, "t".into(), 80, 24, launch, 64, WindowSize::default())
             .expect("spawn should survive a bad cwd");
         session.kill();
@@ -530,7 +786,16 @@ mod tests {
         sizes
             .iter()
             .enumerate()
-            .map(|(i, &(cols, rows))| (i as u64, Desired { cols, rows, ord: i as u64 }))
+            .map(|(i, &(cols, rows))| {
+                (
+                    i as u64,
+                    Desired {
+                        cols,
+                        rows,
+                        ord: i as u64,
+                    },
+                )
+            })
             .collect()
     }
 
@@ -551,6 +816,9 @@ mod tests {
     #[test]
     fn extreme_report_is_clamped_to_the_floor() {
         let vps = viewports(&[(120, 40), (1, 1)]);
-        assert_eq!(effective_size(WindowSize::Smallest, &vps), Some((MIN_COLS, MIN_ROWS)));
+        assert_eq!(
+            effective_size(WindowSize::Smallest, &vps),
+            Some((MIN_COLS, MIN_ROWS))
+        );
     }
 }

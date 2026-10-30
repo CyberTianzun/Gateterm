@@ -24,12 +24,12 @@ class Socket {
  send(data){const bytes=new Uint8Array(data);const channel=new DataView(bytes.buffer).getUint32(0,true);const text=new TextDecoder().decode(bytes.slice(5));if(channel){window.mouseBytes.push(text);return;}const msg=JSON.parse(text);
  if(msg.type==='hello')this.emit({type:'hello-ok',proto:1,os:'windows'});
  if(msg.type==='list-sessions')this.emit({type:'sessions',sessions:[{id:1,name:'Mouse test',cols:80,rows:24,created_at:1},{id:2,name:'Mouse test 2',cols:80,rows:24,created_at:1}]});
- if(msg.type==='attach'){this.emit({type:'resized',channel:1,cols:80,rows:24});this.emit('SELECT_ME 0123456789 mouse selection test\r\n\x1b[?1003h\x1b[?1006h',1);}
+ if(msg.type==='attach'){window.testChannel=msg.channel;this.emit({type:'attached',channel:msg.channel,mode:'resync',seq:0});this.emit({type:'resized',channel:msg.channel,cols:80,rows:24});this.emit('SELECT_ME 0123456789 mouse selection test\r\n\x1b[?1003h\x1b[?1006h',msg.channel);}
  }
  close(){this.readyState=3;}
 }
 window.WebSocket=Socket;
-window.writeTerminal=(text)=>window.testSocket.emit(text,1);
+window.writeTerminal=(text)=>window.testSocket.emit(text,window.testChannel);
 })();
 """
 with sync_playwright() as p:

@@ -119,6 +119,7 @@ winreg = "0.56"
 plist = "1"
 
 [dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
 tempfile = "3"
 
 [lints]

@@ -170,4 +170,6 @@ When signed in to Gateterm Cloud on both the server and the Android client, Gate
 
 ## Known limitations
 
-Terminal `resync` restores screen content, cursor position, and common terminal modes (application cursor keys, bracketed paste, mouse reporting), but does not restore the alternate screen buffer or scroll regions (`DECSTBM`). After reconnecting across an unstable network, full-screen TUI applications may need `Ctrl+L` or a window resize to trigger a full redraw.
+Terminal `resync` restores the visible screen, the primary screen behind an active alternate screen, current and saved cursor state, scroll regions (`DECSTBM`), origin/wrap modes, and common input modes. The server applies synchronized output immediately to its state replica, so snapshot sequence numbers include every received byte; incomplete UTF-8 and escape sequences are restored before live output resumes. Browser writes, resets, resizes, and resume anchors are applied in receive order. Output and geometry changes have independent internal watermarks, and replay crossing a resize falls back to a snapshot.
+
+Snapshots transfer screen viewports, not the complete scrollback history. Terminal behavior still follows the underlying emulators: uncommon VT features may differ between xterm.js and Alacritty, including restoration of the active G1 character set with a saved cursor.

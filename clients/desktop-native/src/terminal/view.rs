@@ -200,7 +200,8 @@ impl TerminalView {
         if cols != self.requested_cols || rows != self.requested_rows {
             self.requested_cols = cols;
             self.requested_rows = rows;
-            self.term.resize(cols, rows);
+            // Keep parsing at the shared PTY size until the server sends Resized.
+            // Another client's viewport may determine a different authoritative size.
             if let Some(cb) = self.on_resize.clone() {
                 cb(cols, rows, cx);
             }
@@ -838,6 +839,80 @@ pub fn format_paths_for_paste(paths: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::{AppContext as _, TestAppContext};
+    use std::cell::RefCell;
+
+    fn terminal_view(
+        cx: &mut TestAppContext,
+        requests: Rc<RefCell<Vec<(u16, u16)>>>,
+    ) -> gpui::Entity<TerminalView> {
+        cx.new(|cx| {
+            TerminalView::new(
+                "test".into(),
+                1,
+                "test".into(),
+                1,
+                "linux".into(),
+                false,
+                "monospace",
+                14.0,
+                1.0,
+                100,
+                cx,
+            )
+            .with_callbacks(
+                Rc::new(|_, _| {}),
+                Rc::new(move |cols, rows, _| requests.borrow_mut().push((cols, rows))),
+            )
+        })
+    }
+
+    #[gpui::test]
+    fn viewport_proposal_preserves_in_flight_output_geometry(cx: &mut TestAppContext) {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let view = terminal_view(cx, requests.clone());
+        view.update(cx, |view, cx| {
+            view.apply_authoritative_resize(10, 4, cx);
+            view.write_output(b"123456789", cx);
+
+            view.update_viewport_geometry(point(px(0.0), px(0.0)), px(8.0), px(16.0), 5, 4, cx);
+            // These bytes were produced before the server accepted the smaller viewport.
+            view.write_output(b"XY", cx);
+            assert_eq!(view.term.copy_viewport(0, 0, 9, 0), "123456789X");
+            assert_eq!(view.term.copy_viewport(0, 1, 0, 1), "Y");
+            assert_eq!((view.term.state().cols, view.term.state().rows), (10, 4));
+            assert_eq!(view.desired_size(), (5, 4));
+
+            view.apply_authoritative_resize(5, 4, cx);
+            view.write_output(b"\x1b[2J\x1b[Habcdef", cx);
+            assert_eq!(view.term.copy_viewport(0, 0, 4, 0), "abcde");
+            assert_eq!(view.term.copy_viewport(0, 1, 0, 1), "f");
+            assert_eq!((view.term.state().cols, view.term.state().rows), (5, 4));
+        });
+        assert_eq!(*requests.borrow(), vec![(5, 4)]);
+    }
+
+    #[gpui::test]
+    fn authoritative_smallest_client_size_does_not_replace_viewport_proposal(
+        cx: &mut TestAppContext,
+    ) {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let view = terminal_view(cx, requests.clone());
+        view.update(cx, |view, cx| {
+            view.apply_authoritative_resize(40, 12, cx);
+            view.update_viewport_geometry(point(px(0.0), px(0.0)), px(8.0), px(16.0), 120, 40, cx);
+            assert_eq!((view.term.state().cols, view.term.state().rows), (40, 12));
+            // A second client's smaller viewport determines the shared PTY size.
+            view.apply_authoritative_resize(60, 20, cx);
+            assert_eq!(view.dimensions(), (120, 40));
+
+            // Repainting or refocusing the unchanged viewport must keep that shared size.
+            view.update_viewport_geometry(point(px(1.0), px(1.0)), px(8.0), px(16.0), 120, 40, cx);
+            assert_eq!((view.term.state().cols, view.term.state().rows), (60, 20));
+            assert_eq!(view.desired_size(), (120, 40));
+        });
+        assert_eq!(*requests.borrow(), vec![(120, 40)]);
+    }
 
     #[test]
     fn formats_pasted_paths_with_quoting_when_needed() {
