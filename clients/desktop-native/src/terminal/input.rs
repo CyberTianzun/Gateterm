@@ -476,6 +476,7 @@ mod tests {
             application_cursor: false,
             bracketed_paste: false,
             modify_other_keys: 0,
+            kitty_keyboard_flags: 0,
             scroll_offset: 0,
             max_scroll_offset: 0,
             mouse_tracking: false,

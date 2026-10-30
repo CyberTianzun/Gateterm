@@ -31,6 +31,9 @@ class AlacrittyTerm(
     /** XTMODKEYS(`CSI > 4 ; Pv m`)。TerminalKeyboard 据此编码 Shift+Enter 等组合。 */
     var modifyOtherKeys: Int = 0
         private set
+    /** Kitty 键盘协议标志位（`CSI > flags u`）。 */
+    var kittyKeyboardFlags: Int = 0
+        private set
 
     /** 0 表示贴着最新一行。正数是向上翻了多少行。alt-screen 没有回滚。 */
     var scrollOffset: Int = 0
@@ -63,6 +66,7 @@ class AlacrittyTerm(
         applicationCursor = st.applicationCursor
         bracketedPaste = st.bracketedPaste
         modifyOtherKeys = st.modifyOtherKeys.toInt()
+        kittyKeyboardFlags = st.kittyKeyboardFlags.toInt()
         scrollOffset = st.scrollOffset.toInt()
         mouseTracking = st.mouseTracking
     }

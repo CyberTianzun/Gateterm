@@ -73,9 +73,30 @@ pub struct ClientTermState {
     pub application_cursor: bool,
     pub bracketed_paste: bool,
     pub modify_other_keys: u8,
+    pub kitty_keyboard_flags: u8,
     pub scroll_offset: u32,
     pub max_scroll_offset: u32,
     pub mouse_tracking: bool,
+}
+
+pub fn kitty_flags_from_mode(mode: TermMode) -> u8 {
+    let mut flags = 0u8;
+    if mode.contains(TermMode::DISAMBIGUATE_ESC_CODES) {
+        flags |= 1;
+    }
+    if mode.contains(TermMode::REPORT_EVENT_TYPES) {
+        flags |= 2;
+    }
+    if mode.contains(TermMode::REPORT_ALTERNATE_KEYS) {
+        flags |= 4;
+    }
+    if mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC) {
+        flags |= 8;
+    }
+    if mode.contains(TermMode::REPORT_ASSOCIATED_TEXT) {
+        flags |= 16;
+    }
+    flags
 }
 
 #[derive(Default)]
@@ -210,6 +231,7 @@ impl ClientTerm {
         let size = TermSize::new(cols as usize, rows as usize);
         let config = Config {
             scrolling_history: max_scrollback,
+            kitty_keyboard: true,
             ..Config::default()
         };
         Self {
@@ -242,6 +264,7 @@ impl ClientTerm {
         let size = TermSize::new(self.cols as usize, self.rows as usize);
         let config = Config {
             scrolling_history: self.max_scrollback,
+            kitty_keyboard: true,
             ..Config::default()
         };
         self.term = Term::new(config, &size, VoidListener);
@@ -285,6 +308,7 @@ impl ClientTerm {
         self.max_scrollback = limit.min(200_000);
         let config = Config {
             scrolling_history: self.max_scrollback,
+            kitty_keyboard: true,
             ..Config::default()
         };
         self.term.set_options(config);
@@ -307,6 +331,7 @@ impl ClientTerm {
             application_cursor: mode.contains(TermMode::APP_CURSOR),
             bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE),
             modify_other_keys: self.key_modes.modify_other_keys,
+            kitty_keyboard_flags: kitty_flags_from_mode(mode),
             scroll_offset: self.viewport_offset() as u32,
             max_scroll_offset: self.max_scroll_offset() as u32,
             mouse_tracking: mode.intersects(TermMode::MOUSE_MODE),
@@ -807,5 +832,26 @@ mod tests {
         t.write("ab\r\nc中\x1b[?2004h".as_bytes());
         assert_eq!(t.copy_viewport(0, 0, 2, 1), "ab\nc中");
         assert_eq!(t.encode_paste("a\nb"), b"\x1b[200~a\rb\x1b[201~");
+    }
+
+    #[test]
+    fn tracks_kitty_keyboard_mode_stack_and_alt_screen_isolation() {
+        let mut t = ClientTerm::new(20, 5, 100);
+        assert_eq!(t.state().kitty_keyboard_flags, 0);
+
+        // 跨分块推入 CSI > 3 u (DISAMBIGUATE_ESC_CODES | REPORT_EVENT_TYPES)
+        t.write(b"\x1b[>");
+        let st = t.write(b"3u");
+        assert_eq!(st.kitty_keyboard_flags, 3);
+
+        // 进入 alt-screen，压入 CSI > 1 u，再退出 alt-screen 应恢复主屏的 3
+        t.write(b"\x1b[?1049h\x1b[>1u");
+        assert_eq!(t.state().kitty_keyboard_flags, 1);
+        let st_back = t.write(b"\x1b[?1049l");
+        assert_eq!(st_back.kitty_keyboard_flags, 3);
+
+        // 弹出栈恢复为 0
+        let st_pop = t.write(b"\x1b[<1u");
+        assert_eq!(st_pop.kitty_keyboard_flags, 0);
     }
 }

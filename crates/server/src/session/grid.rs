@@ -124,7 +124,10 @@ impl SessionGrid {
         let size = TermSize::new(cols as usize, rows as usize);
         let pty_replies = Arc::new(Mutex::new(Vec::new()));
         let term = Term::new(
-            Config::default(),
+            Config {
+                kitty_keyboard: true,
+                ..Config::default()
+            },
             &size,
             ReplyListener {
                 pending: pty_replies.clone(),
@@ -135,7 +138,7 @@ impl SessionGrid {
             parser: Processor::new(),
             snapshot_modes: SnapshotModes::default(),
             snapshot_modes_parser: Processor::new(),
-            stream_tail: StreamTail::default(),
+            stream_tail: StreamTail::new(),
             primary_grid: None,
             cols,
             rows,
@@ -350,6 +353,25 @@ impl SessionGrid {
         });
         if mode.contains(TermMode::SHOW_CURSOR) {
             out.push_str("\x1b[?25h");
+        }
+        let mut kitty_flags = 0u8;
+        if mode.contains(TermMode::DISAMBIGUATE_ESC_CODES) {
+            kitty_flags |= 1;
+        }
+        if mode.contains(TermMode::REPORT_EVENT_TYPES) {
+            kitty_flags |= 2;
+        }
+        if mode.contains(TermMode::REPORT_ALTERNATE_KEYS) {
+            kitty_flags |= 4;
+        }
+        if mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC) {
+            kitty_flags |= 8;
+        }
+        if mode.contains(TermMode::REPORT_ASSOCIATED_TEXT) {
+            kitty_flags |= 16;
+        }
+        if kitty_flags != 0 {
+            out.push_str(&format!("\x1b[>{kitty_flags}u"));
         }
         let mut out = out.into_bytes();
         out.extend_from_slice(self.stream_tail.pending());
@@ -815,5 +837,23 @@ mod tests {
             "mode: {:?}",
             b.mode()
         );
+    }
+
+    #[test]
+    fn kitty_keyboard_query_and_repaint_roundtrip() {
+        let mut a = SessionGrid::new(20, 5);
+        a.advance(b"\x1b[?u");
+        assert_eq!(String::from_utf8(a.take_pty_replies()).unwrap(), "\x1b[?0u");
+
+        a.advance(b"\x1b[>5u\x1b[?u");
+        assert_eq!(String::from_utf8(a.take_pty_replies()).unwrap(), "\x1b[?5u");
+
+        let repaint = a.repaint();
+        assert!(String::from_utf8_lossy(&repaint).contains("\x1b[>5u"));
+
+        let mut b = SessionGrid::new(20, 5);
+        b.advance(&repaint);
+        b.advance(b"\x1b[?u");
+        assert_eq!(String::from_utf8(b.take_pty_replies()).unwrap(), "\x1b[?5u");
     }
 }
