@@ -2847,16 +2847,12 @@ impl GatetermWorkbench {
                         .w(px(18.0))
                         .h(px(18.0))
                         .flex_shrink_0()
-                        .rounded(px(4.5))
-                        .bg(brand_color.opacity(0.20))
-                        .border_1()
-                        .border_color(brand_color.opacity(0.45))
                         .flex()
                         .items_center()
                         .justify_center()
                         .child(
                             Icon::new(GatetermIcon::for_agent(&ag.agent_id))
-                                .xsmall()
+                                .small()
                                 .text_color(brand_color),
                         )
                         .into_any_element()
@@ -2870,7 +2866,7 @@ impl GatetermWorkbench {
                         .justify_center()
                         .child(
                             Icon::new(GatetermIcon::Terminal)
-                                .xsmall()
+                                .small()
                                 .text_color(if is_current {
                                     cx.theme().primary
                                 } else {

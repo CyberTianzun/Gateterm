@@ -57,22 +57,19 @@ private fun agentBrand(agentId: String): AgentBrand {
 
 /**
  * Pure 20×20dp agent brand icon placed to the left of session titles.
- * Always renders in the agent's fixed brand color without mixing status overlays.
+ * Always renders in the agent's fixed brand color without a bounding box or status overlays.
  */
 @Composable
 fun AgentStatusBadge(agent: AgentSession, modifier: Modifier = Modifier) {
     val brand = agentBrand(agent.agentId)
-    val badgeShape = RoundedCornerShape(5.dp)
 
     Box(
         modifier = modifier
             .size(20.dp)
-            .background(brand.accent.copy(alpha = 0.20f), badgeShape)
-            .border(1.dp, brand.accent.copy(alpha = 0.45f), badgeShape)
             .semantics { contentDescription = brand.label },
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(modifier = Modifier.size(13.dp)) {
+        Canvas(modifier = Modifier.size(18.dp)) {
             drawAgentGlyph(brand.kind, brand.accent)
         }
     }

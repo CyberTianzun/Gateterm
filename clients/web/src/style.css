@@ -533,31 +533,31 @@ body[data-sidebar-position="hidden"] #menu { display: none; }
   width: 20px;
   height: 20px;
   padding: 0;
-  border-radius: 5px;
-  background: rgba(78, 161, 255, 0.2);
-  border: 1px solid rgba(78, 161, 255, 0.45);
+
+
+
   color: #60a5fa;
 }
 .aicon svg {
-  width: 13px;
-  height: 13px;
+  width: 18px;
+  height: 18px;
   display: block;
 }
-.aicon[data-agent*="claude"] { background: rgba(224, 122, 95, 0.2); color: #f29d82; border-color: rgba(224, 122, 95, 0.45); }
-.aicon[data-agent*="codex"] { background: rgba(16, 185, 129, 0.2); color: #34d399; border-color: rgba(16, 185, 129, 0.45); }
-.aicon[data-agent*="gemini"] { background: rgba(139, 92, 246, 0.2); color: #a78bfa; border-color: rgba(139, 92, 246, 0.45); }
-.aicon[data-agent*="opencode"] { background: rgba(6, 182, 212, 0.2); color: #22d3ee; border-color: rgba(6, 182, 212, 0.45); }
-.aicon[data-agent="pi"], .aicon[data-agent^="pi-"] { background: rgba(236, 72, 153, 0.2); color: #f472b6; border-color: rgba(236, 72, 153, 0.45); }
-.aicon[data-agent*="grok"] { background: rgba(168, 85, 247, 0.2); color: #c084fc; border-color: rgba(168, 85, 247, 0.45); }
-.aicon[data-agent*="agy"], .aicon[data-agent*="antigravity"] { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border-color: rgba(59, 130, 246, 0.45); }
+.aicon[data-agent*="claude"] { color: #f29d82; }
+.aicon[data-agent*="codex"] { color: #34d399; }
+.aicon[data-agent*="gemini"] { color: #a78bfa; }
+.aicon[data-agent*="opencode"] { color: #22d3ee; }
+.aicon[data-agent="pi"], .aicon[data-agent^="pi-"] { color: #f472b6; }
+.aicon[data-agent*="grok"] { color: #c084fc; }
+.aicon[data-agent*="agy"], .aicon[data-agent*="antigravity"] { color: #60a5fa; }
 
 .srow .aicon {
   width: 18px;
   height: 18px;
 }
 .srow .aicon svg {
-  width: 12px;
-  height: 12px;
+  width: 16px;
+  height: 16px;
 }
 
 /* 2. 独立的状态标签 (.atag):仅表达当前运行状态,与 Agent 图标彻底解耦 */
@@ -586,6 +586,7 @@ body[data-sidebar-position="hidden"] #menu { display: none; }
   color: #2a0000;
 }
 .atag.a-working {
+
   background: rgba(78, 161, 255, 0.2);
   border-color: rgba(78, 161, 255, 0.45);
   color: #6eb5ff;
