@@ -255,6 +255,6 @@ test("agentBrandLabel and agentBrandIconSvg return official brand icons and colo
   assert.equal(agentBrandLabel("agy"), "AGY");
   assert.equal(agentBrandLabel("antigravity"), "AGY");
   assert.ok(agentBrandIconSvg("codex").includes("#7A9DFF"));
-  assert.ok(agentBrandIconSvg("grok").includes("M9.27 15.29"));
-  assert.ok(agentBrandIconSvg("agy").includes("M21.751 22.607"));
+  assert.ok(agentBrandIconSvg("grok").includes("M 9.27 15.29"));
+  assert.ok(agentBrandIconSvg("agy").includes("M 21.751 22.607"));
 });
