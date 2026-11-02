@@ -1257,13 +1257,19 @@ mod tests {
         let b: Value =
             serde_json::from_slice(&axum::body::to_bytes(b.into_body(), 4096).await.unwrap())
                 .unwrap();
-        for _ in 0..80 {
-            if record.exists() {
+        let mut arguments = String::new();
+        for _ in 0..200 {
+            if let Ok(content) = fs::read_to_string(&record)
+                && content.lines().nth(1).is_some_and(|line| !line.trim().is_empty())
+            {
+                arguments = content;
                 break;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        let arguments = fs::read_to_string(record).unwrap_or_default();
+        if arguments.is_empty() {
+            arguments = fs::read_to_string(&record).unwrap_or_default();
+        }
         let sessions = state.manager.list();
         for session in &sessions {
             state.manager.kill(session.id);

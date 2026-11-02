@@ -18,6 +18,7 @@ mod win32 {
 }
 
 pub fn hide_window_to_tray(window: &mut Window, cx: &mut App) {
+    let _ = window;
     let _ = cx;
     #[cfg(target_os = "windows")]
     if let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window)

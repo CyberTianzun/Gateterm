@@ -19,13 +19,13 @@ fn bulk_producer_cmd() -> Vec<String> {
     #[cfg(windows)]
     {
         let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
-        return vec![
+        vec![
             format!(r"{system_root}\System32\WindowsPowerShell\v1.0\powershell.exe"),
             "-NoLogo".into(),
             "-NonInteractive".into(),
             "-Command".into(),
             "$s='x'*8192; for($i=0;$i -lt 2000;$i++){Write-Host $s}; Start-Sleep 30".into(),
-        ];
+        ]
     }
 }
 

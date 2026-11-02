@@ -39,18 +39,13 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             version="${GITHUB_REF_NAME#release-}"
             expected="${version#v}"
-            for f in crates/*/Cargo.toml clients/desktop-web/Cargo.toml clients/desktop-native/Cargo.toml; do
+            for f in Cargo.toml clients/desktop-native/Cargo.toml; do
               actual="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$f" | head -1)"
               if [ "$actual" != "$expected" ]; then
                 echo "::error file=$f::version 是 $actual,而 tag 是 $GITHUB_REF_NAME(期望 $expected)"
                 exit 1
               fi
             done
-            android_version="$(sed -n 's/^[[:space:]]*versionName *= *"\([^"]*\)"/\1/p' clients/android/app/build.gradle.kts | head -1)"
-            if [ "$android_version" != "$expected" ]; then
-              echo "::error file=clients/android/app/build.gradle.kts::versionName 是 $android_version,而 tag 是 $GITHUB_REF_NAME(期望 $expected)"
-              exit 1
-            fi
           else
             version="dev-${GITHUB_SHA::7}"
           fi

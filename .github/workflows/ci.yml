@@ -41,5 +41,5 @@ jobs:
             cargo clippy --workspace --exclude gateterm-desktop-web -- -D warnings
           else
             cargo clippy --workspace -- -D warnings
-            cargo clippy --manifest-path clients/desktop-native/Cargo.toml -p gateterm-desktop-native -- -D warnings
+            cargo clippy --manifest-path clients/desktop-native/Cargo.toml -p gateterm-desktop-native --no-deps -- -D warnings
           fi

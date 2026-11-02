@@ -913,8 +913,8 @@ fn decode_image(
                 return Err("rgb payload length mismatch");
             }
             let mut rgba = Vec::with_capacity(pixels * 4);
-            for chunk in raw.chunks_exact(3) {
-                rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
+            for &[r, g, b] in raw.as_chunks::<3>().0 {
+                rgba.extend_from_slice(&[r, g, b, 255]);
             }
             Ok((width, height, rgba))
         }
@@ -958,8 +958,8 @@ fn decode_png(raw: &[u8]) -> Result<(u32, u32, Vec<u8>), &'static str> {
                 return Err("png rgb size mismatch");
             }
             let mut out = Vec::with_capacity(pixels * 4);
-            for c in bytes.chunks_exact(3) {
-                out.extend_from_slice(&[c[0], c[1], c[2], 255]);
+            for &[r, g, b] in bytes.as_chunks::<3>().0 {
+                out.extend_from_slice(&[r, g, b, 255]);
             }
             out
         }
@@ -978,8 +978,8 @@ fn decode_png(raw: &[u8]) -> Result<(u32, u32, Vec<u8>), &'static str> {
                 return Err("png grayscale-alpha size mismatch");
             }
             let mut out = Vec::with_capacity(pixels * 4);
-            for c in bytes.chunks_exact(2) {
-                out.extend_from_slice(&[c[0], c[0], c[0], c[1]]);
+            for &[g, a] in bytes.as_chunks::<2>().0 {
+                out.extend_from_slice(&[g, g, g, a]);
             }
             out
         }

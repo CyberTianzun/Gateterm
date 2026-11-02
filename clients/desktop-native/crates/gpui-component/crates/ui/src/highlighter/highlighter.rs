@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 use std::{
     collections::{BTreeSet, HashMap},
     ops::Range,
-    usize,
 };
 use tree_sitter::{
     InputEdit, ParseOptions, Parser, Point, Query, QueryCursor, StreamingIterator, Tree,

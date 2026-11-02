@@ -97,8 +97,9 @@ pub(crate) fn decode_windows_command(command: &str) -> Option<String> {
     let encoded = command.strip_prefix(WINDOWS_COMMAND_PREFIX)?;
     if encoded.len() > 32_768 { return None; }
     let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).ok()?;
-    if bytes.len() % 2 != 0 { return None; }
-    let words: Vec<u16> = bytes.chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
+    let (chunks, remainder) = bytes.as_chunks::<2>();
+    if !remainder.is_empty() { return None; }
+    let words: Vec<u16> = chunks.iter().copied().map(u16::from_le_bytes).collect();
     String::from_utf16(&words).ok()
 }
 
