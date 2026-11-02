@@ -16,7 +16,7 @@ use gpui_component::{
 
 use super::app::GatetermWorkbench;
 use super::chat_view::render_message_list;
-use super::icons::GatetermIcon;
+use super::icons::{GatetermIcon, render_agent_brand_icon};
 use crate::client::api::{ChatMessage, HistoryAgentFilter, HistoryEntry};
 
 #[derive(Default)]
@@ -79,6 +79,7 @@ pub fn render_history_modal(
         filter_bar = filter_bar.child(
             Button::new(SharedString::from(format!("hist-filter-{}", agent.id)))
                 .xsmall()
+                .icon(GatetermIcon::for_agent(&agent.id))
                 .with_variant(if active {
                     gpui_component::button::ButtonVariant::Primary
                 } else {
@@ -162,13 +163,21 @@ pub fn render_history_modal(
                     .justify_between()
                     .gap_2()
                     .child(
-                        div()
+                        h_flex()
                             .flex_1()
-                            .truncate()
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(cx.theme().foreground)
-                            .child(title),
+                            .min_w(px(0.0))
+                            .items_center()
+                            .gap_1p5()
+                            .child(render_agent_brand_icon(&entry.agent_id, cx))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .truncate()
+                                    .text_xs()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(cx.theme().foreground)
+                                    .child(title),
+                            ),
                     )
                     .children(can_resume.then(|| {
                         Button::new(SharedString::from(format!(

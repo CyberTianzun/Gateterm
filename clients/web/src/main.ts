@@ -57,6 +57,7 @@ import {
   replaceAll,
   stateText,
   waitingList,
+  createAgentBrandIcon,
 } from "./agents";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -159,56 +160,6 @@ function shortCwd(cwd: string | null | undefined): string {
   if (parts.length === 0) return trimmed;
   if (parts.length === 1) return parts[0];
   return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
-}
-
-function agentBrandLabel(agentId: string): string {
-  switch (agentId.toLowerCase()) {
-    case "claude":
-    case "claude-code":
-      return "Claude";
-    case "codex":
-      return "Codex";
-    case "gemini":
-    case "gemini-cli":
-      return "Gemini";
-    case "opencode":
-      return "OpenCode";
-    case "pi":
-      return "pi";
-    case "grok":
-      return "Grok";
-    case "agy":
-    case "antigravity":
-      return "AGY";
-    default:
-      return agentId;
-  }
-}
-
-function agentBrandIconSvg(agentId: string): string {
-  const lower = agentId.toLowerCase();
-  if (lower.includes("claude")) {
-    return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M8 2v12M2 8h12M3.76 3.76l8.48 8.48M12.24 3.76L3.76 12.24"/></svg>`;
-  }
-  if (lower.includes("codex")) {
-    return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.75L13.5 4.9v6.2L8 14.25 2.5 11.1V4.9L8 1.75Z"/><path d="M5.75 6.25L7.75 8l-2 1.75M8.5 9.75h2"/></svg>`;
-  }
-  if (lower.includes("gemini")) {
-    return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.5C8 5.1 10.9 8 14.5 8 10.9 8 8 10.9 8 14.5 8 10.9 5.1 8 1.5 8 5.1 8 8 5.1 8 1.5Z"/></svg>`;
-  }
-  if (lower.includes("opencode")) {
-    return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.25 4.75L2 8l3.25 3.25M10.75 4.75L14 8l-3.25 3.25M9.25 3.5l-2.5 9"/></svg>`;
-  }
-  if (lower === "pi" || lower.startsWith("pi-")) {
-    return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4.5h10M6.25 4.5v7.25M10.25 4.5v5.75a1.5 1.5 0 0 0 1.5 1.5"/></svg>`;
-  }
-  if (lower.includes("grok")) {
-    return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="4.75"/><path d="M3 13L13 3"/></svg>`;
-  }
-  if (lower.includes("agy") || lower.includes("antigravity")) {
-    return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.25L13.5 13H10.6L8 7.75 5.4 13H2.5L8 2.25Z"/><path d="M5.5 10.5h5"/></svg>`;
-  }
-  return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="10" height="8" rx="2"/><path d="M8 2v2.5M6 8.25h.01M10 8.25h.01M6 10.5h4"/></svg>`;
 }
 
 /* ---------- 多语言 ---------- */
@@ -902,14 +853,7 @@ function renderChat(prepend = false) {
 
 /** 状态图标徽章。列表页和侧边栏共用同一个,排在会话标题左边,悬停提示完整状态。 */
 function agentBrandIcon(a: AgentSession): HTMLElement {
-  const icon = document.createElement("span");
-  icon.className = "aicon";
-  icon.dataset.agent = a.agent_id.toLowerCase();
-  const brand = agentBrandLabel(a.agent_id);
-  icon.innerHTML = agentBrandIconSvg(a.agent_id);
-  icon.title = brand;
-  icon.setAttribute("aria-label", brand);
-  return icon;
+  return createAgentBrandIcon(a.agent_id);
 }
 
 function shortStateLabel(a: AgentSession): string {

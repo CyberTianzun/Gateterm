@@ -1,6 +1,7 @@
 import { renderMessages } from "./chat-view";
 import { createModal } from "./modal";
 import { t, localeTag } from "./i18n";
+import { createAgentBrandIcon } from "./agents";
 import { fetchHistory, fetchHistoryMessages, historyError, historyTitle, HistoryError, openHistory, type HistoryEntry } from "./history";
 
 export function mountHistory(trigger: HTMLElement, token: () => string, onOpen: (session: { id: number; name: string }) => void): void {
@@ -100,7 +101,8 @@ export function mountHistory(trigger: HTMLElement, token: () => string, onOpen: 
       browser.hidden = true;
       preview.hidden = false;
       back.hidden = false;
-      const heading = el("h3", "", historyTitle(entry));
+      const heading = el("h3", "history-row-title");
+      heading.append(createAgentBrandIcon(entry.agent_id), el("span", "", historyTitle(entry)));
       const summary = el("div", "history-preview-head");
       const feedback = el("div", "history-meta");
       feedback.setAttribute("role", "status");
@@ -135,7 +137,8 @@ export function mountHistory(trigger: HTMLElement, token: () => string, onOpen: 
 
     function row(entry: HistoryEntry): HTMLElement {
       const item = el("article", "history-row");
-      const label = el("h3", "", historyTitle(entry));
+      const label = el("h3", "history-row-title");
+      label.append(createAgentBrandIcon(entry.agent_id), el("span", "", historyTitle(entry)));
       const description = el("div", "history-description", entry.description || t("history.noMessages"));
       description.title = description.textContent!;
       const cwd = el("div", "history-meta history-cwd", entry.cwd ?? t("history.unknownDirectory"));

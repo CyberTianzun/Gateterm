@@ -246,3 +246,15 @@ test("答案以问题原文为键,并保留原入参的其它字段", () => {
   assert.equal(out.extra, 1, "原入参的其它字段要原样带回去");
   assert.ok(Array.isArray(out.questions));
 });
+
+
+test("agentBrandLabel and agentBrandIconSvg return official brand icons and colors", async () => {
+  const { agentBrandLabel, agentBrandIconSvg } = await import("./.agents.build.mjs");
+  assert.equal(agentBrandLabel("codex"), "Codex");
+  assert.equal(agentBrandLabel("grok"), "Grok");
+  assert.equal(agentBrandLabel("agy"), "AGY");
+  assert.equal(agentBrandLabel("antigravity"), "AGY");
+  assert.ok(agentBrandIconSvg("codex").includes("#7A9DFF"));
+  assert.ok(agentBrandIconSvg("grok").includes("M9.27 15.29"));
+  assert.ok(agentBrandIconSvg("agy").includes("M21.751 22.607"));
+});

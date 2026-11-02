@@ -2842,20 +2842,7 @@ impl GatetermWorkbench {
 
                 let active_agent = best_agent_for_session(&conn.agent_sessions, sid);
                 let leading_icon: AnyElement = if let Some(ref ag) = active_agent {
-                    let (_, brand_color) = agent_brand_style(&ag.agent_id, cx);
-                    div()
-                        .w(px(18.0))
-                        .h(px(18.0))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            Icon::new(GatetermIcon::for_agent(&ag.agent_id))
-                                .small()
-                                .text_color(brand_color),
-                        )
-                        .into_any_element()
+                    super::icons::render_agent_brand_icon(&ag.agent_id, cx)
                 } else {
                     div()
                         .w(px(18.0))
@@ -3398,19 +3385,6 @@ pub fn format_short_cwd(cwd: &str) -> String {
         [] => trimmed.to_string(),
         [only] => (*only).to_string(),
         [.., parent, leaf] => format!("{parent}/{leaf}"),
-    }
-}
-
-fn agent_brand_style(agent_id: &str, cx: &App) -> (&'static str, gpui::Hsla) {
-    match agent_id.to_ascii_lowercase().as_str() {
-        "claude" | "claude-code" => ("Claude", gpui::rgb(0xE07A5F).into()),
-        "codex" => ("Codex", gpui::rgb(0x10B981).into()),
-        "gemini" | "gemini-cli" => ("Gemini", gpui::rgb(0x8B5CF6).into()),
-        "opencode" => ("OpenCode", gpui::rgb(0x06B6D4).into()),
-        "pi" => ("pi", gpui::rgb(0xEC4899).into()),
-        "grok" => ("Grok", gpui::rgb(0xA855F7).into()),
-        "agy" | "antigravity" => ("AGY", gpui::rgb(0x3B82F6).into()),
-        _ => ("Agent", cx.theme().primary),
     }
 }
 

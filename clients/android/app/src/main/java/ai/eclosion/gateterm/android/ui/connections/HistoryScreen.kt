@@ -47,6 +47,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.painterResource
@@ -55,6 +56,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ai.eclosion.gateterm.android.R
+import ai.eclosion.gateterm.android.ui.components.AgentBrandIcon
 import ai.eclosion.gateterm.android.ui.components.AppBarTitle
 import ai.eclosion.gateterm.android.agent.ChatWindow
 import ai.eclosion.gateterm.android.agent.HistoryAgent
@@ -186,7 +188,13 @@ fun HistoryScreen(
             ) {
                 items(page?.sessions.orEmpty(), key = { it.key }) { entry ->
                     Column(Modifier.padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(historyTitle(entry), style = MaterialTheme.typography.titleSmall)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            AgentBrandIcon(agentId = entry.agentId)
+                            Text(historyTitle(entry), style = MaterialTheme.typography.titleSmall)
+                        }
                         Text(entry.description ?: stringResource(R.string.history_no_preview), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         HistoryMetadata(entry)
                         Row {
@@ -269,7 +277,15 @@ private fun HistoryConversationScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { AppBarTitle(historyTitle(entry), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                title = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        AgentBrandIcon(agentId = entry.agentId)
+                        AppBarTitle(historyTitle(entry), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                },
                 navigationIcon = { HistoryBackButton(onBack) },
                 actions = {
                     IconToggleButton(checked = detailsOpen, onCheckedChange = { detailsOpen = it }) {
@@ -282,7 +298,13 @@ private fun HistoryConversationScreen(
         Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
             if (detailsOpen) {
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(historyTitle(entry), style = MaterialTheme.typography.titleSmall)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        AgentBrandIcon(agentId = entry.agentId)
+                        Text(historyTitle(entry), style = MaterialTheme.typography.titleSmall)
+                    }
                     HistoryMetadata(entry)
                 }
                 HorizontalDivider()
@@ -348,12 +370,19 @@ private fun HistoryFilterScreen(
                 Text(stringResource(R.string.history_filter_agent), style = MaterialTheme.typography.labelLarge)
                 Box(Modifier.fillMaxWidth()) {
                     OutlinedButton(onClick = { agentOpen = true }, modifier = Modifier.fillMaxWidth()) {
+                        if (draft.agent.isNotBlank()) {
+                            AgentBrandIcon(agentId = draft.agent, modifier = Modifier.padding(end = 8.dp))
+                        }
                         Text(agents.find { it.id == draft.agent }?.name ?: draft.agent.ifBlank { stringResource(R.string.history_all_agents) })
                     }
                     DropdownMenu(expanded = agentOpen, onDismissRequest = { agentOpen = false }) {
                         DropdownMenuItem(text = { Text(stringResource(R.string.history_all_agents)) }, onClick = { draft = draft.copy(agent = ""); agentOpen = false })
                         agents.forEach { item ->
-                            DropdownMenuItem(text = { Text(item.name) }, onClick = { draft = draft.copy(agent = item.id); agentOpen = false })
+                            DropdownMenuItem(
+                                leadingIcon = { AgentBrandIcon(agentId = item.id) },
+                                text = { Text(item.name) },
+                                onClick = { draft = draft.copy(agent = item.id); agentOpen = false },
+                            )
                         }
                     }
                 }

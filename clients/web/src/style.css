@@ -543,13 +543,13 @@ body[data-sidebar-position="hidden"] #menu { display: none; }
   height: 18px;
   display: block;
 }
-.aicon[data-agent*="claude"] { color: #f29d82; }
-.aicon[data-agent*="codex"] { color: #34d399; }
-.aicon[data-agent*="gemini"] { color: #a78bfa; }
-.aicon[data-agent*="opencode"] { color: #22d3ee; }
+.aicon[data-agent*="claude"] { color: #d97757; }
+.aicon[data-agent*="codex"] { color: #7a9dff; }
+.aicon[data-agent*="gemini"] { color: #3186ff; }
+.aicon[data-agent*="opencode"] { color: #38bdf8; }
 .aicon[data-agent="pi"], .aicon[data-agent^="pi-"] { color: #f472b6; }
-.aicon[data-agent*="grok"] { color: #c084fc; }
-.aicon[data-agent*="agy"], .aicon[data-agent*="antigravity"] { color: #60a5fa; }
+.aicon[data-agent*="grok"] { color: var(--text); }
+.aicon[data-agent*="agy"], .aicon[data-agent*="antigravity"] { color: #3186ff; }
 
 .srow .aicon {
   width: 18px;
@@ -728,7 +728,7 @@ body[data-sidebar-position="hidden"] #menu { display: none; }
 }
 .history-status { padding: 8px 14px; }
 .history-row { padding: 12px 14px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
-.history-row h3 { font-size: 14px; font-weight: 600; white-space: pre-wrap; }
+.history-row h3 { font-size: 14px; font-weight: 600; white-space: pre-wrap; display: flex; align-items: center; gap: 6px; }
 .history-description { margin: 4px 0 6px; font-size: 12px; color: var(--dim); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .history-meta { font-size: 12px; color: var(--dim); overflow-wrap: anywhere; }
 .history-badges { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; }
@@ -739,7 +739,7 @@ body[data-sidebar-position="hidden"] #menu { display: none; }
 .history-more { margin: 12px 14px; }
 .history-preview { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .history-preview-head { padding: 12px 14px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
-.history-preview h3 { font-size: 14px; margin-bottom: 8px; }
+.history-preview h3 { font-size: 14px; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
 .history-transcript { flex: 1; padding: 14px; }
 #open-history svg { width: 17px; height: 17px; vertical-align: middle; }
 .agent-purge-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; }
