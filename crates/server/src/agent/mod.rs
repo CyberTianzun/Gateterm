@@ -26,6 +26,7 @@ pub mod antigravity;
 pub mod antigravity_transcript;
 pub mod hook_cli;
 pub mod history;
+pub mod kit;
 mod process;
 pub mod pi;
 pub mod pi_transcript;
@@ -115,6 +116,11 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
+    /// 启动自检日志里对「放行那一步怎么做」的人类可读提示。
+    fn activation_hint(&self) -> Option<&'static str> {
+        None
+    }
+
     /// `activation` 那一步是不是已经做了。**只读**地看 agent 自己的记录,看不出来就当
     /// 做了 —— 这是给用户的提示,宁可漏报也不该把能用的集成报成不能用。
     fn activated(&self, env: &detect::DetectEnv, ctx: &edit::InstallCtx) -> bool {
@@ -167,18 +173,26 @@ pub trait AgentAdapter: Send + Sync {
     fn render(&self, decision: &store::Decision) -> serde_json::Value;
 }
 
-pub fn registry() -> Vec<Box<dyn AgentAdapter>> {
-    vec![
-        Box::new(claude_code::ClaudeCode),
-        Box::new(codex::Codex),
-        Box::new(pi::Pi),
-        Box::new(grok::Grok),
-        Box::new(antigravity::Antigravity),
-    ]
+impl<'a> AsRef<dyn AgentAdapter + 'a> for dyn AgentAdapter + 'a {
+    fn as_ref(&self) -> &(dyn AgentAdapter + 'a) {
+        self
+    }
 }
 
-pub fn find(id: &str) -> Option<Box<dyn AgentAdapter>> {
-    registry().into_iter().find(|a| a.id() == id)
+static REGISTRY: &[&dyn AgentAdapter] = &[
+    &claude_code::ClaudeCode,
+    &codex::Codex,
+    &pi::Pi,
+    &grok::Grok,
+    &antigravity::Antigravity,
+];
+
+pub fn registry() -> &'static [&'static dyn AgentAdapter] {
+    REGISTRY
+}
+
+pub fn find(id: &str) -> Option<&'static dyn AgentAdapter> {
+    REGISTRY.iter().copied().find(|a| a.id() == id)
 }
 
 /// 清空计划:对这个 adapter 碰过的每个配置文件做一次 [`edit::EditOp::PurgeOurs`]。
@@ -272,11 +286,13 @@ pub fn startup_warnings(env: &detect::DetectEnv, port: u16) -> Vec<String> {
                 Integration::StalePort => format!("装的 hook 指向的不是当前端口 {port}"),
                 Integration::Outdated => "装的 hook 和当前服务不一致(端口、事件或程序路径有变化)".to_string(),
                 Integration::NeedsActivation => {
+                    let hint = find(a.id)
+                        .and_then(|ad| ad.activation_hint())
+                        .unwrap_or("按设置页「AI 集成」里的提示完成最后一步");
                     return Some(format!(
                         "{name}: hook 已装好,但还没在 {name} 里放行,不会被调用(会话识别、聊天视图都不生效)。\
                          {path}\n      {hint}",
                         name = a.name,
-                        hint = activation_hint(a.activation),
                     ));
                 }
                 Integration::Installed | Integration::NotInstalled => return None,
@@ -290,11 +306,16 @@ pub fn startup_warnings(env: &detect::DetectEnv, port: u16) -> Vec<String> {
         .collect()
 }
 
-/// 启动日志里「放行那一步怎么做」。客户端按 `activation` 键自己出文案,这里只服务日志。
-fn activation_hint(key: Option<&str>) -> &'static str {
-    match key {
-        Some("codex-hooks-review") => "在 gateterm 里启动 codex,执行 /hooks 逐条审核通过,再重启 codex",
-        Some("pi-reload") => "在 pi 里执行 /reload 或重启 pi",
-        _ => "按设置页「AI 集成」里的提示完成最后一步",
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn static_registry_and_as_ref_are_zero_alloc_compatible() {
+        let all: &'static [&'static dyn AgentAdapter] = registry();
+        assert_eq!(all.len(), 5);
+        let claude: &'static dyn AgentAdapter = find("claude-code").unwrap();
+        let via_as_ref: &dyn AgentAdapter = claude.as_ref();
+        assert_eq!(via_as_ref.id(), "claude-code");
     }
 }

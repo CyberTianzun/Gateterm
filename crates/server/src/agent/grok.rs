@@ -154,6 +154,10 @@ impl AgentAdapter for Grok {
         Some("grok-reload")
     }
 
+    fn activation_hint(&self) -> Option<&'static str> {
+        Some("在 grok 里执行 /hooks 重新加载或重启 grok")
+    }
+
     fn agent_session_id(&self, body: &Value) -> Option<String> {
         str_field(body, "sessionId").or_else(|| str_field(body, "session_id"))
     }

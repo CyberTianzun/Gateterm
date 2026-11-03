@@ -140,6 +140,10 @@ impl AgentAdapter for Pi {
         Some("pi-reload")
     }
 
+    fn activation_hint(&self) -> Option<&'static str> {
+        Some("在 pi 里执行 /reload 或重启 pi")
+    }
+
     fn parse(&self, event: &str, body: &Value) -> Option<Update> {
         let state = state_of(event)?;
         let detail = match event {

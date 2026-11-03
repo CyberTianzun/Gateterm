@@ -185,6 +185,10 @@ impl AgentAdapter for Codex {
         Some("codex-hooks-review")
     }
 
+    fn activation_hint(&self) -> Option<&'static str> {
+        Some("在 gateterm 里启动 codex,执行 /hooks 逐条审核通过,再重启 codex")
+    }
+
     /// 先问 Codex 自己(`hooks/list`,见 [`super::codex_trust`]),那是权威答案。
     /// 问不了(没在 PATH 上、超时、协议变了)才回落到读 config.toml 的粗判断。
     fn activated(&self, env: &DetectEnv, ctx: &InstallCtx) -> bool {

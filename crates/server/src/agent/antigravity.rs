@@ -139,6 +139,10 @@ impl AgentAdapter for Antigravity {
         Some("antigravity-restart")
     }
 
+    fn activation_hint(&self) -> Option<&'static str> {
+        Some("在 agy 里执行 /hooks 重新加载或重启 agy")
+    }
+
     fn agent_session_id(&self, body: &Value) -> Option<String> {
         str_field(body, "conversationId")
     }

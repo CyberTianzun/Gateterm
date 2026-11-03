@@ -63,7 +63,7 @@ fn describe(e: &ConfigEdit) -> serde_json::Value {
     })
 }
 
-fn ctx_for(state: &AppState, id: &str, include_blocking: bool) -> Option<(Box<dyn crate::agent::AgentAdapter>, InstallCtx)> {
+fn ctx_for(state: &AppState, id: &str, include_blocking: bool) -> Option<(&'static dyn crate::agent::AgentAdapter, InstallCtx)> {
     let adapter = crate::agent::find(id)?;
     let env = DetectEnv::current();
     Some((adapter, InstallCtx { home: env.home, port: state.listen_port, include_blocking }))
