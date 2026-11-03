@@ -52,25 +52,48 @@ pub struct Catalog {
     agents: Vec<Value>,
 }
 
+/// 单个 Agent 声明的历史会话扫描根目录与最大递归深度。
+#[derive(Debug, Clone)]
+pub struct HistoryRoot {
+    pub path: PathBuf,
+    pub max_depth: usize,
+}
+
+/// 采样历史会话记录时累积的元数据。
+#[derive(Debug, Default)]
+pub struct RowMeta {
+    pub id: Option<String>,
+    pub cwd: Option<String>,
+    pub title: Option<String>,
+    pub first_prompt: Option<String>,
+    pub description: Option<String>,
+    pub model: Option<String>,
+    pub sidechain: bool,
+}
+
+/// 恢复历史会话时传给 CLI 的目标参数类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResumeTarget {
+    SessionId,
+    TranscriptPath,
+}
+
+/// 恢复历史会话时使用的 CLI 命令规格。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResumeSpec {
+    pub cli: &'static str,
+    pub flag: &'static str,
+    pub target: ResumeTarget,
+}
+
 struct Candidate {
-    agent: &'static str,
+    adapter: &'static dyn super::AgentAdapter,
     path: PathBuf,
     modified: u64,
 }
 
-fn roots(home: &Path) -> Vec<(&'static str, PathBuf, usize)> {
-    vec![
-        ("claude-code", home.join(".claude/projects"), 1),
-        ("codex", home.join(".codex/sessions"), 3),
-        ("codex", home.join(".codex/archived_sessions"), 0),
-        ("pi", home.join(".pi/agent/sessions"), 1),
-        ("grok", home.join(".grok/sessions"), 2),
-        ("antigravity", home.join(".gemini/antigravity-cli/brain"), 4),
-    ]
-}
-
 fn collect(
-    agent: &'static str,
+    adapter: &'static dyn super::AgentAdapter,
     dir: &Path,
     depth: usize,
     visits: &mut usize,
@@ -90,14 +113,11 @@ fn collect(
         let path = item.path();
         // Never follow directory or file symlinks out of the known agent stores.
         if kind.is_dir() && depth > 0 {
-            collect(agent, &path, depth - 1, visits, files, truncated);
+            collect(adapter, &path, depth - 1, visits, files, truncated);
         } else if kind.is_file() && path.extension().is_some_and(|e| e == "jsonl") {
             let name = item.file_name();
             let name = name.to_string_lossy();
-            if name.starts_with("agent-")
-                || (agent == "grok" && name != "updates.jsonl")
-                || (agent == "antigravity" && name != "transcript_full.jsonl")
-            {
+            if !adapter.accept_history_file(&name) {
                 continue;
             }
             let modified = item
@@ -107,7 +127,7 @@ fn collect(
                 .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                 .map_or(0, |d| d.as_secs());
             files.push(Candidate {
-                agent,
+                adapter,
                 path,
                 modified,
             });
@@ -123,14 +143,14 @@ fn safe_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
 }
 
-fn text(v: &Value, key: &str) -> Option<String> {
+pub(crate) fn text(v: &Value, key: &str) -> Option<String> {
     v.get(key)
         .and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty())
         .map(str::to_string)
 }
 
-fn short(value: &str) -> String {
+pub(crate) fn short(value: &str) -> String {
     value
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -140,7 +160,7 @@ fn short(value: &str) -> String {
         .collect()
 }
 
-fn prompt(value: &str) -> Option<String> {
+pub(crate) fn prompt(value: &str) -> Option<String> {
     let value = value.trim();
     // Harness context is sometimes stored with role=user. It is not a session title.
     if value.starts_with("# AGENTS.md instructions")
@@ -161,18 +181,22 @@ fn prompt(value: &str) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-fn model_name(value: &Value) -> Option<String> {
+pub(crate) fn model_name(value: &Value) -> Option<String> {
     text(value, "model")
         .or_else(|| text(value, "modelId"))
         .or_else(|| value.get("model").and_then(|m| text(m, "id")))
         .map(|s| short(&s))
 }
 
-fn sample(path: &Path) -> std::io::Result<String> {
+pub(crate) fn sample(path: &Path) -> std::io::Result<String> {
     sample_with_limits(path, HEAD_BYTES, TAIL_BYTES)
 }
 
-fn sample_with_limits(path: &Path, head_bytes: u64, tail_bytes: u64) -> std::io::Result<String> {
+pub(crate) fn sample_with_limits(
+    path: &Path,
+    head_bytes: u64,
+    tail_bytes: u64,
+) -> std::io::Result<String> {
     let mut file = File::open(path)?;
     let len = file.metadata()?.len();
     let mut head = Vec::new();
@@ -196,62 +220,18 @@ fn sample_with_limits(path: &Path, head_bytes: u64, tail_bytes: u64) -> std::io:
 }
 
 fn parse(candidate: Candidate, env: &DetectEnv) -> Option<Entry> {
-    let adapter = super::find(candidate.agent)?;
+    let adapter = candidate.adapter;
     let source = sample(&candidate.path).ok()?;
-    let mut id = None;
-    let mut cwd = None;
-    let mut title = None;
-    let mut first_prompt = None;
-    let mut description = None;
-    let mut model = None;
-    let mut sidechain = false;
+    let mut meta = RowMeta::default();
     let mut valid_json = false;
     for line in source.lines() {
         let Ok(row) = serde_json::from_str::<Value>(line) else {
             continue;
         };
         valid_json = true;
-        sidechain |= row.get("isSidechain").and_then(Value::as_bool) == Some(true);
-        cwd = cwd.or_else(|| text(&row, "cwd"));
-        match candidate.agent {
-            "claude-code" => {
-                id = id
-                    .or_else(|| text(&row, "sessionId"))
-                    .or_else(|| text(&row, "session_id"));
-                if row.get("type").and_then(Value::as_str) == Some("custom-title") {
-                    title = text(&row, "customTitle").or(title);
-                }
-                model = model_name(&row["message"]).or(model);
-            }
-            "codex" => {
-                if id.is_none() && row.get("type").and_then(Value::as_str) == Some("session_meta") {
-                    let meta = &row["payload"];
-                    id = text(meta, "id").or_else(|| text(meta, "session_id")).or(id);
-                    cwd = text(meta, "cwd").or(cwd);
-                    title = text(meta, "title")
-                        .or_else(|| text(meta, "thread_name"))
-                        .or(title);
-                }
-                if row.get("type").and_then(Value::as_str) == Some("turn_context") {
-                    model = model_name(&row["payload"]).or(model);
-                }
-            }
-            "pi" => match row.get("type").and_then(Value::as_str) {
-                Some("session") => id = text(&row, "id").or(id),
-                Some("session_info") => title = text(&row, "name").or(title),
-                Some("model_change") => model = model_name(&row).or(model),
-                Some("message") => model = model_name(&row["message"]).or(model),
-                _ => {}
-            },
-            "grok" => {
-                id = id.or_else(|| {
-                    row.pointer("/params/sessionId")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                });
-            }
-            _ => {}
-        }
+        meta.sidechain |= row.get("isSidechain").and_then(Value::as_bool) == Some(true);
+        meta.cwd = meta.cwd.or_else(|| text(&row, "cwd"));
+        adapter.inspect_history_row(&row, &mut meta);
         // Parse each sampled record once into the shared message shape. Retain only
         // bounded summaries, never transcript bodies in the catalog.
         for message in adapter.parse_transcript(line, 0) {
@@ -265,78 +245,26 @@ fn parse(candidate: Candidate, env: &DetectEnv) -> Option<Entry> {
                 .collect::<Vec<_>>()
                 .join(" ");
             if let Some(value) = prompt(&joined) {
-                if message.role == Role::User && first_prompt.is_none() {
-                    first_prompt = Some(value.clone());
+                if message.role == Role::User && meta.first_prompt.is_none() {
+                    meta.first_prompt = Some(value.clone());
                 }
                 if message.role != Role::System {
-                    description = Some(value);
+                    meta.description = Some(value);
                 }
-            }
-        }
-        // Older Codex event-only records have no response_item counterpart.
-        if candidate.agent == "codex" && row["type"] == "event_msg" {
-            let payload = &row["payload"];
-            if matches!(
-                payload["type"].as_str(),
-                Some("user_message" | "agent_message")
-            ) && let Some(value) = text(payload, "message").and_then(|s| prompt(&s))
-            {
-                if payload["type"] == "user_message" && first_prompt.is_none() {
-                    first_prompt = Some(value.clone());
-                }
-                description = Some(value);
             }
         }
     }
-    if sidechain || !valid_json {
+    if meta.sidechain || !valid_json {
         return None;
     }
-    if candidate.agent == "grok" {
-        // Grok keeps cwd/title alongside the ACP update log.
-        if let Some(dir) = candidate.path.parent() {
-            for name in ["session.json", "metadata.json", "meta.json"] {
-                if let Some(v) = sample(&dir.join(name))
-                    .ok()
-                    .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-                {
-                    cwd = text(&v, "cwd").or(cwd);
-                    title = text(&v, "title").or(title);
-                    model = model_name(&v).or(model);
-                }
-            }
-            id = id.or_else(|| dir.file_name().map(|s| s.to_string_lossy().into_owned()));
-            // Older Grok stores have no metadata file; the project directory is URL encoded.
-            if cwd.is_none() {
-                cwd = dir
-                    .parent()
-                    .and_then(|p| p.file_name())
-                    .and_then(|name| decode_project(&name.to_string_lossy()));
-            }
-        }
-    }
-    if candidate.agent == "antigravity" {
-        id = candidate
-            .path
-            .ancestors()
-            .nth(3)
-            .and_then(|p| p.file_name())
-            .map(|s| s.to_string_lossy().into_owned());
-    }
-    let id = id.or_else(|| {
-        (candidate.agent == "claude-code").then(|| {
-            candidate
-                .path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        })
-    })?;
+    adapter.finalize_history_entry(&candidate.path, &mut meta);
+    let id = meta.id?;
     if !safe_id(&id) {
         return None;
     }
-    let title = title
-        .or(first_prompt)
+    let title = meta
+        .title
+        .or(meta.first_prompt)
         .map(|s| short(&s))
         .filter(|s| !s.is_empty())
         .unwrap_or_default();
@@ -345,9 +273,9 @@ fn parse(candidate: Candidate, env: &DetectEnv) -> Option<Entry> {
         agent_name: adapter.name().into(),
         agent_session_id: id,
         title,
-        description,
-        model,
-        cwd,
+        description: meta.description,
+        model: meta.model,
+        cwd: meta.cwd,
         updated_at: candidate.modified,
         terminal_session: None,
         can_resume: false,
@@ -359,29 +287,21 @@ fn parse(candidate: Candidate, env: &DetectEnv) -> Option<Entry> {
     Some(entry)
 }
 
-fn decode_project(name: &str) -> Option<String> {
-    let mut bytes = Vec::new();
-    let mut index = 0;
-    while index < name.len() {
-        if name.as_bytes()[index] == b'%' {
-            let value = u8::from_str_radix(name.get(index + 1..index + 3)?, 16).ok()?;
-            bytes.push(value);
-            index += 3;
-        } else {
-            bytes.push(name.as_bytes()[index]);
-            index += 1;
-        }
-    }
-    let path = String::from_utf8(bytes).ok()?;
-    Path::new(&path).is_absolute().then_some(path)
-}
-
 pub fn scan(env: &DetectEnv) -> Catalog {
     let mut files = Vec::new();
     let mut visits = 0;
     let mut truncated = false;
-    for (agent, root, depth) in roots(&env.home) {
-        collect(agent, &root, depth, &mut visits, &mut files, &mut truncated);
+    for &adapter in super::registry() {
+        for root in adapter.history_roots(&env.home) {
+            collect(
+                adapter,
+                &root.path,
+                root.max_depth,
+                &mut visits,
+                &mut files,
+                &mut truncated,
+            );
+        }
     }
     files.sort_by(|a, b| {
         b.modified
@@ -390,7 +310,7 @@ pub fn scan(env: &DetectEnv) -> Catalog {
     });
     let mut seen = HashSet::new();
     let agents = super::registry()
-        .into_iter()
+        .iter()
         .map(|a| {
             serde_json::json!({
                 "id": a.id(), "name": a.name(), "installed": a.detect(env).installed,
@@ -418,52 +338,8 @@ pub fn scan(env: &DetectEnv) -> Catalog {
             None => catalog.skipped += 1,
         }
     }
-    // Codex /rename is persisted in its index, independently of the rollout transcript.
-    if let Ok(index) = sample_with_limits(
-        &env.home.join(".codex/session_index.jsonl"),
-        1024 * 1024,
-        1024 * 1024,
-    ) {
-        let titles: HashMap<_, _> = index
-            .lines()
-            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .filter_map(|v| Some((text(&v, "id")?, text(&v, "thread_name")?)))
-            .collect();
-        for entry in catalog.entries.iter_mut().filter(|e| e.agent_id == "codex") {
-            if let Some(title) = titles.get(&entry.agent_session_id) {
-                entry.title = short(title);
-            }
-        }
-    }
-    // CLI prompt history can recover an opening request when a very large
-    // bootstrap record lies beyond the transcript sampling budget.
-    if let Ok(index) =
-        sample_with_limits(&env.home.join(".codex/history.jsonl"), 0, 2 * 1024 * 1024)
-    {
-        let mut prompts = HashMap::new();
-        for row in index
-            .lines()
-            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        {
-            if let (Some(id), Some(value)) = (
-                text(&row, "session_id"),
-                text(&row, "text").and_then(|s| prompt(&s)),
-            ) {
-                prompts.entry(id).or_insert(value);
-            }
-        }
-        for entry in catalog
-            .entries
-            .iter_mut()
-            .filter(|e| e.agent_id == "codex" && e.title.is_empty())
-        {
-            if let Some(value) = prompts.get(&entry.agent_session_id) {
-                entry.title = value.clone();
-                if entry.description.is_none() {
-                    entry.description = Some(value.clone());
-                }
-            }
-        }
+    for &adapter in super::registry() {
+        adapter.enrich_history_catalog(&env.home, &mut catalog.entries);
     }
     catalog
 }
@@ -472,15 +348,9 @@ fn resume_command(entry: &Entry, env: &DetectEnv) -> Result<Vec<String>, &'stati
     if !safe_id(&entry.agent_session_id) {
         return Err("not-found");
     }
-    let (cli, flag) = match entry.agent_id.as_str() {
-        "claude-code" => ("claude", "--resume"),
-        "codex" => ("codex", "resume"),
-        "pi" => ("pi", "--session"),
-        "grok" => ("grok", "--resume"),
-        // The desktop Antigravity vault is not an agy CLI resume store.
-        "antigravity" => ("agy", "--conversation"),
-        _ => return Err("unsupported-agent"),
-    };
+    let spec = super::find(&entry.agent_id)
+        .and_then(|a| a.resume_spec())
+        .ok_or("unsupported-agent")?;
     let cwd = entry
         .cwd
         .as_deref()
@@ -489,15 +359,14 @@ fn resume_command(entry: &Entry, env: &DetectEnv) -> Result<Vec<String>, &'stati
     if cwd.is_empty() {
         return Err("missing-directory");
     }
-    let executable = detect::on_path(env, cli).ok_or("missing-cli")?;
-    let target = if entry.agent_id == "pi" {
-        entry.path.to_string_lossy().into_owned()
-    } else {
-        entry.agent_session_id.clone()
+    let executable = detect::on_path(env, spec.cli).ok_or("missing-cli")?;
+    let target = match spec.target {
+        ResumeTarget::SessionId => entry.agent_session_id.clone(),
+        ResumeTarget::TranscriptPath => entry.path.to_string_lossy().into_owned(),
     };
     let command = vec![
         executable.to_string_lossy().into_owned(),
-        flag.into(),
+        spec.flag.into(),
         target,
     ];
     // npm's Windows .cmd launchers need an interpreter. Quote each argument as a literal.
@@ -1482,5 +1351,22 @@ mod tests {
             state.agent_sessions.history.lock().unwrap().entries.len(),
             2
         );
+    }
+
+    #[test]
+    fn every_registered_adapter_declares_history_roots_and_resume_spec() {
+        let home = Path::new("/tmp/home");
+        for adapter in super::super::registry() {
+            assert!(
+                !adapter.history_roots(home).is_empty(),
+                "{} missing history_roots",
+                adapter.id()
+            );
+            assert!(
+                adapter.resume_spec().is_some(),
+                "{} missing resume_spec",
+                adapter.id()
+            );
+        }
     }
 }

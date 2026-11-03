@@ -270,6 +270,45 @@ impl AgentAdapter for ClaudeCode {
     fn command_wrap(&self) -> super::hook_cli::CommandWrap {
         super::hook_cli::CommandWrap::WindowsPowerShellEncoded
     }
+
+    fn history_roots(&self, home: &std::path::Path) -> Vec<super::history::HistoryRoot> {
+        vec![super::history::HistoryRoot {
+            path: home.join(".claude/projects"),
+            max_depth: 1,
+        }]
+    }
+
+    fn inspect_history_row(&self, row: &Value, meta: &mut super::history::RowMeta) {
+        use super::history::{model_name, text};
+        meta.id = meta
+            .id
+            .take()
+            .or_else(|| text(row, "sessionId"))
+            .or_else(|| text(row, "session_id"));
+        if row.get("type").and_then(Value::as_str) == Some("custom-title") {
+            meta.title = text(row, "customTitle").or(meta.title.take());
+        }
+        meta.model = model_name(&row["message"]).or(meta.model.take());
+     }
+
+    fn finalize_history_entry(&self, path: &std::path::Path, meta: &mut super::history::RowMeta) {
+        if meta.id.is_none() {
+            meta.id = Some(
+                path.file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+    }
+
+    fn resume_spec(&self) -> Option<super::history::ResumeSpec> {
+        Some(super::history::ResumeSpec {
+            cli: "claude",
+            flag: "--resume",
+            target: super::history::ResumeTarget::SessionId,
+        })
+    }
 }
 
 /// 事件 → 状态。

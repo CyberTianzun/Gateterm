@@ -215,6 +215,34 @@ impl AgentAdapter for Antigravity {
     fn command_wrap(&self) -> super::hook_cli::CommandWrap {
         super::hook_cli::CommandWrap::WindowsPowerShellEncoded
     }
+
+    fn history_roots(&self, home: &Path) -> Vec<super::history::HistoryRoot> {
+        vec![super::history::HistoryRoot {
+            path: home.join(".gemini/antigravity-cli/brain"),
+            max_depth: 4,
+        }]
+    }
+
+    fn accept_history_file(&self, file_name: &str) -> bool {
+        file_name == "transcript_full.jsonl"
+    }
+
+    fn finalize_history_entry(&self, path: &Path, meta: &mut super::history::RowMeta) {
+        meta.id = path
+            .ancestors()
+            .nth(3)
+            .and_then(|p| p.file_name())
+            .map(|s| s.to_string_lossy().into_owned());
+    }
+
+    fn resume_spec(&self) -> Option<super::history::ResumeSpec> {
+        // The desktop Antigravity vault is not an agy CLI resume store.
+        Some(super::history::ResumeSpec {
+            cli: "agy",
+            flag: "--conversation",
+            target: super::history::ResumeTarget::SessionId,
+        })
+    }
 }
 
 fn is_our_shape(hook: &Value) -> bool {

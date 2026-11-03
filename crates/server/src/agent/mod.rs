@@ -181,6 +181,30 @@ pub trait AgentAdapter: Send + Sync {
     fn process_watch(&self) -> Option<process::ProcessWatchSpec> {
         None
     }
+
+    /// 历史会话扫描根目录及最大递归深度。
+    fn history_roots(&self, _home: &std::path::Path) -> Vec<history::HistoryRoot> {
+        Vec::new()
+    }
+
+    /// 判断历史目录下的 `.jsonl` 文件是否属于主会话记录(默认排除 `agent-` 子代理文件)。
+    fn accept_history_file(&self, file_name: &str) -> bool {
+        !file_name.starts_with("agent-")
+    }
+
+    /// 从单行历史 JSON 记录中提取适配器特有的会话元数据(id、cwd、title、model 等)。
+    fn inspect_history_row(&self, _row: &serde_json::Value, _meta: &mut history::RowMeta) {}
+
+    /// 采样结束后按文件路径或同目录伴随文件补全会话元数据。
+    fn finalize_history_entry(&self, _path: &std::path::Path, _meta: &mut history::RowMeta) {}
+
+    /// 全量扫描结束后利用外部索引文件补全目录条目(如 Codex 的 `session_index.jsonl` 与 `history.jsonl`)。
+    fn enrich_history_catalog(&self, _home: &std::path::Path, _entries: &mut [history::Entry]) {}
+
+    /// 恢复历史会话时使用的 CLI 命令规格。
+    fn resume_spec(&self) -> Option<history::ResumeSpec> {
+        None
+    }
 }
 
 impl<'a> AsRef<dyn AgentAdapter + 'a> for dyn AgentAdapter + 'a {

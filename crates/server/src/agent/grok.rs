@@ -241,6 +241,79 @@ impl AgentAdapter for Grok {
         // 没有阻塞式事件,谈不上和别人的 hook 抢决定权
         (state, Vec::new())
     }
+
+    fn history_roots(&self, home: &Path) -> Vec<super::history::HistoryRoot> {
+        vec![super::history::HistoryRoot {
+            path: home.join(".grok/sessions"),
+            max_depth: 2,
+        }]
+    }
+
+    fn accept_history_file(&self, file_name: &str) -> bool {
+        file_name == "updates.jsonl"
+    }
+
+    fn inspect_history_row(&self, row: &Value, meta: &mut super::history::RowMeta) {
+        if meta.id.is_none() {
+            meta.id = row
+                .pointer("/params/sessionId")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        }
+    }
+
+    fn finalize_history_entry(&self, path: &Path, meta: &mut super::history::RowMeta) {
+        use super::history::{model_name, sample, text};
+        // Grok keeps cwd/title alongside the ACP update log.
+        if let Some(dir) = path.parent() {
+            for name in ["session.json", "metadata.json", "meta.json"] {
+                if let Some(v) = sample(&dir.join(name))
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                {
+                    meta.cwd = text(&v, "cwd").or(meta.cwd.take());
+                    meta.title = text(&v, "title").or(meta.title.take());
+                    meta.model = model_name(&v).or(meta.model.take());
+                }
+            }
+            meta.id = meta
+                .id
+                .take()
+                .or_else(|| dir.file_name().map(|s| s.to_string_lossy().into_owned()));
+            // Older Grok stores have no metadata file; the project directory is URL encoded.
+            if meta.cwd.is_none() {
+                meta.cwd = dir
+                    .parent()
+                    .and_then(|p| p.file_name())
+                    .and_then(|name| decode_project(&name.to_string_lossy()));
+            }
+        }
+    }
+
+    fn resume_spec(&self) -> Option<super::history::ResumeSpec> {
+        Some(super::history::ResumeSpec {
+            cli: "grok",
+            flag: "--resume",
+            target: super::history::ResumeTarget::SessionId,
+        })
+    }
+}
+
+fn decode_project(name: &str) -> Option<String> {
+    let mut bytes = Vec::new();
+    let mut index = 0;
+    while index < name.len() {
+        if name.as_bytes()[index] == b'%' {
+            let value = u8::from_str_radix(name.get(index + 1..index + 3)?, 16).ok()?;
+            bytes.push(value);
+            index += 3;
+        } else {
+            bytes.push(name.as_bytes()[index]);
+            index += 1;
+        }
+    }
+    let path = String::from_utf8(bytes).ok()?;
+    Path::new(&path).is_absolute().then_some(path)
 }
 
 fn is_our_shape(hook: &Value) -> bool {

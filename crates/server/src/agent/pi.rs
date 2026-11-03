@@ -179,6 +179,32 @@ impl AgentAdapter for Pi {
     fn render(&self, _decision: &Decision) -> Value {
         json!({})
     }
+
+    fn history_roots(&self, home: &Path) -> Vec<super::history::HistoryRoot> {
+        vec![super::history::HistoryRoot {
+            path: home.join(".pi/agent/sessions"),
+            max_depth: 1,
+        }]
+    }
+
+    fn inspect_history_row(&self, row: &Value, meta: &mut super::history::RowMeta) {
+        use super::history::{model_name, text};
+        match row.get("type").and_then(Value::as_str) {
+            Some("session") => meta.id = text(row, "id").or(meta.id.take()),
+            Some("session_info") => meta.title = text(row, "name").or(meta.title.take()),
+            Some("model_change") => meta.model = model_name(row).or(meta.model.take()),
+            Some("message") => meta.model = model_name(&row["message"]).or(meta.model.take()),
+            _ => {}
+        }
+    }
+
+    fn resume_spec(&self) -> Option<super::history::ResumeSpec> {
+        Some(super::history::ResumeSpec {
+            cli: "pi",
+            flag: "--session",
+            target: super::history::ResumeTarget::TranscriptPath,
+        })
+    }
 }
 
 #[cfg(test)]

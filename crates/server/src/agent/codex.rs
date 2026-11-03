@@ -290,6 +290,109 @@ impl AgentAdapter for Codex {
             exclude_subcommands: &["app-server", "exec-server", "mcp-server"],
         })
     }
+
+    fn history_roots(&self, home: &Path) -> Vec<super::history::HistoryRoot> {
+        vec![
+            super::history::HistoryRoot {
+                path: home.join(".codex/sessions"),
+                max_depth: 3,
+            },
+            super::history::HistoryRoot {
+                path: home.join(".codex/archived_sessions"),
+                max_depth: 0,
+            },
+        ]
+    }
+
+    fn inspect_history_row(&self, row: &Value, meta: &mut super::history::RowMeta) {
+        use super::history::{model_name, prompt, text};
+        if meta.id.is_none() && row.get("type").and_then(Value::as_str) == Some("session_meta") {
+            let payload = &row["payload"];
+            meta.id = text(payload, "id")
+                .or_else(|| text(payload, "session_id"))
+                .or(meta.id.take());
+            meta.cwd = text(payload, "cwd").or(meta.cwd.take());
+            meta.title = text(payload, "title")
+                .or_else(|| text(payload, "thread_name"))
+                .or(meta.title.take());
+        }
+        if row.get("type").and_then(Value::as_str) == Some("turn_context") {
+            meta.model = model_name(&row["payload"]).or(meta.model.take());
+        }
+        // Older Codex event-only records have no response_item counterpart.
+        if row["type"] == "event_msg" {
+            let payload = &row["payload"];
+            if matches!(
+                payload["type"].as_str(),
+                Some("user_message" | "agent_message")
+            ) && let Some(value) = text(payload, "message").and_then(|s| prompt(&s))
+            {
+                if payload["type"] == "user_message" && meta.first_prompt.is_none() {
+                    meta.first_prompt = Some(value.clone());
+                }
+                meta.description = Some(value);
+            }
+        }
+    }
+
+    fn enrich_history_catalog(&self, home: &Path, entries: &mut [super::history::Entry]) {
+        use super::history::{prompt, sample_with_limits, short, text};
+        use std::collections::HashMap;
+        // Codex /rename is persisted in its index, independently of the rollout transcript.
+        if let Ok(index) = sample_with_limits(
+            &home.join(".codex/session_index.jsonl"),
+            1024 * 1024,
+            1024 * 1024,
+        ) {
+            let titles: HashMap<_, _> = index
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter_map(|v| Some((text(&v, "id")?, text(&v, "thread_name")?)))
+                .collect();
+            for entry in entries.iter_mut().filter(|e| e.agent_id == "codex") {
+                if let Some(title) = titles.get(&entry.agent_session_id) {
+                    entry.title = short(title);
+                }
+            }
+        }
+        // CLI prompt history can recover an opening request when a very large
+        // bootstrap record lies beyond the transcript sampling budget.
+        if let Ok(index) =
+            sample_with_limits(&home.join(".codex/history.jsonl"), 0, 2 * 1024 * 1024)
+        {
+            let mut prompts = HashMap::new();
+            for row in index
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            {
+                if let (Some(id), Some(value)) = (
+                    text(&row, "session_id"),
+                    text(&row, "text").and_then(|s| prompt(&s)),
+                ) {
+                    prompts.entry(id).or_insert(value);
+                }
+            }
+            for entry in entries
+                .iter_mut()
+                .filter(|e| e.agent_id == "codex" && e.title.is_empty())
+            {
+                if let Some(value) = prompts.get(&entry.agent_session_id) {
+                    entry.title = value.clone();
+                    if entry.description.is_none() {
+                        entry.description = Some(value.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    fn resume_spec(&self) -> Option<super::history::ResumeSpec> {
+        Some(super::history::ResumeSpec {
+            cli: "codex",
+            flag: "resume",
+            target: super::history::ResumeTarget::SessionId,
+        })
+    }
 }
 
 /// 回落用的粗判断:只读 Codex 自己写的 config.toml。
