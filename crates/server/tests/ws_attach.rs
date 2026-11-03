@@ -9,22 +9,27 @@ use std::time::Duration;
 
 /// 快速产生大量输出、然后保持存活(便于测试结束时 kill),用来把 256 槽的
 /// broadcast 挤爆,逼出服务端的 Lagged 处理路径。
+///
+/// 注意 `pty-parse` 单批最多合并 `COALESCE_PARSE_MAX`(64 KiB)再送入 256 槽
+/// broadcast(最多 ~16 MiB),加上 `out` mpsc(64 × 64 KiB = 4 MiB)及回环 TCP
+/// 套接字缓冲(~4-8 MiB),单次产出至少需要 ~50 MiB 才能在满负荷合批时稳定溢出。
 fn bulk_producer_cmd() -> Vec<String> {
     #[cfg(unix)]
     return vec![
         "/bin/sh".into(),
         "-c".into(),
-        "yes xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx | head -c 10000000; sleep 30".into(),
+        "yes xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx | head -c 50000000; sleep 30".into(),
     ];
     #[cfg(windows)]
     {
         let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
         vec![
             format!(r"{system_root}\System32\WindowsPowerShell\v1.0\powershell.exe"),
+            "-NoProfile".into(),
             "-NoLogo".into(),
             "-NonInteractive".into(),
             "-Command".into(),
-            "$s='x'*8192; for($i=0;$i -lt 2000;$i++){Write-Host $s}; Start-Sleep 30".into(),
+            "$s='x'*65536; for($i=0;$i -lt 800;$i++){[Console]::Out.WriteLine($s)}; Start-Sleep 30".into(),
         ]
     }
 }
@@ -225,16 +230,21 @@ async fn slow_reader_gets_lag_resync() {
 
     // 完全不读 socket:server 端 out mpsc(cap 64)与 session 的 broadcast
     // (cap 256)会被 bulk_producer_cmd 挤爆,逼出 Lagged。
-    // Windows 上 powershell 冷启动慢,3s 往往还没把队列灌满。
-    let idle = if cfg!(windows) { Duration::from_secs(8) } else { Duration::from_secs(3) };
+    let idle = if cfg!(windows) { Duration::from_secs(5) } else { Duration::from_secs(4) };
     tokio::time::sleep(idle).await;
 
     let mut saw_begin = false;
     let mut saw_end = false;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     while tokio::time::Instant::now() < deadline && !(saw_begin && saw_end) {
-        let Ok(Some(Ok(msg))) = tokio::time::timeout(Duration::from_secs(1), ws.next()).await
+        let Ok(Some(Ok(msg))) =
+            tokio::time::timeout(Duration::from_millis(500), ws.next()).await
         else {
+            if !saw_begin {
+                // 若排空当前缓冲仍未见到 ResyncBegin(如慢速 CI 虚机上进程冷启动或
+                // debug VT 解析尚未攒满 256 槽),继续暂停读取以让生产者重新积压溢出。
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
             continue;
         };
         if let Some((0, Ok(m))) = parse_server(msg) {
