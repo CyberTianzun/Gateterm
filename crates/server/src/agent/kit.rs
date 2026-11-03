@@ -54,7 +54,7 @@ pub fn detect_by_spec(env: &DetectEnv, spec: &DetectSpec<'_>) -> Detected {
                         installed: true,
                         confidence: Confidence::High,
                         reason: "config-file",
-                        detail: format!("{} 存在", path.display()),
+                        detail: format!("{} 里有用户自己的配置", path.display()),
                         config_path: Some(spec.config_path.clone()),
                     };
                 }
@@ -136,8 +136,8 @@ pub fn json_hooks_integration<'a>(
                     ConflictPolicy::None => {}
                     ConflictPolicy::ForeignHttpWithUrl => {
                         if hook.get("type").and_then(Value::as_str) == Some("http") {
-                            let url = hook.get("url").and_then(Value::as_str).unwrap_or("?");
-                            conflicts.push(format!("{event} 上已有别的 HTTP hook: {url}"));
+                            let url = hook.get("url").and_then(Value::as_str).unwrap_or("<无 url>");
+                            conflicts.push(format!("{event} 上已有另一个阻塞式 hook:{url}"));
                         }
                     }
                     ConflictPolicy::AnyForeign => {

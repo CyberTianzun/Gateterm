@@ -12,27 +12,25 @@
 use serde::Serialize;
 use std::path::PathBuf;
 
+pub mod adapters;
 pub mod apply;
-pub mod claude_code;
-pub mod claude_transcript;
-pub mod codex;
-pub mod codex_transcript;
-pub mod codex_trust;
 pub mod detect;
 pub mod edit;
-pub mod grok;
-pub mod grok_transcript;
-pub mod antigravity;
-pub mod antigravity_transcript;
-pub mod hook_cli;
 pub mod history;
+pub mod hook_cli;
 pub mod kit;
 pub mod process;
-pub mod pi;
-pub mod pi_transcript;
 pub mod routes;
 pub mod store;
 pub mod transcript;
+
+// 向后兼容模块重导出(供外部测试与既有调用路径透明访问)
+pub use adapters::antigravity::transcript as antigravity_transcript;
+pub use adapters::claude_code::transcript as claude_transcript;
+pub use adapters::codex::{transcript as codex_transcript, trust as codex_trust};
+pub use adapters::grok::transcript as grok_transcript;
+pub use adapters::pi::transcript as pi_transcript;
+pub use adapters::{antigravity, claude_code, codex, grok, pi};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -213,20 +211,12 @@ impl<'a> AsRef<dyn AgentAdapter + 'a> for dyn AgentAdapter + 'a {
     }
 }
 
-static REGISTRY: &[&dyn AgentAdapter] = &[
-    &claude_code::ClaudeCode,
-    &codex::Codex,
-    &pi::Pi,
-    &grok::Grok,
-    &antigravity::Antigravity,
-];
-
 pub fn registry() -> &'static [&'static dyn AgentAdapter] {
-    REGISTRY
+    adapters::REGISTRY
 }
 
 pub fn find(id: &str) -> Option<&'static dyn AgentAdapter> {
-    REGISTRY.iter().copied().find(|a| a.id() == id)
+    adapters::REGISTRY.iter().copied().find(|a| a.id() == id)
 }
 
 /// 清空计划:对这个 adapter 碰过的每个配置文件做一次 [`edit::EditOp::PurgeOurs`]。
@@ -277,14 +267,15 @@ fn install_is_current(adapter: &dyn AgentAdapter, ctx: &edit::InstallCtx) -> boo
 pub fn scan(env: &detect::DetectEnv, port: u16) -> Vec<AgentStatus> {
     let ctx = edit::InstallCtx { home: env.home.clone(), port, include_blocking: true };
     registry()
-        .into_iter()
+        .iter()
+        .copied()
         .map(|a| {
             let (mut integration, conflicts) = a.integration(&ctx);
             if integration == Integration::Installed {
                 // 和安装走同一个「带不带决策类」的取舍(见 routes::wants_blocking),
                 // 否则有冲突时只装了遥测的用户会被永远报成不一致。
                 let ctx = edit::InstallCtx { include_blocking: conflicts.is_empty(), ..ctx.clone() };
-                if !install_is_current(a.as_ref(), &ctx) {
+                if !install_is_current(a, &ctx) {
                     integration = Integration::Outdated;
                 } else if !a.activated(env, &ctx) {
                     integration = Integration::NeedsActivation;
@@ -345,11 +336,46 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::useless_asref)]
     fn static_registry_and_as_ref_are_zero_alloc_compatible() {
         let all: &'static [&'static dyn AgentAdapter] = registry();
         assert_eq!(all.len(), 5);
         let claude: &'static dyn AgentAdapter = find("claude-code").unwrap();
         let via_as_ref: &dyn AgentAdapter = claude.as_ref();
         assert_eq!(via_as_ref.id(), "claude-code");
+    }
+
+    #[test]
+    fn core_agent_modules_contain_no_hardcoded_agent_id_branches() {
+        let agent_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/agent");
+        assert!(
+            agent_dir.join("adapters/mod.rs").is_file(),
+            "adapters/mod.rs must exist"
+        );
+        assert!(
+            !agent_dir.join("claude_code.rs").exists(),
+            "concrete adapters must live under adapters/<agent>/"
+        );
+        for file in [
+            "mod.rs",
+            "routes.rs",
+            "store.rs",
+            "edit.rs",
+            "apply.rs",
+            "detect.rs",
+            "hook_cli.rs",
+            "process.rs",
+            "history.rs",
+            "transcript.rs",
+        ] {
+            let src = std::fs::read_to_string(agent_dir.join(file)).unwrap();
+            let prod = src.split("#[cfg(test)]").next().unwrap_or(&src);
+            for id in ["\"claude-code\"", "\"codex\"", "\"pi\"", "\"grok\"", "\"antigravity\""] {
+                assert!(
+                    !prod.contains(id),
+                    "{file} production code still hardcodes agent id {id}"
+                );
+            }
+        }
     }
 }

@@ -19,7 +19,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use super::edit::is_ours;
+use crate::agent::edit::is_ours;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 const LIST_ID: u64 = 2;

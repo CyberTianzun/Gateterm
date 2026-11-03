@@ -114,7 +114,7 @@ fn purge_removes_our_entry() {
     let e = env();
     e.install(7683).unwrap();
     let a = find("antigravity").unwrap();
-    apply(&plan_purge(a.as_ref(), &e.ctx(0)).unwrap(), &e.opts()).unwrap();
+    apply(&plan_purge(a, &e.ctx(0)).unwrap(), &e.opts()).unwrap();
     assert!(e.doc().get("gateterm").is_none());
 }
 

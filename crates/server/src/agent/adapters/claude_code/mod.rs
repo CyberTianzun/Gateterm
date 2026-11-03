@@ -8,14 +8,22 @@
 //! 时给的。于是**环境变量就是能力本身** —— 在 gateterm 之外启动的 Claude 拿不到
 //! 这两个变量,hook 照样触发,但没有 `Authorization` 头,一律 401 拒收。
 
+pub mod transcript;
+
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
-use super::detect::{self, DetectEnv};
-use super::edit::{is_ours, slug_of_event, ConfigEdit, EditOp, InstallCtx};
-use super::store::{Decision, Update};
-use super::{AgentAdapter, Confidence, Detected, Integration};
+use crate::agent::detect::DetectEnv;
+use crate::agent::edit::{slug_of_event, ConfigEdit, EditOp, InstallCtx};
+use crate::agent::history::{self, HistoryRoot, ResumeSpec, ResumeTarget, RowMeta};
+use crate::agent::hook_cli::{self, CommandWrap};
+use crate::agent::kit::{
+    detect_by_spec, json_hooks_integration, render_permission_decision, ConfigEvidence,
+    ConflictPolicy, DetectSpec,
+};
+use crate::agent::store::{Decision, Update};
+use crate::agent::{AgentAdapter, Detected, Integration};
 use gateterm_protocol::AgentState;
 
 pub struct ClaudeCode;
@@ -50,7 +58,7 @@ fn hook_spec(port: u16, event: &str, blocking: bool) -> Value {
     if event == "SessionStart" {
         return json!({
             "type": "command",
-            "command": super::hook_cli::command_for("claude-code", port, event),
+            "command": hook_cli::command_for("claude-code", port, event),
             "timeout": TELEMETRY_TIMEOUT_SECS,
         });
     }
@@ -101,50 +109,20 @@ impl AgentAdapter for ClaudeCode {
     fn detect(&self, env: &DetectEnv) -> Detected {
         let dir = env.home.join(".claude");
         let settings = settings_path(&env.home);
-
-        // 1. 配置文件里有非我方内容 —— 最硬的证据
-        if let Some(v) = read_settings(&settings)
-            && has_foreign_content(&v)
-        {
-            return Detected {
-                installed: true,
-                confidence: Confidence::High,
-                reason: "config-file",
-                detail: format!("{} 里有用户自己的配置", settings.display()),
-                config_path: Some(settings),
-            };
-        }
-
-        // 2. CLI 在 PATH 上。注意**不执行** `claude --version`:扫描是只读操作,
-        //    不 spawn 进程。
-        if let Some(exe) = detect::on_path(env, "claude") {
-            return Detected {
-                installed: true,
-                confidence: Confidence::High,
-                reason: "cli-path",
-                detail: format!("PATH 上找到 {}", exe.display()),
-                config_path: Some(settings),
-            };
-        }
-
-        // 3. 目录里有 settings.json 以外的东西 —— 用户跑过才会留下
-        if dir.is_dir() && detect::dir_has_entries_besides(&dir, &["settings.json"]) {
-            return Detected {
-                installed: true,
-                confidence: Confidence::Medium,
-                reason: "parent-dir",
-                detail: format!("{} 下有使用痕迹", dir.display()),
-                config_path: Some(settings),
-            };
-        }
-
-        Detected {
-            installed: false,
-            confidence: Confidence::Low,
-            reason: "not-found",
-            detail: "没有找到 Claude Code 的安装痕迹".into(),
-            config_path: None,
-        }
+        detect_by_spec(
+            env,
+            &DetectSpec {
+                agent_name: self.name(),
+                config_path: settings.clone(),
+                evidence: Some(ConfigEvidence::JsonForeign {
+                    path: &settings,
+                    has_foreign: &has_foreign_content,
+                }),
+                cli: "claude",
+                dir: &dir,
+                ignore_in_dir: &["settings.json"],
+            },
+        )
     }
 
     fn plan_install(&self, ctx: &InstallCtx) -> Result<Vec<ConfigEdit>> {
@@ -194,8 +172,8 @@ impl AgentAdapter for ClaudeCode {
         true
     }
 
-    fn parse_transcript(&self, text: &str, base_offset: u64) -> Vec<super::transcript::Message> {
-        super::claude_transcript::parse(text, base_offset)
+    fn parse_transcript(&self, text: &str, base_offset: u64) -> Vec<crate::agent::transcript::Message> {
+        transcript::parse(text, base_offset)
     }
 
     fn is_blocking(&self, event: &str) -> bool {
@@ -211,75 +189,33 @@ impl AgentAdapter for ClaudeCode {
     /// 「无决定」返回空对象:官方文档写明「2xx + 空 body = 成功且无输出」,Claude 会
     /// 回落到它自己的审批弹窗。这正是我们要的降级 —— 把选择权交还给终端前的人。
     fn render(&self, decision: &Decision) -> Value {
-        let d = match decision {
-            Decision::NoDecision => return json!({}),
-            Decision::Allow { message, updated_input } => {
-                let mut o = json!({ "behavior": "allow" });
-                if let Some(m) = message {
-                    o["message"] = json!(m);
-                }
-                // 选择题的答案就藏在这里:放行的同时把改写后的入参交回去
-                if let Some(u) = updated_input {
-                    o["updatedInput"] = u.clone();
-                }
-                o
-            }
-            Decision::Deny { message } => {
-                let mut o = json!({ "behavior": "deny" });
-                if let Some(m) = message {
-                    o["message"] = json!(m);
-                }
-                o
-            }
-        };
-        json!({ "hookSpecificOutput": { "hookEventName": "PermissionRequest", "decision": d } })
+        render_permission_decision(decision)
     }
 
     fn integration(&self, ctx: &InstallCtx) -> (Integration, Vec<String>) {
-        let Some(doc) = read_settings(&settings_path(&ctx.home)) else {
-            return (Integration::NotInstalled, Vec::new());
-        };
-        let mut ours_here = 0usize;
-        let mut ours_elsewhere = 0usize;
-        let mut conflicts = Vec::new();
-
-        for (event, blocking) in managed_events() {
-            for hook in hooks_of(&doc, event) {
-                if is_ours(hook, ctx.port) {
-                    ours_here += 1;
-                } else if is_our_shape(hook) {
-                    ours_elsewhere += 1;
-                } else if blocking && hook.get("type").and_then(Value::as_str) == Some("http") {
-                    // 别人的阻塞式 hook 挂在同一个事件上。不动它,但要报出来。
-                    let url = hook.get("url").and_then(Value::as_str).unwrap_or("<无 url>");
-                    conflicts.push(format!("{event} 上已有另一个阻塞式 hook:{url}"));
-                }
-            }
-        }
-
-        let state = if ours_here > 0 {
-            Integration::Installed
-        } else if ours_elsewhere > 0 {
-            Integration::StalePort
-        } else {
-            Integration::NotInstalled
-        };
-        (state, conflicts)
+        let doc = read_settings(&settings_path(&ctx.home));
+        json_hooks_integration(
+            doc.as_ref(),
+            ctx.port,
+            &is_our_shape,
+            managed_events(),
+            ConflictPolicy::ForeignHttpWithUrl,
+        )
     }
 
-    fn command_wrap(&self) -> super::hook_cli::CommandWrap {
-        super::hook_cli::CommandWrap::WindowsPowerShellEncoded
+    fn command_wrap(&self) -> CommandWrap {
+        CommandWrap::WindowsPowerShellEncoded
     }
 
-    fn history_roots(&self, home: &std::path::Path) -> Vec<super::history::HistoryRoot> {
-        vec![super::history::HistoryRoot {
+    fn history_roots(&self, home: &std::path::Path) -> Vec<HistoryRoot> {
+        vec![HistoryRoot {
             path: home.join(".claude/projects"),
             max_depth: 1,
         }]
     }
 
-    fn inspect_history_row(&self, row: &Value, meta: &mut super::history::RowMeta) {
-        use super::history::{model_name, text};
+    fn inspect_history_row(&self, row: &Value, meta: &mut RowMeta) {
+        use history::{model_name, text};
         meta.id = meta
             .id
             .take()
@@ -289,9 +225,9 @@ impl AgentAdapter for ClaudeCode {
             meta.title = text(row, "customTitle").or(meta.title.take());
         }
         meta.model = model_name(&row["message"]).or(meta.model.take());
-     }
+    }
 
-    fn finalize_history_entry(&self, path: &std::path::Path, meta: &mut super::history::RowMeta) {
+    fn finalize_history_entry(&self, path: &std::path::Path, meta: &mut RowMeta) {
         if meta.id.is_none() {
             meta.id = Some(
                 path.file_stem()
@@ -302,11 +238,11 @@ impl AgentAdapter for ClaudeCode {
         }
     }
 
-    fn resume_spec(&self) -> Option<super::history::ResumeSpec> {
-        Some(super::history::ResumeSpec {
+    fn resume_spec(&self) -> Option<ResumeSpec> {
+        Some(ResumeSpec {
             cli: "claude",
             flag: "--resume",
-            target: super::history::ResumeTarget::SessionId,
+            target: ResumeTarget::SessionId,
         })
     }
 }
@@ -337,22 +273,13 @@ fn str_field(body: &Value, key: &str) -> Option<String> {
 fn is_our_shape(hook: &Value) -> bool {
     let url = match hook.get("type").and_then(Value::as_str) {
         Some("http") => hook.get("url").and_then(Value::as_str).map(str::to_string),
-        Some("command") => hook.get("command").and_then(Value::as_str)
-            .and_then(super::edit::url_in_command),
+        Some("command") => hook
+            .get("command")
+            .and_then(Value::as_str)
+            .and_then(crate::agent::edit::url_in_command),
         _ => None,
     };
     url.is_some_and(|u| u.starts_with("http://127.0.0.1:") && u.contains("/hook/claude-code/"))
-}
-
-fn hooks_of<'a>(doc: &'a Value, event: &str) -> impl Iterator<Item = &'a Value> {
-    doc.get("hooks")
-        .and_then(|h| h.get(event))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|g| g.get("hooks"))
-        .filter_map(Value::as_array)
-        .flatten()
 }
 
 /// 配置里有没有「不是我们写的」内容。只有我方 hook 的文件证明不了 Claude Code 存在。

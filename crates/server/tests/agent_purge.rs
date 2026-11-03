@@ -45,7 +45,7 @@ impl Env {
     }
     fn purge(&self, id: &str) {
         let a = find(id).unwrap();
-        apply(&plan_purge(a.as_ref(), &self.ctx(0)).unwrap(), &self.opts()).unwrap();
+        apply(&plan_purge(a, &self.ctx(0)).unwrap(), &self.opts()).unwrap();
     }
     fn integration(&self, id: &str, port: u16) -> Integration {
         scan(&self.detect_env(), port).into_iter().find(|a| a.id == id).unwrap().integration
@@ -103,7 +103,7 @@ fn codex_purge_keeps_foreign_permission_hooks_and_reports_no_change_when_repeate
     }));
     e.install("codex", 7683);
     let adapter = find("codex").unwrap();
-    let plan = plan_purge(adapter.as_ref(), &e.ctx(7683)).unwrap();
+    let plan = plan_purge(adapter, &e.ctx(7683)).unwrap();
     assert!(apply(&plan, &e.opts()).unwrap().iter().any(|o| o.changed));
     let after = e.read(&e.codex_hooks());
     assert_eq!(after["hooks"]["PermissionRequest"][0]["hooks"], json!([foreign]));

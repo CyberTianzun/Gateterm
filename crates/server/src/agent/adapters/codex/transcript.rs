@@ -14,7 +14,7 @@
 
 use serde_json::Value;
 
-use super::transcript::{clamp_text, flatten_tool_input, offset_id, Block, Message, Role};
+use crate::agent::transcript::{clamp_text, flatten_tool_input, offset_id, Block, Message, Role};
 
 pub fn parse(text: &str, base: u64) -> Vec<Message> {
     let mut at = base;

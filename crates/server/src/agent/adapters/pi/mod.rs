@@ -3,7 +3,7 @@
 //! 与另外两家的根本差异:**pi 没有 hook 配置**。它的扩展点是「往
 //! `~/.pi/agent/extensions/` 里放一个 TS 文件」,由 pi 启动时用 jiti 直接加载。所以这里
 //! 装的不是 JSON 里的一条条 hook,而是**整个文件**([`EditOp::WriteOwnedFile`]),
-//! 所有权靠文件第一行的标记认。文件内容见 `pi_extension.ts`。
+//! 所有权靠文件第一行的标记认。文件内容见 `extension.ts`。
 //!
 //! 由此带来的取舍:
 //!
@@ -14,19 +14,23 @@
 //!    (`session-start` / `pre-tool-use` / `transcript_path` …),服务端只多认一个 agent id。
 //! 3. **装完要重新加载**。扩展在 pi 启动时加载,已经在跑的 pi 要 `/reload` 或重启。
 
+pub mod transcript;
+
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-use super::detect::{self, DetectEnv};
-use super::edit::{is_owned_file, ConfigEdit, EditOp, InstallCtx};
-use super::store::{Decision, Update};
-use super::{AgentAdapter, Confidence, Detected, Integration};
+use crate::agent::detect::DetectEnv;
+use crate::agent::edit::{is_owned_file, ConfigEdit, EditOp, InstallCtx};
+use crate::agent::history::{self, HistoryRoot, ResumeSpec, ResumeTarget, RowMeta};
+use crate::agent::kit::{detect_by_spec, str_field, DetectSpec};
+use crate::agent::store::{Decision, Update};
+use crate::agent::{AgentAdapter, Detected, Integration};
 use gateterm_protocol::AgentState;
 
 pub struct Pi;
 
-const TEMPLATE: &str = include_str!("pi_extension.ts");
+const TEMPLATE: &str = include_str!("extension.ts");
 const BASE_PLACEHOLDER: &str = "__GATETERM_HOOK_BASE__";
 const HOOK_PREFIX: &str = "http://127.0.0.1:";
 
@@ -62,10 +66,6 @@ fn state_of(event: &str) -> Option<AgentState> {
     })
 }
 
-fn str_field(body: &Value, key: &str) -> Option<String> {
-    body.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
-}
-
 impl AgentAdapter for Pi {
     fn id(&self) -> &'static str {
         "pi"
@@ -77,33 +77,18 @@ impl AgentAdapter for Pi {
 
     fn detect(&self, env: &DetectEnv) -> Detected {
         let dir = agent_dir(&env.home);
-        let config_path = Some(extension_path(&env.home));
-        if let Some(exe) = detect::on_path(env, "pi") {
-            return Detected {
-                installed: true,
-                confidence: Confidence::High,
-                reason: "cli-path",
-                detail: format!("PATH 上找到 {}", exe.display()),
-                config_path,
-            };
-        }
         // `extensions/` 可能是我们自己建的,不算证据;sessions / settings / auth 是 pi 自己留的
-        if dir.is_dir() && detect::dir_has_entries_besides(&dir, &["extensions"]) {
-            return Detected {
-                installed: true,
-                confidence: Confidence::Medium,
-                reason: "parent-dir",
-                detail: format!("{} 下有使用痕迹", dir.display()),
-                config_path,
-            };
-        }
-        Detected {
-            installed: false,
-            confidence: Confidence::Low,
-            reason: "not-found",
-            detail: "没有找到 pi 的安装痕迹".into(),
-            config_path: None,
-        }
+        detect_by_spec(
+            env,
+            &DetectSpec {
+                agent_name: self.name(),
+                config_path: extension_path(&env.home),
+                evidence: None,
+                cli: "pi",
+                dir: &dir,
+                ignore_in_dir: &["extensions"],
+            },
+        )
     }
 
     fn plan_install(&self, ctx: &InstallCtx) -> Result<Vec<ConfigEdit>> {
@@ -164,11 +149,11 @@ impl AgentAdapter for Pi {
     }
 
     fn locate_transcript(&self, home: &Path, agent_session_id: &str) -> Option<PathBuf> {
-        super::pi_transcript::locate(&agent_dir(home).join("sessions"), agent_session_id)
+        transcript::locate(&agent_dir(home).join("sessions"), agent_session_id)
     }
 
-    fn parse_transcript(&self, text: &str, base_offset: u64) -> Vec<super::transcript::Message> {
-        super::pi_transcript::parse(text, base_offset)
+    fn parse_transcript(&self, text: &str, base_offset: u64) -> Vec<crate::agent::transcript::Message> {
+        transcript::parse(text, base_offset)
     }
 
     fn is_blocking(&self, _event: &str) -> bool {
@@ -180,15 +165,15 @@ impl AgentAdapter for Pi {
         json!({})
     }
 
-    fn history_roots(&self, home: &Path) -> Vec<super::history::HistoryRoot> {
-        vec![super::history::HistoryRoot {
+    fn history_roots(&self, home: &Path) -> Vec<HistoryRoot> {
+        vec![HistoryRoot {
             path: home.join(".pi/agent/sessions"),
             max_depth: 1,
         }]
     }
 
-    fn inspect_history_row(&self, row: &Value, meta: &mut super::history::RowMeta) {
-        use super::history::{model_name, text};
+    fn inspect_history_row(&self, row: &Value, meta: &mut RowMeta) {
+        use history::{model_name, text};
         match row.get("type").and_then(Value::as_str) {
             Some("session") => meta.id = text(row, "id").or(meta.id.take()),
             Some("session_info") => meta.title = text(row, "name").or(meta.title.take()),
@@ -198,11 +183,11 @@ impl AgentAdapter for Pi {
         }
     }
 
-    fn resume_spec(&self) -> Option<super::history::ResumeSpec> {
-        Some(super::history::ResumeSpec {
+    fn resume_spec(&self) -> Option<ResumeSpec> {
+        Some(ResumeSpec {
             cli: "pi",
             flag: "--session",
-            target: super::history::ResumeTarget::TranscriptPath,
+            target: ResumeTarget::TranscriptPath,
         })
     }
 }

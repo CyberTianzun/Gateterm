@@ -4,7 +4,7 @@
 //!
 //! 1. **Codex 不支持 `type: "http"`**。它的 `HookHandlerConfig` 只有
 //!    command / prompt / agent 三个变体(从 codex 二进制的类型名读出来)。所以这里的
-//!    hook 指向 gateterm 自己的二进制(`hook <url>` 子命令,见 [`super::hook_cli`]),
+//!    hook 指向 gateterm 自己的二进制(`hook <url>` 子命令,见 [`crate::agent::hook_cli`]),
 //!    由它转发到本地 server。
 //! 2. **配置在 `~/.codex/hooks.json`**,不在 config.toml 里,而且 group **不带
 //!    `matcher`**(本机上被 Codex 接受并信任过的那份就是这个形状)。
@@ -24,14 +24,24 @@
 //!    `NeedsActivation`。重装、换端口、换二进制位置都会改 hook 内容,让之前的审核失效。
 //!    怎么判断见 [`Codex::activated`]。
 
+pub mod transcript;
+pub mod trust;
+
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-use super::detect::{self, DetectEnv};
-use super::edit::{is_ours, slug_of_event, ConfigEdit, EditOp, InstallCtx};
-use super::store::{Decision, Update};
-use super::{AgentAdapter, Confidence, Detected, Integration};
+use crate::agent::detect::{self, DetectEnv};
+use crate::agent::edit::{is_ours, slug_of_event, ConfigEdit, EditOp, InstallCtx};
+use crate::agent::history::{self, HistoryRoot, ResumeSpec, ResumeTarget, RowMeta};
+use crate::agent::hook_cli::{self, CommandWrap};
+use crate::agent::kit::{
+    detect_by_spec, json_hooks_integration, render_permission_decision, ConfigEvidence,
+    ConflictPolicy, DetectSpec,
+};
+use crate::agent::process::ProcessWatchSpec;
+use crate::agent::store::{Decision, Update};
+use crate::agent::{AgentAdapter, Detected, Integration};
 use gateterm_protocol::AgentState;
 
 pub struct Codex;
@@ -39,7 +49,13 @@ pub struct Codex;
 /// Interrupt 只结束当前回合;SessionEnd 才结束会话。漏装前者会在 Ctrl+C 后卡在
 /// working,漏装后者会在退出后继续显示聊天入口。
 const TELEMETRY: &[&str] = &[
-    "SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "Interrupt",
+    "SessionStart",
+    "SessionEnd",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "Stop",
+    "Interrupt",
 ];
 const BLOCKING: &[&str] = &["PermissionRequest"];
 
@@ -63,7 +79,7 @@ fn hook_spec(port: u16, event: &str, blocking: bool) -> Value {
     };
     json!({
         "type": "command",
-        "command": super::hook_cli::command_for("codex", port, event),
+        "command": hook_cli::command_for("codex", port, event),
         "timeout": timeout,
     })
 }
@@ -105,40 +121,17 @@ impl AgentAdapter for Codex {
         let config = dir.join("config.toml");
         // `~/.codex/config.toml` 是 Codex 自己写的,我们从不碰它 —— 它存在就是硬证据。
         // (对比 Claude Code:那边 `~/.claude/` 是我们也会写的,所以不能这么判。)
-        if config.is_file() {
-            return Detected {
-                installed: true,
-                confidence: Confidence::High,
-                reason: "config-file",
-                detail: format!("{} 存在", config.display()),
-                config_path: Some(hooks_path(&env.home)),
-            };
-        }
-        if let Some(exe) = detect::on_path(env, "codex") {
-            return Detected {
-                installed: true,
-                confidence: Confidence::High,
-                reason: "cli-path",
-                detail: format!("PATH 上找到 {}", exe.display()),
-                config_path: Some(hooks_path(&env.home)),
-            };
-        }
-        if dir.is_dir() && detect::dir_has_entries_besides(&dir, &["hooks.json"]) {
-            return Detected {
-                installed: true,
-                confidence: Confidence::Medium,
-                reason: "parent-dir",
-                detail: format!("{} 下有使用痕迹", dir.display()),
-                config_path: Some(hooks_path(&env.home)),
-            };
-        }
-        Detected {
-            installed: false,
-            confidence: Confidence::Low,
-            reason: "not-found",
-            detail: "没有找到 Codex 的安装痕迹".into(),
-            config_path: None,
-        }
+        detect_by_spec(
+            env,
+            &DetectSpec {
+                agent_name: self.name(),
+                config_path: hooks_path(&env.home),
+                evidence: Some(ConfigEvidence::FileExists(&config)),
+                cli: "codex",
+                dir: &dir,
+                ignore_in_dir: &["hooks.json"],
+            },
+        )
     }
 
     fn plan_install(&self, ctx: &InstallCtx) -> Result<Vec<ConfigEdit>> {
@@ -169,8 +162,8 @@ impl AgentAdapter for Codex {
         true
     }
 
-    fn parse_transcript(&self, text: &str, base_offset: u64) -> Vec<super::transcript::Message> {
-        super::codex_transcript::parse(text, base_offset)
+    fn parse_transcript(&self, text: &str, base_offset: u64) -> Vec<crate::agent::transcript::Message> {
+        transcript::parse(text, base_offset)
     }
 
     fn locate_transcript(
@@ -178,7 +171,7 @@ impl AgentAdapter for Codex {
         home: &std::path::Path,
         agent_session_id: &str,
     ) -> Option<std::path::PathBuf> {
-        super::codex_transcript::locate(home, agent_session_id)
+        transcript::locate(home, agent_session_id)
     }
 
     fn activation(&self) -> Option<&'static str> {
@@ -189,13 +182,12 @@ impl AgentAdapter for Codex {
         Some("在 gateterm 里启动 codex,执行 /hooks 逐条审核通过,再重启 codex")
     }
 
-    /// 先问 Codex 自己(`hooks/list`,见 [`super::codex_trust`]),那是权威答案。
+    /// 先问 Codex 自己(`hooks/list`,见 [`trust`]),那是权威答案。
     /// 问不了(没在 PATH 上、超时、协议变了)才回落到读 config.toml 的粗判断。
     fn activated(&self, env: &DetectEnv, ctx: &InstallCtx) -> bool {
         let hooks = hooks_path(&ctx.home);
         if let (Some(exe), Some(path)) = (detect::on_path(env, "codex"), env.path.as_deref())
-            && let Some(ok) =
-                super::codex_trust::query(&exe, path, &home_dir(&ctx.home), &hooks, ctx.port)
+            && let Some(ok) = trust::query(&exe, path, &home_dir(&ctx.home), &hooks, ctx.port)
         {
             return ok;
         }
@@ -228,84 +220,46 @@ impl AgentAdapter for Codex {
     /// 与 Claude Code 同一个信封 —— 参考实现对这两家用的就是同一个 sanitizer,
     /// 而 `decision` 是**对象**这一点在 Claude Code 上已实测确认。
     fn render(&self, decision: &Decision) -> Value {
-        let d = match decision {
-            Decision::NoDecision => return json!({}),
-            Decision::Allow { message, updated_input } => {
-                let mut o = json!({ "behavior": "allow" });
-                if let Some(m) = message {
-                    o["message"] = json!(m);
-                }
-                // 选择题的答案就藏在这里:放行的同时把改写后的入参交回去
-                if let Some(u) = updated_input {
-                    o["updatedInput"] = u.clone();
-                }
-                o
-            }
-            Decision::Deny { message } => {
-                let mut o = json!({ "behavior": "deny" });
-                if let Some(m) = message {
-                    o["message"] = json!(m);
-                }
-                o
-            }
-        };
-        json!({ "hookSpecificOutput": { "hookEventName": "PermissionRequest", "decision": d } })
+        render_permission_decision(decision)
     }
 
     fn integration(&self, ctx: &InstallCtx) -> (Integration, Vec<String>) {
-        let Some(doc) = read_hooks(&hooks_path(&ctx.home)) else {
-            return (Integration::NotInstalled, Vec::new());
-        };
-        let mut here = 0usize;
-        let mut elsewhere = 0usize;
-        let mut conflicts = Vec::new();
-        for (event, blocking) in managed_events() {
-            for hook in hooks_of(&doc, event) {
-                if is_ours(hook, ctx.port) {
-                    here += 1;
-                } else if is_our_shape(hook) {
-                    elsewhere += 1;
-                } else if blocking {
-                    conflicts.push(format!("{event} 上已有别的程序的 hook"));
-                }
-            }
-        }
-        let state = if here > 0 {
-            Integration::Installed
-        } else if elsewhere > 0 {
-            Integration::StalePort
-        } else {
-            Integration::NotInstalled
-        };
-        (state, conflicts)
+        let doc = read_hooks(&hooks_path(&ctx.home));
+        json_hooks_integration(
+            doc.as_ref(),
+            ctx.port,
+            &is_our_shape,
+            managed_events(),
+            ConflictPolicy::AnyForeign,
+        )
     }
 
-    fn command_wrap(&self) -> super::hook_cli::CommandWrap {
-        super::hook_cli::CommandWrap::WindowsPowerShellCall
+    fn command_wrap(&self) -> CommandWrap {
+        CommandWrap::WindowsPowerShellCall
     }
 
-    fn process_watch(&self) -> Option<super::process::ProcessWatchSpec> {
-        Some(super::process::ProcessWatchSpec {
+    fn process_watch(&self) -> Option<ProcessWatchSpec> {
+        Some(ProcessWatchSpec {
             exe_names: &["codex", "codex.exe"],
             exclude_subcommands: &["app-server", "exec-server", "mcp-server"],
         })
     }
 
-    fn history_roots(&self, home: &Path) -> Vec<super::history::HistoryRoot> {
+    fn history_roots(&self, home: &Path) -> Vec<HistoryRoot> {
         vec![
-            super::history::HistoryRoot {
+            HistoryRoot {
                 path: home.join(".codex/sessions"),
                 max_depth: 3,
             },
-            super::history::HistoryRoot {
+            HistoryRoot {
                 path: home.join(".codex/archived_sessions"),
                 max_depth: 0,
             },
         ]
     }
 
-    fn inspect_history_row(&self, row: &Value, meta: &mut super::history::RowMeta) {
-        use super::history::{model_name, prompt, text};
+    fn inspect_history_row(&self, row: &Value, meta: &mut RowMeta) {
+        use history::{model_name, prompt, text};
         if meta.id.is_none() && row.get("type").and_then(Value::as_str) == Some("session_meta") {
             let payload = &row["payload"];
             meta.id = text(payload, "id")
@@ -335,8 +289,8 @@ impl AgentAdapter for Codex {
         }
     }
 
-    fn enrich_history_catalog(&self, home: &Path, entries: &mut [super::history::Entry]) {
-        use super::history::{prompt, sample_with_limits, short, text};
+    fn enrich_history_catalog(&self, home: &Path, entries: &mut [history::Entry]) {
+        use history::{prompt, sample_with_limits, short, text};
         use std::collections::HashMap;
         // Codex /rename is persisted in its index, independently of the rollout transcript.
         if let Ok(index) = sample_with_limits(
@@ -386,11 +340,11 @@ impl AgentAdapter for Codex {
         }
     }
 
-    fn resume_spec(&self) -> Option<super::history::ResumeSpec> {
-        Some(super::history::ResumeSpec {
+    fn resume_spec(&self) -> Option<ResumeSpec> {
+        Some(ResumeSpec {
             cli: "codex",
             flag: "resume",
-            target: super::history::ResumeTarget::SessionId,
+            target: ResumeTarget::SessionId,
         })
     }
 }
@@ -425,10 +379,6 @@ fn is_our_shape(hook: &Value) -> bool {
     hook.get("command")
         .and_then(Value::as_str)
         .is_some_and(|c| c.contains("http://127.0.0.1:") && c.contains("/hook/codex/"))
-}
-
-fn hooks_of<'a>(doc: &'a Value, event: &str) -> impl Iterator<Item = &'a Value> {
-    groups_of(doc, event).flatten()
 }
 
 /// 每个 group 的 hook 列表,**保留 group 下标** —— Codex 的信任键就是按

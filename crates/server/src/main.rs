@@ -140,8 +140,8 @@ fn purge_hooks() -> i32 {
     // 端口只影响新写入的 URL,清空不看它,随便给一个
     let ctx = InstallCtx { home: DetectEnv::current().home, port: 0, include_blocking: true };
     let mut failed = false;
-    for a in agent::registry() {
-        let result = agent::plan_purge(a.as_ref(), &ctx)
+    for &a in agent::registry() {
+        let result = agent::plan_purge(a, &ctx)
             .map_err(|e| e.to_string())
             .and_then(|plan| apply::apply(&plan, &opts).map_err(|e| e.to_string()));
         match result {

@@ -38,7 +38,7 @@ impl Env {
     }
     fn purge(&self) {
         let a = find("pi").unwrap();
-        apply(&plan_purge(a.as_ref(), &self.ctx(0)).unwrap(), &self.opts()).unwrap();
+        apply(&plan_purge(a, &self.ctx(0)).unwrap(), &self.opts()).unwrap();
     }
     fn integration(&self, port: u16) -> Integration {
         let e = DetectEnv { home: self.home.path().to_path_buf(), path: None };

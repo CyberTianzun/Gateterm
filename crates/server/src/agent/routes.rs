@@ -142,7 +142,7 @@ pub async fn purge(
     let Some((adapter, ctx)) = ctx_for(&state, &id, true) else {
         return (StatusCode::NOT_FOUND, "no such agent").into_response();
     };
-    let Ok(plan) = crate::agent::plan_purge(adapter.as_ref(), &ctx) else {
+    let Ok(plan) = crate::agent::plan_purge(adapter, &ctx) else {
         return (StatusCode::INTERNAL_SERVER_ERROR, "plan failed").into_response();
     };
     run_plan(plan, true, true).await
@@ -304,7 +304,7 @@ pub async fn hook(
     let agent_session_id = adapter.agent_session_id(&payload).unwrap_or_else(|| "default".to_string());
 
     if adapter.is_blocking(&event) {
-        return blocking_hook(&state, adapter.as_ref(), &agent_session_id, session, &payload).await;
+        return blocking_hook(&state, adapter, &agent_session_id, session, &payload).await;
     }
 
     let Some(update) = adapter.parse(&event, &payload) else {

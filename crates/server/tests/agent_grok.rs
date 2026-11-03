@@ -79,7 +79,7 @@ fn purge_leaves_none_of_ours() {
     let e = env();
     e.install(7683);
     let a = find("grok").unwrap();
-    apply(&plan_purge(a.as_ref(), &e.ctx(0)).unwrap(), &e.opts()).unwrap();
+    apply(&plan_purge(a, &e.ctx(0)).unwrap(), &e.opts()).unwrap();
     assert_eq!(e.integration(7683), Integration::NotInstalled);
 }
 

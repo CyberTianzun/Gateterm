@@ -8,12 +8,12 @@
 //! 2. **只能用 command 类 hook**。它也支持 `type: "http"`,但 handler 只认 `type` /
 //!    `command` / `url` / `timeout` / `env`,`headers` 会被丢掉,带不上密钥和会话号;
 //!    URL 里的 `$VAR` 倒是会展开,可变量为空时它会报 hook 错误 —— 于是在 gateterm 之外
-//!    开的每个 grok 会话都会满屏报错。command 走 [`super::hook_cli`]:环境里没有我们的
+//!    开的每个 grok 会话都会满屏报错。command 走 [`crate::agent::hook_cli`]:环境里没有我们的
 //!    变量就静默退出,什么都不发。
 //! 3. **payload 是驼峰的**:`sessionId`、`toolName`、`notificationType`。另外也带着
 //!    Claude 兼容的 `session_id` 和 `transcript_path`(实测),记录路径直接从这里拿。
 //! 4. **没有授权审批事件**。`PreToolUse` 回 allow 只表示「不拦」,不会替用户批准,
-//!    所以只上报状态和聊天记录(见 [`super::grok_transcript`]),不做阻塞式事件。
+//!    所以只上报状态和聊天记录(见 [`transcript`]),不做阻塞式事件。
 //! 5. **子代理有自己的会话**,事件带 `subagentType`。这些事件不上报:它们不是终端前的
 //!    那个会话,混进来会在列表上多出一条、聊天视图也会看错对象。
 //! 6. **会话结束时还会再来一个 `Stop`**,`reason` 是 `shutdown` / `channel_closed`(正常
@@ -24,14 +24,21 @@
 //! Claude Code 集成,grok 会以 Claude 的身份打过来,但它丢掉了 `headers`,请求不带
 //! 密钥 —— 服务端照规矩安静收下、什么都不做,不会误报成 Claude 会话。
 
+pub mod transcript;
+
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-use super::detect::{self, DetectEnv};
-use super::edit::{is_ours, ConfigEdit, EditOp, InstallCtx};
-use super::store::{Decision, Update};
-use super::{AgentAdapter, Confidence, Detected, Integration};
+use crate::agent::detect::DetectEnv;
+use crate::agent::edit::{ConfigEdit, EditOp, InstallCtx};
+use crate::agent::history::{self, HistoryRoot, ResumeSpec, ResumeTarget, RowMeta};
+use crate::agent::hook_cli;
+use crate::agent::kit::{
+    detect_by_spec, json_hooks_integration, str_field, ConfigEvidence, ConflictPolicy, DetectSpec,
+};
+use crate::agent::store::{Decision, Update};
+use crate::agent::{AgentAdapter, Detected, Integration};
 use gateterm_protocol::AgentState;
 
 pub struct Grok;
@@ -64,17 +71,13 @@ fn hooks_path(home: &Path) -> PathBuf {
 fn hook_spec(port: u16, event: &str) -> Value {
     json!({
         "type": "command",
-        "command": super::hook_cli::command_for("grok", port, event),
+        "command": hook_cli::command_for("grok", port, event),
         "timeout": TIMEOUT_SECS,
     })
 }
 
 fn read_hooks(path: &Path) -> Option<Value> {
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
-}
-
-fn str_field(body: &Value, key: &str) -> Option<String> {
-    body.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
 }
 
 impl AgentAdapter for Grok {
@@ -90,40 +93,17 @@ impl AgentAdapter for Grok {
         let dir = home_dir(&env.home);
         let config = dir.join("config.toml");
         // config.toml 是 grok 自己写的,我们从不碰它;hooks/ 可能是我们建的,不算证据
-        if config.is_file() {
-            return Detected {
-                installed: true,
-                confidence: Confidence::High,
-                reason: "config-file",
-                detail: format!("{} 存在", config.display()),
-                config_path: Some(hooks_path(&env.home)),
-            };
-        }
-        if let Some(exe) = detect::on_path(env, "grok") {
-            return Detected {
-                installed: true,
-                confidence: Confidence::High,
-                reason: "cli-path",
-                detail: format!("PATH 上找到 {}", exe.display()),
-                config_path: Some(hooks_path(&env.home)),
-            };
-        }
-        if dir.is_dir() && detect::dir_has_entries_besides(&dir, &["hooks"]) {
-            return Detected {
-                installed: true,
-                confidence: Confidence::Medium,
-                reason: "parent-dir",
-                detail: format!("{} 下有使用痕迹", dir.display()),
-                config_path: Some(hooks_path(&env.home)),
-            };
-        }
-        Detected {
-            installed: false,
-            confidence: Confidence::Low,
-            reason: "not-found",
-            detail: "没有找到 Grok 的安装痕迹".into(),
-            config_path: None,
-        }
+        detect_by_spec(
+            env,
+            &DetectSpec {
+                agent_name: self.name(),
+                config_path: hooks_path(&env.home),
+                evidence: Some(ConfigEvidence::FileExists(&config)),
+                cli: "grok",
+                dir: &dir,
+                ignore_in_dir: &["hooks"],
+            },
+        )
     }
 
     fn plan_install(&self, ctx: &InstallCtx) -> Result<Vec<ConfigEdit>> {
@@ -200,12 +180,12 @@ impl AgentAdapter for Grok {
         true
     }
 
-    fn parse_transcript(&self, text: &str, base_offset: u64) -> Vec<super::transcript::Message> {
-        super::grok_transcript::parse(text, base_offset)
+    fn parse_transcript(&self, text: &str, base_offset: u64) -> Vec<crate::agent::transcript::Message> {
+        transcript::parse(text, base_offset)
     }
 
     fn locate_transcript(&self, home: &Path, agent_session_id: &str) -> Option<PathBuf> {
-        super::grok_transcript::locate(home, agent_session_id)
+        transcript::locate(home, agent_session_id)
     }
 
     fn is_blocking(&self, _event: &str) -> bool {
@@ -218,32 +198,18 @@ impl AgentAdapter for Grok {
     }
 
     fn integration(&self, ctx: &InstallCtx) -> (Integration, Vec<String>) {
-        let Some(doc) = read_hooks(&hooks_path(&ctx.home)) else {
-            return (Integration::NotInstalled, Vec::new());
-        };
-        let (mut here, mut elsewhere) = (0usize, 0usize);
-        for event in EVENTS {
-            for hook in hooks_of(&doc, event) {
-                if is_ours(hook, ctx.port) {
-                    here += 1;
-                } else if is_our_shape(hook) {
-                    elsewhere += 1;
-                }
-            }
-        }
-        let state = if here > 0 {
-            Integration::Installed
-        } else if elsewhere > 0 {
-            Integration::StalePort
-        } else {
-            Integration::NotInstalled
-        };
-        // 没有阻塞式事件,谈不上和别人的 hook 抢决定权
-        (state, Vec::new())
+        let doc = read_hooks(&hooks_path(&ctx.home));
+        json_hooks_integration(
+            doc.as_ref(),
+            ctx.port,
+            &is_our_shape,
+            EVENTS.iter().map(|e| (*e, false)),
+            ConflictPolicy::None,
+        )
     }
 
-    fn history_roots(&self, home: &Path) -> Vec<super::history::HistoryRoot> {
-        vec![super::history::HistoryRoot {
+    fn history_roots(&self, home: &Path) -> Vec<HistoryRoot> {
+        vec![HistoryRoot {
             path: home.join(".grok/sessions"),
             max_depth: 2,
         }]
@@ -253,7 +219,7 @@ impl AgentAdapter for Grok {
         file_name == "updates.jsonl"
     }
 
-    fn inspect_history_row(&self, row: &Value, meta: &mut super::history::RowMeta) {
+    fn inspect_history_row(&self, row: &Value, meta: &mut RowMeta) {
         if meta.id.is_none() {
             meta.id = row
                 .pointer("/params/sessionId")
@@ -262,8 +228,8 @@ impl AgentAdapter for Grok {
         }
     }
 
-    fn finalize_history_entry(&self, path: &Path, meta: &mut super::history::RowMeta) {
-        use super::history::{model_name, sample, text};
+    fn finalize_history_entry(&self, path: &Path, meta: &mut RowMeta) {
+        use history::{model_name, sample, text};
         // Grok keeps cwd/title alongside the ACP update log.
         if let Some(dir) = path.parent() {
             for name in ["session.json", "metadata.json", "meta.json"] {
@@ -290,11 +256,11 @@ impl AgentAdapter for Grok {
         }
     }
 
-    fn resume_spec(&self) -> Option<super::history::ResumeSpec> {
-        Some(super::history::ResumeSpec {
+    fn resume_spec(&self) -> Option<ResumeSpec> {
+        Some(ResumeSpec {
             cli: "grok",
             flag: "--resume",
-            target: super::history::ResumeTarget::SessionId,
+            target: ResumeTarget::SessionId,
         })
     }
 }
@@ -320,15 +286,4 @@ fn is_our_shape(hook: &Value) -> bool {
     hook.get("command")
         .and_then(Value::as_str)
         .is_some_and(|c| c.contains("http://127.0.0.1:") && c.contains("/hook/grok/"))
-}
-
-fn hooks_of<'a>(doc: &'a Value, event: &str) -> impl Iterator<Item = &'a Value> {
-    doc.get("hooks")
-        .and_then(|h| h.get(event))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|g| g.get("hooks"))
-        .filter_map(Value::as_array)
-        .flatten()
 }

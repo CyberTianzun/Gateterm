@@ -1,7 +1,7 @@
 //! Claude Code 的 transcript(JSONL)→ 归一化消息。
 //!
 //! 输入是**一整个窗口的文本**,输出是消息。窗口怎么切、游标怎么走,是
-//! [`super::transcript`] 的事 —— 那部分对三家 agent 是同一套,只有「一行是什么意思」
+//! [`crate::agent::transcript`] 的事 —— 那部分对三家 agent 是同一套,只有「一行是什么意思」
 //! 属于这里。
 //!
 //! 两条硬规则:
@@ -14,7 +14,7 @@
 
 use serde_json::Value;
 
-use super::transcript::{clamp_text, flatten_tool_input, Block, Message, Role};
+use crate::agent::transcript::{clamp_text, flatten_tool_input, offset_id, Block, Message, Role};
 
 pub fn parse(text: &str, base: u64) -> Vec<Message> {
     let mut at = base;
@@ -108,7 +108,7 @@ fn message_id(row: &Value, at: u64) -> String {
     if let Some(v) = row.get("message").and_then(|m| m.get("id")).and_then(Value::as_str) {
         return v.to_string();
     }
-    super::transcript::offset_id(at)
+    offset_id(at)
 }
 
 /// ISO 8601 → unix 秒。**不引入日期库**:只认 `YYYY-MM-DDTHH:MM:SS` 这个前缀,

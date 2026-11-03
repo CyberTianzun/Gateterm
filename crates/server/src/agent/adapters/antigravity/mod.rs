@@ -8,7 +8,7 @@
 //!    整块管理顶层的 `gateterm` 键([`EditOp::SetOwnedKey`])。
 //! 2. **事件有两种形状**:`PreToolUse` / `PostToolUse` 要包一层 `{matcher, hooks}`,
 //!    其余事件直接是处理器列表。只支持 command 型,所以和 Codex、Grok 一样经
-//!    [`super::hook_cli`] 转发。
+//!    [`crate::agent::hook_cli`] 转发。
 //! 3. **绝不装 `PreToolUse`**。实测:它的回复里没有 `decision` 时,agy 直接**拒绝**这次
 //!    工具调用;而能填的 decision 里 `allow` 会跳过用户授权,`ask` / `force_ask` 会改掉
 //!    原有的授权流程。「正在跑工具」改由 `PostToolUse` 报。
@@ -20,14 +20,19 @@
 //! 6. 实测 TUI 和非交互模式都是单进程,hook 由 agy 自己执行,环境来自启动它的终端,
 //!    没有 Codex 那种共享守护进程的问题(`agy remote-control` 守护进程默认不开)。
 
+pub mod transcript;
+
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-use super::detect::{self, DetectEnv};
-use super::edit::{collect_hook_handlers, is_ours, ConfigEdit, EditOp, InstallCtx};
-use super::store::{Decision, Update};
-use super::{AgentAdapter, Confidence, Detected, Integration};
+use crate::agent::detect::DetectEnv;
+use crate::agent::edit::{collect_hook_handlers, is_ours, ConfigEdit, EditOp, InstallCtx};
+use crate::agent::history::{HistoryRoot, ResumeSpec, ResumeTarget, RowMeta};
+use crate::agent::hook_cli::{self, CommandWrap};
+use crate::agent::kit::{detect_by_spec, str_field, ConfigEvidence, DetectSpec};
+use crate::agent::store::{Decision, Update};
+use crate::agent::{AgentAdapter, Detected, Integration};
 use gateterm_protocol::AgentState;
 
 pub struct Antigravity;
@@ -53,7 +58,7 @@ fn cli_dir(home: &Path) -> PathBuf {
 fn handler(port: u16, event: &str) -> Value {
     json!({
         "type": "command",
-        "command": super::hook_cli::command_for("antigravity", port, event),
+        "command": hook_cli::command_for("antigravity", port, event),
         "timeout": TIMEOUT_SECS,
     })
 }
@@ -70,10 +75,6 @@ fn our_block(port: u16) -> Value {
     Value::Object(block)
 }
 
-fn str_field(body: &Value, key: &str) -> Option<String> {
-    body.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
-}
-
 impl AgentAdapter for Antigravity {
     fn id(&self) -> &'static str {
         "antigravity"
@@ -85,42 +86,19 @@ impl AgentAdapter for Antigravity {
 
     fn detect(&self, env: &DetectEnv) -> Detected {
         let dir = cli_dir(&env.home);
-        let config_path = Some(hooks_path(&env.home));
+        let install_id = dir.join("installation_id");
         // antigravity-cli/ 整个目录都是 agy 自己写的(我们只碰 config/hooks.json)
-        if dir.join("installation_id").is_file() {
-            return Detected {
-                installed: true,
-                confidence: Confidence::High,
-                reason: "config-file",
-                detail: format!("{} 存在", dir.join("installation_id").display()),
-                config_path,
-            };
-        }
-        if let Some(exe) = detect::on_path(env, "agy") {
-            return Detected {
-                installed: true,
-                confidence: Confidence::High,
-                reason: "cli-path",
-                detail: format!("PATH 上找到 {}", exe.display()),
-                config_path,
-            };
-        }
-        if dir.is_dir() && detect::dir_has_entries_besides(&dir, &[]) {
-            return Detected {
-                installed: true,
-                confidence: Confidence::Medium,
-                reason: "parent-dir",
-                detail: format!("{} 下有使用痕迹", dir.display()),
-                config_path,
-            };
-        }
-        Detected {
-            installed: false,
-            confidence: Confidence::Low,
-            reason: "not-found",
-            detail: "没有找到 Antigravity CLI 的安装痕迹".into(),
-            config_path: None,
-        }
+        detect_by_spec(
+            env,
+            &DetectSpec {
+                agent_name: self.name(),
+                config_path: hooks_path(&env.home),
+                evidence: Some(ConfigEvidence::FileExists(&install_id)),
+                cli: "agy",
+                dir: &dir,
+                ignore_in_dir: &[],
+            },
+        )
     }
 
     fn plan_install(&self, ctx: &InstallCtx) -> Result<Vec<ConfigEdit>> {
@@ -173,12 +151,12 @@ impl AgentAdapter for Antigravity {
         true
     }
 
-    fn parse_transcript(&self, text: &str, base_offset: u64) -> Vec<super::transcript::Message> {
-        super::antigravity_transcript::parse(text, base_offset)
+    fn parse_transcript(&self, text: &str, base_offset: u64) -> Vec<crate::agent::transcript::Message> {
+        transcript::parse(text, base_offset)
     }
 
     fn locate_transcript(&self, home: &Path, agent_session_id: &str) -> Option<PathBuf> {
-        super::antigravity_transcript::locate(home, agent_session_id)
+        transcript::locate(home, agent_session_id)
     }
 
     fn telemetry_reply(&self) -> Option<Value> {
@@ -212,12 +190,12 @@ impl AgentAdapter for Antigravity {
         (state, Vec::new())
     }
 
-    fn command_wrap(&self) -> super::hook_cli::CommandWrap {
-        super::hook_cli::CommandWrap::WindowsPowerShellEncoded
+    fn command_wrap(&self) -> CommandWrap {
+        CommandWrap::WindowsPowerShellEncoded
     }
 
-    fn history_roots(&self, home: &Path) -> Vec<super::history::HistoryRoot> {
-        vec![super::history::HistoryRoot {
+    fn history_roots(&self, home: &Path) -> Vec<HistoryRoot> {
+        vec![HistoryRoot {
             path: home.join(".gemini/antigravity-cli/brain"),
             max_depth: 4,
         }]
@@ -227,7 +205,7 @@ impl AgentAdapter for Antigravity {
         file_name == "transcript_full.jsonl"
     }
 
-    fn finalize_history_entry(&self, path: &Path, meta: &mut super::history::RowMeta) {
+    fn finalize_history_entry(&self, path: &Path, meta: &mut RowMeta) {
         meta.id = path
             .ancestors()
             .nth(3)
@@ -235,12 +213,12 @@ impl AgentAdapter for Antigravity {
             .map(|s| s.to_string_lossy().into_owned());
     }
 
-    fn resume_spec(&self) -> Option<super::history::ResumeSpec> {
+    fn resume_spec(&self) -> Option<ResumeSpec> {
         // The desktop Antigravity vault is not an agy CLI resume store.
-        Some(super::history::ResumeSpec {
+        Some(ResumeSpec {
             cli: "agy",
             flag: "--conversation",
-            target: super::history::ResumeTarget::SessionId,
+            target: ResumeTarget::SessionId,
         })
     }
 }
@@ -248,6 +226,6 @@ impl AgentAdapter for Antigravity {
 fn is_our_shape(hook: &Value) -> bool {
     hook.get("command")
         .and_then(Value::as_str)
-        .and_then(super::edit::url_in_command)
+        .and_then(crate::agent::edit::url_in_command)
         .is_some_and(|url| url.contains("/hook/antigravity/"))
 }
