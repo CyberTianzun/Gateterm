@@ -28,10 +28,18 @@ const MAX_STDIN: usize = 512 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(590);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// 写进 agent 配置里的命令串。Windows Codex 使用 PowerShell,带引号的程序路径
-/// 必须通过 `&` 调用;单引号同时避免路径里的 `$` / 反引号被展开。
-/// Antigravity 和 Claude 使用编码的 PowerShell 包装,兼容各自选择的 shell;
-/// Grok 及其他平台保留原来的 shell 语法。
+/// `type: "command"` 类 hook 在目标平台上的命令包装策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandWrap {
+    /// 直接 `"<exe>" hook <url>`。
+    StandardQuoted,
+    /// Windows 下使用 `powershell.exe -EncodedCommand` Base64 脚本包装(兼容 cmd.exe `/C` 和不同 shell)。
+    WindowsPowerShellEncoded,
+    /// Windows 下使用 `& '<exe>' hook <url>` PowerShell 调用操作符。
+    WindowsPowerShellCall,
+}
+
+/// 写进 agent 配置里的命令串。包装策略由各 [`super::AgentAdapter::command_wrap`] 决定。
 ///
 /// 二进制路径用 `current_exe()`,跟着安装位置走 —— 换了地方放二进制就得重装,
 /// 自检会把它报成 `Outdated`(见 `edit::is_current`)。
@@ -45,12 +53,15 @@ pub fn command_for(agent: &str, port: u16, event: &str) -> String {
 pub fn command_for_executable(agent: &str, port: u16, event: &str, exe: &std::path::Path) -> String {
     let exe = exe.to_string_lossy();
     let url = format!("http://127.0.0.1:{port}/hook/{agent}/{}", super::edit::slug_of_event(event));
-    if cfg!(windows) && matches!(agent, "antigravity" | "claude-code") {
-        windows_encoded_command(&exe, &url)
-    } else if cfg!(windows) && agent == "codex" {
-        format!("& '{}' hook {url}", exe.replace('\'', "''"))
-    } else {
-        format!("\"{exe}\" hook {url}")
+    let wrap = super::find(agent)
+        .map(|a| a.command_wrap())
+        .unwrap_or(CommandWrap::StandardQuoted);
+    match (cfg!(windows), wrap) {
+        (true, CommandWrap::WindowsPowerShellEncoded) => windows_encoded_command(&exe, &url),
+        (true, CommandWrap::WindowsPowerShellCall) => {
+            format!("& '{}' hook {url}", exe.replace('\'', "''"))
+        }
+        (_, CommandWrap::StandardQuoted) | (false, _) => format!("\"{exe}\" hook {url}"),
     }
 }
 
@@ -223,5 +234,16 @@ mod tests {
         ] {
             assert!(split_url(bad).is_none(), "不该接受: {bad}");
         }
+    }
+
+    #[test]
+    fn command_wrap_follows_adapter_strategy_and_defaults_for_unknown_agent() {
+        let exe = std::path::Path::new("/bin/gateterm-server");
+        let unknown = command_for_executable("future-agent", 7683, "Stop", exe);
+        assert_eq!(
+            unknown,
+            "\"/bin/gateterm-server\" hook http://127.0.0.1:7683/hook/future-agent/stop"
+        );
+        assert_eq!(CommandWrap::StandardQuoted, CommandWrap::StandardQuoted);
     }
 }

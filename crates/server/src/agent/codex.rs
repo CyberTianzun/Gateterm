@@ -279,6 +279,17 @@ impl AgentAdapter for Codex {
         };
         (state, conflicts)
     }
+
+    fn command_wrap(&self) -> super::hook_cli::CommandWrap {
+        super::hook_cli::CommandWrap::WindowsPowerShellCall
+    }
+
+    fn process_watch(&self) -> Option<super::process::ProcessWatchSpec> {
+        Some(super::process::ProcessWatchSpec {
+            exe_names: &["codex", "codex.exe"],
+            exclude_subcommands: &["app-server", "exec-server", "mcp-server"],
+        })
+    }
 }
 
 /// 回落用的粗判断:只读 Codex 自己写的 config.toml。

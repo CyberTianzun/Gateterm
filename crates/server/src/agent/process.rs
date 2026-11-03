@@ -16,6 +16,13 @@ pub(crate) struct Identity {
     pub started_at: u64,
 }
 
+/// 需要监视退出的终端 CLI 进程规格(供带共享守护进程的 Agent Adapter 声明)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessWatchSpec {
+    pub exe_names: &'static [&'static str],
+    pub exclude_subcommands: &'static [&'static str],
+}
+
 fn refresh(system: &mut System, processes: ProcessesToUpdate<'_>) {
     system.refresh_processes_specifics(
         processes,
@@ -40,14 +47,12 @@ fn identity(system: &System, pid: Pid) -> Option<Identity> {
     })
 }
 
-fn is_codex_cli(name: &str, args: &[std::ffi::OsString]) -> bool {
-    (name.eq_ignore_ascii_case("codex") || name.eq_ignore_ascii_case("codex.exe"))
+fn matches_cli(spec: &ProcessWatchSpec, name: &str, args: &[std::ffi::OsString]) -> bool {
+    spec.exe_names.iter().any(|n| name.eq_ignore_ascii_case(n))
         && !args.is_empty()
         && !args.iter().skip(1).any(|arg| {
-            matches!(
-                arg.to_str(),
-                Some("app-server" | "exec-server" | "mcp-server")
-            )
+            arg.to_str()
+                .is_some_and(|s| spec.exclude_subcommands.contains(&s))
         })
 }
 
@@ -62,25 +67,32 @@ fn depth(system: &System, mut pid: Pid, root: Pid) -> Option<usize> {
     None
 }
 
-fn find_codex(system: &System, root: u32) -> Option<Identity> {
+fn find_cli(system: &System, root: u32, spec: &ProcessWatchSpec) -> Option<Identity> {
     system
         .processes()
         .iter()
-        .filter(|(_, process)| is_codex_cli(&process.name().to_string_lossy(), process.cmd()))
+        .filter(|(_, process)| matches_cli(spec, &process.name().to_string_lossy(), process.cmd()))
         .filter_map(|(&pid, _)| {
             Some((
                 depth(system, pid, Pid::from_u32(root))?,
                 identity(system, pid)?,
             ))
         })
-        // 优先最外层 CLI,避免把它调用的 codex exec 子进程当作整个会话。
+        // 优先最外层 CLI,避免把它调用的子进程当作整个会话。
         .min_by_key(|(depth, process)| (*depth, process.pid))
         .map(|(_, process)| process)
 }
 
-pub(super) async fn watch_codex(state: &AppState, session: &AgentSession, event: &str) {
-    if session.agent_id != "codex"
-        || session.state == gateterm_protocol::AgentState::Done
+pub(super) async fn watch_agent(
+    state: &AppState,
+    adapter: &dyn super::AgentAdapter,
+    session: &AgentSession,
+    event: &str,
+) {
+    let Some(spec) = adapter.process_watch() else {
+        return;
+    };
+    if session.state == gateterm_protocol::AgentState::Done
         || (session.process.is_some() && event != "SessionStart")
     {
         return;
@@ -95,7 +107,7 @@ pub(super) async fn watch_codex(state: &AppState, session: &AgentSession, event:
     let Ok(Some(process)) = tokio::task::spawn_blocking(move || {
         let mut system = System::new();
         refresh(&mut system, ProcessesToUpdate::All);
-        find_codex(&system, root)
+        find_cli(&system, root, &spec)
     })
     .await
     else {
@@ -158,6 +170,11 @@ mod tests {
     use super::*;
     use gateterm_protocol::{AgentState, ServerMsg};
 
+    const CODEX_SPEC: ProcessWatchSpec = ProcessWatchSpec {
+        exe_names: &["codex", "codex.exe"],
+        exclude_subcommands: &["app-server", "exec-server", "mcp-server"],
+    };
+
     #[test]
     fn shared_daemon_is_not_the_terminal_cli() {
         let args = |args: &[&str]| {
@@ -165,18 +182,20 @@ mod tests {
                 .map(std::ffi::OsString::from)
                 .collect::<Vec<_>>()
         };
-        assert!(is_codex_cli(
+        assert!(matches_cli(
+            &CODEX_SPEC,
             "codex.exe",
             &args(&["codex.exe", "resume", "session-1"])
         ));
-        assert!(is_codex_cli("codex", &args(&["codex", "--no-alt-screen"])));
-        assert!(!is_codex_cli(
+        assert!(matches_cli(&CODEX_SPEC, "codex", &args(&["codex", "--no-alt-screen"])));
+        assert!(!matches_cli(
+            &CODEX_SPEC,
             "codex.exe",
             &args(&["codex.exe", "app-server", "--managed-daemon"])
         ));
-        assert!(!is_codex_cli("node.exe", &args(&["node.exe", "codex.js"])));
+        assert!(!matches_cli(&CODEX_SPEC, "node.exe", &args(&["node.exe", "codex.js"])));
         assert!(
-            !is_codex_cli("codex", &[]),
+            !matches_cli(&CODEX_SPEC, "codex", &[]),
             "缺少命令行时不能把 daemon 猜成 CLI"
         );
     }

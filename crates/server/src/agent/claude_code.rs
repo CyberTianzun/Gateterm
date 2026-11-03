@@ -266,6 +266,10 @@ impl AgentAdapter for ClaudeCode {
         };
         (state, conflicts)
     }
+
+    fn command_wrap(&self) -> super::hook_cli::CommandWrap {
+        super::hook_cli::CommandWrap::WindowsPowerShellEncoded
+    }
 }
 
 /// 事件 → 状态。

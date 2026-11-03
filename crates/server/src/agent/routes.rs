@@ -325,7 +325,7 @@ pub async fn hook(
     if crate::cloud::notifier::is_turn_completed(&event, &payload, snapshot.state) {
         state.manager.turn_completed(session, adapter.id(), &agent_session_id);
     }
-    super::process::watch_codex(&state, &snapshot, &event).await;
+    super::process::watch_agent(&state, adapter, &snapshot, &event).await;
     match adapter.telemetry_reply() {
         Some(body) => (StatusCode::OK, Json(body)).into_response(),
         None => StatusCode::OK.into_response(),
@@ -398,7 +398,7 @@ async fn blocking_hook(
     let guard = PendingGuard { store: state.agent_sessions.clone(), id: id.clone() };
     if let Some(s) = state.agent_sessions.snapshot(adapter.id(), agent_session_id) {
         state.manager.publish(s.to_msg());
-        super::process::watch_codex(state, &s, "PermissionRequest").await;
+        super::process::watch_agent(state, adapter, &s, "PermissionRequest").await;
     }
 
     // 我们的超时必须短于写进 hook 的那个(600 秒):超时由我们主动写「无决定」,

@@ -27,7 +27,7 @@ pub mod antigravity_transcript;
 pub mod hook_cli;
 pub mod history;
 pub mod kit;
-mod process;
+pub mod process;
 pub mod pi;
 pub mod pi_transcript;
 pub mod routes;
@@ -171,6 +171,16 @@ pub trait AgentAdapter: Send + Sync {
 
     /// 把统一决策渲染回 agent 方言的响应体。
     fn render(&self, decision: &store::Decision) -> serde_json::Value;
+
+    /// `type: "command"` 类 hook 在目标平台上的命令包装策略。
+    fn command_wrap(&self) -> hook_cli::CommandWrap {
+        hook_cli::CommandWrap::StandardQuoted
+    }
+
+    /// 退出不一定立刻发 `SessionEnd`(如带共享守护进程的 TUI)时,需监视的终端子进程规格。
+    fn process_watch(&self) -> Option<process::ProcessWatchSpec> {
+        None
+    }
 }
 
 impl<'a> AsRef<dyn AgentAdapter + 'a> for dyn AgentAdapter + 'a {

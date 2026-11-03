@@ -211,6 +211,10 @@ impl AgentAdapter for Antigravity {
         };
         (state, Vec::new())
     }
+
+    fn command_wrap(&self) -> super::hook_cli::CommandWrap {
+        super::hook_cli::CommandWrap::WindowsPowerShellEncoded
+    }
 }
 
 fn is_our_shape(hook: &Value) -> bool {
