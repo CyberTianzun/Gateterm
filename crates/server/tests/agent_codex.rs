@@ -222,3 +222,75 @@ async fn hook_cli_survives_a_dead_host() {
     assert!(out.status.success());
     assert!(out.stdout.is_empty());
 }
+
+/// Codex 的常驻 `app-server --managed-daemon` 会带着首次启动它的旧终端 `GATETERM_SESSION_ID`
+/// 发送后续所有会话的 hook。不得用那个早已失效的会话号覆盖当前存活终端,否则图标和聊天入口会消失。
+#[tokio::test]
+async fn stale_daemon_session_header_does_not_overwrite_live_terminal_session() {
+    use gateterm_server::agent::store::{AgentSessionStore, Update};
+    use gateterm_server::app::{serve, AppState};
+    use gateterm_server::session::manager::SessionManager;
+    use std::sync::Arc;
+
+    let manager = SessionManager::new(1 << 16, Default::default());
+    let terminal = manager.create(None, None, None).unwrap();
+    let store = Arc::new(AgentSessionStore::new());
+    store.apply(
+        "codex",
+        "cx-resumed",
+        Some(terminal.id),
+        Update {
+            cwd: Some("/work/repo".into()),
+            ..Default::default()
+        },
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let state = AppState {
+        manager: manager.clone(),
+        token: "tok".into(),
+        launchers: Arc::new(vec![]),
+        listen_port: addr.port(),
+        agents: Default::default(),
+        agent_sessions: store.clone(),
+        cloud: Default::default(),
+    };
+    let server = tokio::spawn(async move { serve(listener, state).await.unwrap() });
+    let client = reqwest::Client::new();
+
+    for event in ["session-start", "pre-tool-use", "stop"] {
+        let r = client
+            .post(format!("http://{addr}/hook/codex/{event}"))
+            .bearer_auth(hook_token())
+            .header("X-Gateterm-Session", "29")
+            .json(&json!({
+                "session_id": "cx-resumed",
+                "cwd": "/work/repo",
+                "tool_name": "Bash",
+                "transcript_path": "/tmp/rollout-cx-resumed.jsonl"
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 200);
+    }
+
+    let alive = |id: u64| manager.get(id).is_some();
+    assert!(
+        store.sweep(999_999, &alive, 600, 300).is_empty(),
+        "绑定在存活终端上的 Codex 会话不该被清理器当成死会话扫掉"
+    );
+
+    let snap = store.snapshot("codex", "cx-resumed").unwrap();
+    assert_eq!(snap.session, Some(terminal.id));
+    assert_eq!(
+        snap.transcript.as_deref(),
+        Some("/tmp/rollout-cx-resumed.jsonl")
+    );
+    assert!(snap.supports_transcript);
+
+    manager.kill(terminal.id);
+    server.abort();
+}
+

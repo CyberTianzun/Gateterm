@@ -95,7 +95,7 @@ pub fn load_or_create_hook_token(path: &std::path::Path) -> std::io::Result<Stri
     }
 }
 
-fn read_hook_token(path: &std::path::Path) -> std::io::Result<Option<String>> {
+pub(crate) fn read_hook_token(path: &std::path::Path) -> std::io::Result<Option<String>> {
     match std::fs::read_to_string(path) {
         Ok(t) => {
             let t = t.trim();
@@ -376,15 +376,20 @@ impl AgentSessionStore {
             }
         }
         let mut superseded = Vec::new();
-        if supersede
-            && let Some(host) = session
-            && !guard.contains_key(&key)
-        {
-            guard.retain(|_, s| {
-                let replaced = s.agent_id == agent_id && s.session == Some(host) && s.pending.is_none();
+        if supersede && let Some(host) = session {
+            let mut retired = self.retired_processes.lock().unwrap();
+            guard.retain(|k, s| {
+                let replaced = *k != key
+                    && s.agent_id == agent_id
+                    && s.session == Some(host)
+                    && s.pending.is_none();
                 if replaced {
                     let mut gone = s.clone();
                     gone.state = AgentState::Done;
+                    retired.push_back(gone.clone());
+                    while retired.len() > RETIRED_PROCESS_MEMORY {
+                        retired.pop_front();
+                    }
                     superseded.push(gone);
                 }
                 !replaced
@@ -422,11 +427,22 @@ impl AgentSessionStore {
             entry.transcript = up.transcript;
         }
         entry.supports_transcript = supports;
+        if session.is_some() && entry.session != session {
+            entry.process = None;
+        }
         if session.is_some() {
             entry.session = session;
         }
         entry.updated_at = now();
         (entry.clone(), superseded)
+    }
+
+    pub(crate) fn is_retired(&self, agent_id: &str, agent_session_id: &str) -> bool {
+        self.retired_processes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|s| s.agent_id == agent_id && s.agent_session_id == agent_session_id)
     }
 
     /// 记下推导出来的记录路径,免得每次拉消息都重新去文件系统里找一遍。

@@ -36,7 +36,7 @@ use crate::agent::edit::{is_ours, slug_of_event, ConfigEdit, EditOp, InstallCtx}
 use crate::agent::history::{self, HistoryRoot, ResumeSpec, ResumeTarget, RowMeta};
 use crate::agent::hook_cli::{self, CommandWrap};
 use crate::agent::kit::{
-    detect_by_spec, json_hooks_integration, render_permission_decision, ConfigEvidence,
+    detect_by_spec, json_hooks_integration, render_permission_decision, str_field, ConfigEvidence,
     ConflictPolicy, DetectSpec,
 };
 use crate::agent::process::ProcessWatchSpec;
@@ -205,11 +205,11 @@ impl AgentAdapter for Codex {
         Some(Update {
             state: Some(state),
             detail,
-            cwd: body.get("cwd").and_then(Value::as_str).map(str::to_string),
+            cwd: str_field(body, "cwd"),
             title: None,
-            // Codex 的 payload 里没有 transcript 路径(实测:二进制里没有这类字段)。
-            // 它的记录位置要由 session_id 推导 —— 那是 C3 的事。
-            transcript: None,
+            // Codex 0.166+ 的 hook payload 可直接带 transcript_path(可能为 null);
+            // 为 null 或旧版本缺省时再由 session_id 推导(见 C3)。
+            transcript: str_field(body, "transcript_path"),
         })
     }
 

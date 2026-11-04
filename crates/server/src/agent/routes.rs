@@ -277,14 +277,13 @@ pub async fn hook(
     }
     // 关联到哪个托管会话。**不校验会话是否还活着** —— 会话刚没、hook 还在路上是
     // 正常的时序,交给清理去收(见 store::decide),不必在这里制造一个失败。
-    let Some(session) = headers
+    // 对带共享守护进程的 agent(如 app-server),请求头里的会话 id 可能是首次拉起守护进程
+    // 的旧终端,由 `process::resolve_session` 结合当前存活终端修正。
+    let header_session = headers
         .get("X-Gateterm-Session")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok())
-    else {
-        log_ignored("no-session-header");
-        return ignored();
-    };
+        .filter(|&id| id > 0);
 
     let Some(adapter) = crate::agent::find(&agent) else {
         log_ignored("unknown-agent");
@@ -301,17 +300,36 @@ pub async fn hook(
     };
 
     let event = crate::agent::edit::event_of_slug(&event_slug);
+    let is_blocking = adapter.is_blocking(&event);
+    let update = if is_blocking {
+        None
+    } else {
+        let Some(update) = adapter.parse(&event, &payload) else {
+            // 认不出的事件:收下,忽略,回 200。不认识不是错误。
+            tracing::debug!(agent = %agent, event = %event, "忽略未知 hook 事件");
+            return ignored();
+        };
+        Some(update)
+    };
     let agent_session_id = adapter.agent_session_id(&payload).unwrap_or_else(|| "default".to_string());
-
-    if adapter.is_blocking(&event) {
-        return blocking_hook(&state, adapter, &agent_session_id, session, &payload).await;
-    }
-
-    let Some(update) = adapter.parse(&event, &payload) else {
-        // 认不出的事件:收下,忽略,回 200。不认识不是错误。
-        tracing::debug!(agent = %agent, event = %event, "忽略未知 hook 事件");
+    let Some(session) = super::process::resolve_session(
+        &state,
+        adapter,
+        &agent_session_id,
+        &event,
+        &payload,
+        header_session,
+    )
+    .await
+    else {
+        log_ignored("no-session-header");
         return ignored();
     };
+
+    if is_blocking {
+        return blocking_hook(&state, adapter, &agent_session_id, session, &payload).await;
+    }
+    let update = update.expect("checked non-blocking update above");
 
     let (snapshot, superseded) = if supersedes(&event) {
         state.agent_sessions.apply_superseding(adapter.id(), &agent_session_id, Some(session), update)

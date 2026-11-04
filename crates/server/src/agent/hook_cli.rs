@@ -114,22 +114,58 @@ pub(crate) fn decode_windows_command(command: &str) -> Option<String> {
     String::from_utf16(&words).ok()
 }
 
+fn uses_shared_daemon(url: &str) -> bool {
+    let Some((_, path)) = split_url(url) else {
+        return false;
+    };
+    let Some(rest) = path.strip_prefix("/hook/") else {
+        return false;
+    };
+    let Some((agent, _)) = rest.split_once('/') else {
+        return false;
+    };
+    super::find(agent).is_some_and(|a| a.process_watch().is_some())
+}
+
 /// 返回进程退出码。永远是 0 —— 见模块文档第 2 条。
 pub fn run(url: &str) -> i32 {
-    let (Ok(session), Ok(token)) =
-        (std::env::var("GATETERM_SESSION_ID"), std::env::var("GATETERM_HOOK_TOKEN"))
-    else {
-        return 0;
-    };
-    if session.is_empty() || token.is_empty() {
-        return 0;
-    }
+    let env_session = std::env::var("GATETERM_SESSION_ID")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let env_token = std::env::var("GATETERM_HOOK_TOKEN")
+        .ok()
+        .filter(|s| !s.is_empty());
 
-    let mut body = Vec::new();
-    let mut stdin = std::io::stdin().take(MAX_STDIN as u64);
-    if stdin.read_to_end(&mut body).is_err() {
-        return 0;
-    }
+    let (session, token, body) = match (env_session, env_token) {
+        (Some(session), Some(token)) => {
+            let mut body = Vec::new();
+            let mut stdin = std::io::stdin().take(MAX_STDIN as u64);
+            if stdin.read_to_end(&mut body).is_err() {
+                return 0;
+            }
+            (session, token, body)
+        }
+        (env_session, env_token) => {
+            // 共享守护进程可能最先在非 gateterm 终端里被拉起,环境中没有会话 id / 密钥。
+            // 仅对声明了 `process_watch` 的守护进程型 agent,在收到真实 payload 且本机已有
+            // 落盘 hook-token 时转发给服务端,由服务端按存活终端里的 CLI 进程决定归属或忽略。
+            if !uses_shared_daemon(url) {
+                return 0;
+            }
+            let mut body = Vec::new();
+            let mut stdin = std::io::stdin().take(MAX_STDIN as u64);
+            if stdin.read_to_end(&mut body).is_err() || body.is_empty() {
+                return 0;
+            }
+            let Some(token) = env_token.or_else(|| {
+                super::store::default_hook_token_path()
+                    .and_then(|p| super::store::read_hook_token(&p).ok().flatten())
+            }) else {
+                return 0;
+            };
+            (env_session.unwrap_or_else(|| "0".into()), token, body)
+        }
+    };
 
     match post(url, &session, &token, &body) {
         // 原样透传响应体:决策的方言由服务端的 adapter 渲染,这里不解释它

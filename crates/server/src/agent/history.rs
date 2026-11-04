@@ -48,7 +48,7 @@ pub struct Catalog {
     entries: Vec<Entry>,
     truncated: bool,
     skipped: usize,
-    launched: HashMap<(String, String), u64>,
+    pub(super) launched: HashMap<(String, String), u64>,
     agents: Vec<Value>,
 }
 
@@ -671,6 +671,9 @@ async fn open_with_env(state: AppState, headers: HeaderMap, key: Key, env: Detec
                 },
             );
             state.manager.publish(snapshot.to_msg());
+            if let Some(adapter) = super::find(&entry.agent_id) {
+                super::process::watch_agent(&state, adapter, &snapshot, "SessionStart").await;
+            }
             Json(serde_json::json!({ "session": session.info(), "reused": false })).into_response()
         }
         _ => error(StatusCode::INTERNAL_SERVER_ERROR, "spawn-failed"),
