@@ -258,12 +258,55 @@ private fun DrawScope.drawAgentGlyph(kind: AgentKind, color: Color, grokColor: C
                 drawPath(grokPath, color = grokColor)
             }
             AgentKind.Agy -> {
-                val agyBrush = Brush.linearGradient(
-                    colors = listOf(Color(0xFF3186FF), Color(0xFF00B95C), Color(0xFFFBBC04), Color(0xFFFC413D)),
-                    start = Offset(0f, 0f),
-                    end = Offset(24f, 24f),
+                drawPath(agyPath, color = Color(0xFF3186FF))
+                drawPath(
+                    agyPath,
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0xFFFC413D), Color(0x00FC413D)),
+                        center = Offset(20.5f, 3.5f),
+                        radius = 14f,
+                    ),
                 )
-                drawPath(agyPath, brush = agyBrush)
+                drawPath(
+                    agyPath,
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0xFF00B95C), Color(0x0000B95C)),
+                        center = Offset(2.5f, 6.0f),
+                        radius = 14f,
+                    ),
+                )
+                drawPath(
+                    agyPath,
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0xFFFBBC04), Color(0x00FBBC04)),
+                        center = Offset(10.5f, -1.5f),
+                        radius = 11.5f,
+                    ),
+                )
+                drawPath(
+                    agyPath,
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0xFF3186FF), Color(0x003186FF)),
+                        center = Offset(12.0f, 18.0f),
+                        radius = 13.5f,
+                    ),
+                )
+                drawPath(
+                    agyPath,
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0x99749BFF), Color(0x00749BFF)),
+                        center = Offset(21.5f, 13.5f),
+                        radius = 7.5f,
+                    ),
+                )
+                drawPath(
+                    agyPath,
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0xCCFFEE48), Color(0x00FFEE48)),
+                        center = Offset(4.0f, 2.0f),
+                        radius = 7.5f,
+                    ),
+                )
             }
             AgentKind.Generic -> {
                 val stroke = Stroke(width = 2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
