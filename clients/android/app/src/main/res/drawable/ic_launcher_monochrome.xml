@@ -3,17 +3,17 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Android 13+ Monochrome Themed Icon: Clean Golden Gate Bridge Architectural Silhouette -->
-    <!-- Catenary Suspension Cables & Roadway Deck -->
+    <!-- Android 13+ Monochrome Themed Icon: Single-Tower Side-Elevation Low-Poly Golden Gate Bridge -->
+    <!-- Sweeping Left & Right Catenary Suspension Cables & Vertical Suspenders -->
     <path
         android:fillColor="#00000000"
         android:strokeColor="#FF000000"
-        android:strokeWidth="3.2"
+        android:strokeWidth="2.4"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
-        android:pathData="M24,62 Q33,50 40,30 M68,30 Q75,50 84,62 M22,63.5 L86,63.5" />
-    <!-- Golden Gate Art-Deco H-Tower Pillars & 3 Portal Cross-Beams -->
+        android:pathData="M21,64 Q33,49 44,24 M46,24 Q64,53 87,64 M30,52v14 M37,39v27 M54,36v30 M62,46v20 M70,54v12 M78,59v7" />
+    <!-- Stepped Single Golden Gate Tower & Horizontal Bridge Deck -->
     <path
         android:fillColor="#FF000000"
-        android:pathData="M38,27h4.4v45H38z M65.6,27h4.4v45h-4.4z M38,32h32v3.6H38z M38,42.5h32v3.2H38z M38,53h32v3.2H38z" />
+        android:pathData="M43.5,20h3v4h-3z M42.5,24h5v11h-5z M41.5,35h7v13h-7z M40.5,48h9v18h-9z M40.5,69.5h9v17h-9z M22,66h66v3.5H22z" />
 </vector>
