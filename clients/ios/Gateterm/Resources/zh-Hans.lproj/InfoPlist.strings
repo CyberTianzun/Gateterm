@@ -1,0 +1,2 @@
+NSCameraUsageDescription = "扫描 Gateterm Desktop 设置中的连接二维码。";
+NSLocalNetworkUsageDescription = "连接局域网中的 Gateterm 服务器。";

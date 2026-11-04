@@ -1,0 +1,2 @@
+NSCameraUsageDescription = "Scan the connection QR code shown in Gateterm Desktop settings.";
+NSLocalNetworkUsageDescription = "Connect to Gateterm servers on your local network.";
