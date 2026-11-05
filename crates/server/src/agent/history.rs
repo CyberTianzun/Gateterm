@@ -45,7 +45,7 @@ pub struct Catalog {
     refreshed: Option<Instant>,
     indexing: bool,
     failed: bool,
-    entries: Vec<Entry>,
+    pub(crate) entries: Vec<Entry>,
     truncated: bool,
     skipped: usize,
     pub(super) launched: HashMap<(String, String), u64>,
@@ -258,6 +258,9 @@ fn parse(candidate: Candidate, env: &DetectEnv) -> Option<Entry> {
         return None;
     }
     adapter.finalize_history_entry(&candidate.path, &mut meta);
+    if meta.sidechain {
+        return None;
+    }
     let id = meta.id?;
     if !safe_id(&id) {
         return None;
@@ -340,6 +343,10 @@ pub fn scan(env: &DetectEnv) -> Catalog {
     }
     for &adapter in super::registry() {
         adapter.enrich_history_catalog(&env.home, &mut catalog.entries);
+    }
+    for entry in &mut catalog.entries {
+        entry.unavailable_reason = resume_command(entry, env).err().map(str::to_string);
+        entry.can_resume = entry.unavailable_reason.is_none();
     }
     catalog
 }

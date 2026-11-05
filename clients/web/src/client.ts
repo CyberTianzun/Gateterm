@@ -16,15 +16,36 @@ interface AttachState {
   colors: TermColors;
 }
 
+type QueueItem =
+  | {
+      kind: "control";
+      ws: WebSocket;
+      isSocketClosed: () => boolean;
+      channel: number;
+      attachment: AttachState | undefined;
+      msg: any;
+    }
+  | {
+      kind: "data";
+      channel: number;
+      attachment: AttachState | undefined;
+      chunks: Uint8Array[];
+      totalLen: number;
+    };
+
 export class GateClient {
   private ws: WebSocket | null = null;
   private url = "";
   private token = "";
   private backoffMs = 250;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   private attachments = new Map<number, AttachState>();
   // xterm applies writes asynchronously. Keep controls and reconnect anchors behind
-  // the parser callback, including frames received in the same browser turn.
+  // the parser callback, including frames received in the same browser turn, while
+  // coalescing consecutive queued Data frames so background bursts apply in one write.
+  private queue: QueueItem[] = [];
+  private draining = false;
   private receiving: Promise<void> = Promise.resolve();
 
   onControl: (msg: any) => void | Promise<void> = () => {};
@@ -42,7 +63,20 @@ export class GateClient {
 
   close() {
     this.closed = true;
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.ws?.close();
+  }
+
+  /** 页面回到前台或网络恢复时立即重连,不必干等指数退避定时器。 */
+  kick() {
+    if (this.closed || this.reconnectTimer === null) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    this.backoffMs = 250;
+    this.dial();
   }
 
   private dial() {
@@ -70,18 +104,36 @@ export class GateClient {
       const channel = msg?.channel ?? frame.channel;
       const attachment = this.attachments.get(channel);
       if (channel !== CONTROL_CHANNEL && !attachment) return;
-      this.receiving = this.receiving.then(async () => {
-        if (msg?.type === "hello-ok" && socketClosed) return;
-        if ((msg?.type === "hello-ok" || msg?.type === "error") && this.ws !== ws) return;
-        // A switch can dispose the old terminal while its write is pending.
-        if (channel !== CONTROL_CHANNEL && this.attachments.get(channel) !== attachment) return;
-        if (msg !== null) {
-          await this.handleControl(msg);
+      if (msg !== null) {
+        this.queue.push({
+          kind: "control",
+          ws,
+          isSocketClosed: () => socketClosed,
+          channel,
+          attachment,
+          msg,
+        });
+      } else {
+        const last = this.queue.length > 0 ? this.queue[this.queue.length - 1] : null;
+        if (last && last.kind === "data" && last.channel === channel && last.attachment === attachment) {
+          last.chunks.push(frame.payload);
+          last.totalLen += frame.payload.length;
         } else {
-          await this.onChannelData(channel, frame.payload);
-          if (this.attachments.get(channel) === attachment) this.noteData(channel, frame.payload.length);
+          this.queue.push({
+            kind: "data",
+            channel,
+            attachment,
+            chunks: [frame.payload],
+            totalLen: frame.payload.length,
+          });
         }
-      }).catch(err => console.error("gateterm: terminal receive failed", err));
+      }
+      if (!this.draining) {
+        this.draining = true;
+        this.receiving = this.receiving
+          .then(() => this.drainQueue())
+          .catch(err => console.error("gateterm: terminal receive failed", err));
+      }
     };
     ws.onclose = () => {
       socketClosed = true;
@@ -98,8 +150,45 @@ export class GateClient {
       this.onReconnecting();
       const delay = this.backoffMs;
       this.backoffMs = Math.min(this.backoffMs * 2, 10_000);
-      setTimeout(() => this.dial(), delay);
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = null;
+        this.dial();
+      }, delay);
     };
+  }
+
+  private async drainQueue() {
+    try {
+      while (this.queue.length > 0) {
+        const item = this.queue.shift()!;
+        if (item.kind === "control") {
+          const { msg, ws, isSocketClosed, channel, attachment } = item;
+          if (msg.type === "hello-ok" && isSocketClosed()) continue;
+          if ((msg.type === "hello-ok" || msg.type === "error") && this.ws !== ws) continue;
+          // A switch can dispose the old terminal while its write is pending.
+          if (channel !== CONTROL_CHANNEL && this.attachments.get(channel) !== attachment) continue;
+          await this.handleControl(msg);
+        } else {
+          const { channel, attachment, chunks, totalLen } = item;
+          if (this.attachments.get(channel) !== attachment) continue;
+          let payload: Uint8Array;
+          if (chunks.length === 1) {
+            payload = chunks[0];
+          } else {
+            payload = new Uint8Array(totalLen);
+            let offset = 0;
+            for (const chunk of chunks) {
+              payload.set(chunk, offset);
+              offset += chunk.length;
+            }
+          }
+          await this.onChannelData(channel, payload);
+          if (this.attachments.get(channel) === attachment) this.noteData(channel, payload.length);
+        }
+      }
+    } finally {
+      this.draining = false;
+    }
   }
 
   private async handleControl(msg: any) {

@@ -70,7 +70,12 @@ fun TerminalCanvas(
     }
 
     Canvas(
-        modifier.onSizeChanged { viewport = it },
+        modifier.onSizeChanged {
+            viewport = it
+            val cols = (it.width / cellW).toInt()
+            val rows = (it.height / cellH).toInt()
+            if (cols >= 20 && rows >= 5) proposeSize(cols, rows)
+        },
     ) {
         val defaultBg = appearance.background or 0xFF000000.toInt()
         drawRect(androidx.compose.ui.graphics.Color(defaultBg))

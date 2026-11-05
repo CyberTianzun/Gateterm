@@ -205,12 +205,104 @@ impl AgentAdapter for Antigravity {
         file_name == "transcript_full.jsonl"
     }
 
+    fn inspect_history_row(&self, row: &Value, meta: &mut RowMeta) {
+        use crate::agent::history::model_name;
+        if let Some(model) = model_name(row) {
+            meta.model = Some(model);
+        }
+        if row.get("type").and_then(Value::as_str) == Some("USER_INPUT")
+            && let Some(content) = row.get("content").and_then(Value::as_str)
+            && let Some(model) = extract_model_selection(content)
+        {
+            meta.model = Some(model);
+        }
+    }
+
     fn finalize_history_entry(&self, path: &Path, meta: &mut RowMeta) {
         meta.id = path
             .ancestors()
             .nth(3)
             .and_then(|p| p.file_name())
             .map(|s| s.to_string_lossy().into_owned());
+        if meta.title.is_none()
+            && let (Some(id), Some(cli_root)) = (meta.id.as_deref(), path.ancestors().nth(5))
+        {
+            let pbtxt_path = cli_root.join("annotations").join(format!("{id}.pbtxt"));
+            if let Ok(text) = std::fs::read_to_string(pbtxt_path) {
+                meta.title = parse_pbtxt_title(&text);
+            }
+        }
+    }
+
+    fn enrich_history_catalog(&self, home: &Path, entries: &mut Vec<crate::agent::history::Entry>) {
+        use crate::agent::history::{prompt, sample_with_limits, short, text};
+        use std::collections::HashMap;
+        use std::io::Read;
+
+        if !entries.iter().any(|e| e.agent_id == "antigravity") {
+            return;
+        }
+        let dir = cli_dir(home);
+        let summaries = std::fs::File::open(dir.join("jetbox_summaries_proto.pb"))
+            .ok()
+            .and_then(|f| {
+                let mut buf = Vec::new();
+                f.take(16 * 1024 * 1024).read_to_end(&mut buf).ok()?;
+                Some(parse_jetbox_summaries(&buf))
+            })
+            .unwrap_or_default();
+
+        entries.retain(|e| {
+            e.agent_id != "antigravity"
+                || !summaries
+                    .get(&e.agent_session_id)
+                    .is_some_and(|s| s.is_subagent)
+        });
+
+        let mut hist_cwds = HashMap::new();
+        let mut hist_prompts = HashMap::new();
+        if let Ok(index) = sample_with_limits(&dir.join("history.jsonl"), 0, 2 * 1024 * 1024) {
+            for row in index
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            {
+                let Some(id) = text(&row, "conversationId") else {
+                    continue;
+                };
+                if let Some(ws) = text(&row, "workspace") {
+                    hist_cwds.entry(id.clone()).or_insert(ws);
+                }
+                if row.get("type").and_then(Value::as_str) != Some("slash_command")
+                    && let Some(p) = text(&row, "display").and_then(|s| prompt(&s))
+                {
+                    hist_prompts.entry(id).or_insert(p);
+                }
+            }
+        }
+
+        for entry in entries.iter_mut().filter(|e| e.agent_id == "antigravity") {
+            if let Some(summary) = summaries.get(&entry.agent_session_id) {
+                if entry.cwd.is_none() {
+                    entry.cwd = summary.cwd.clone();
+                }
+                if let Some(title) = &summary.title {
+                    entry.title = short(title);
+                }
+            }
+            if entry.cwd.is_none()
+                && let Some(ws) = hist_cwds.get(&entry.agent_session_id)
+            {
+                entry.cwd = Some(ws.clone());
+            }
+            if let Some(value) = hist_prompts.get(&entry.agent_session_id) {
+                if entry.title.is_empty() {
+                    entry.title = value.clone();
+                }
+                if entry.description.is_none() {
+                    entry.description = Some(value.clone());
+                }
+            }
+        }
     }
 
     fn resume_spec(&self) -> Option<ResumeSpec> {
@@ -223,9 +315,418 @@ impl AgentAdapter for Antigravity {
     }
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct SummaryMeta {
+    title: Option<String>,
+    cwd: Option<String>,
+    is_subagent: bool,
+}
+
+fn read_varint(buf: &[u8], pos: &mut usize) -> Option<u64> {
+    let mut val = 0u64;
+    let mut shift = 0u32;
+    while *pos < buf.len() && shift < 64 {
+        let b = buf[*pos];
+        *pos += 1;
+        val |= u64::from(b & 0x7f) << shift;
+        if b & 0x80 == 0 {
+            return Some(val);
+        }
+        shift += 7;
+    }
+    None
+}
+
+enum WireValue<'a> {
+    Varint(u64),
+    Bytes(&'a [u8]),
+    Fixed,
+}
+
+fn next_proto_field<'a>(buf: &'a [u8], pos: &mut usize) -> Option<(u32, WireValue<'a>)> {
+    if *pos >= buf.len() {
+        return None;
+    }
+    let tag = read_varint(buf, pos)?;
+    let field_num = u32::try_from(tag >> 3).ok()?;
+    let wire_type = (tag & 0x07) as u8;
+    match wire_type {
+        0 => Some((field_num, WireValue::Varint(read_varint(buf, pos)?))),
+        1 => {
+            *pos = pos.checked_add(8)?;
+            (*pos <= buf.len()).then_some((field_num, WireValue::Fixed))
+        }
+        2 => {
+            let len = usize::try_from(read_varint(buf, pos)?).ok()?;
+            let end = pos.checked_add(len)?;
+            if end > buf.len() {
+                return None;
+            }
+            let slice = &buf[*pos..end];
+            *pos = end;
+            Some((field_num, WireValue::Bytes(slice)))
+        }
+        5 => {
+            *pos = pos.checked_add(4)?;
+            (*pos <= buf.len()).then_some((field_num, WireValue::Fixed))
+        }
+        _ => None,
+    }
+}
+
+fn parse_jetbox_summaries(buf: &[u8]) -> std::collections::HashMap<String, SummaryMeta> {
+    let mut out = std::collections::HashMap::new();
+    let mut pos = 0;
+    while let Some((field_num, val)) = next_proto_field(buf, &mut pos) {
+        let (1, WireValue::Bytes(entry_bytes)) = (field_num, val) else {
+            continue;
+        };
+        let mut epos = 0;
+        let mut cid: Option<String> = None;
+        let mut summary_bytes: Option<&[u8]> = None;
+        while let Some((efield, eval)) = next_proto_field(entry_bytes, &mut epos) {
+            match (efield, eval) {
+                (1, WireValue::Bytes(b)) => {
+                    cid = std::str::from_utf8(b)
+                        .ok()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+                }
+                (2, WireValue::Bytes(b)) => summary_bytes = Some(b),
+                _ => {}
+            }
+        }
+        let (Some(id), Some(sbytes)) = (cid, summary_bytes) else {
+            continue;
+        };
+        let mut meta = SummaryMeta::default();
+        let mut spos = 0;
+        while let Some((sfield, sval)) = next_proto_field(sbytes, &mut spos) {
+            match (sfield, sval) {
+                (1, WireValue::Bytes(b)) => {
+                    if let Ok(s) = std::str::from_utf8(b) {
+                        let trimmed = s.trim();
+                        if !trimmed.is_empty() {
+                            meta.title = Some(trimmed.to_string());
+                        }
+                    }
+                }
+                (9, WireValue::Bytes(wbytes)) if meta.cwd.is_none() => {
+                    let mut wpos = 0;
+                    while let Some((wfield, wval)) = next_proto_field(wbytes, &mut wpos) {
+                        if let (1, WireValue::Bytes(u)) = (wfield, wval)
+                            && let Ok(uri) = std::str::from_utf8(u)
+                            && let Some(path) = file_uri_to_path(uri)
+                        {
+                            meta.cwd = Some(path);
+                            break;
+                        }
+                    }
+                }
+                (17, WireValue::Bytes(tbytes)) => {
+                    let mut tpos = 0;
+                    while let Some((tfield, tval)) = next_proto_field(tbytes, &mut tpos) {
+                        match (tfield, tval) {
+                            (5, WireValue::Bytes(p)) => {
+                                if std::str::from_utf8(p).is_ok_and(|s| !s.trim().is_empty()) {
+                                    meta.is_subagent = true;
+                                }
+                            }
+                            (17, WireValue::Varint(depth)) if depth > 0 => {
+                                meta.is_subagent = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.insert(id, meta);
+    }
+    out
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (
+                (bytes[i + 1] as char).to_digit(16),
+                (bytes[i + 2] as char).to_digit(16),
+            )
+        {
+            out.push(((hi << 4) | lo) as u8);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+pub(crate) fn file_uri_to_path(uri: &str) -> Option<String> {
+    let uri = uri.trim();
+    if uri.is_empty() {
+        return None;
+    }
+    let Some(rest) = uri.strip_prefix("file://") else {
+        return Some(uri.to_string());
+    };
+    let rest = rest
+        .strip_prefix("localhost/")
+        .map(|s| format!("/{s}"))
+        .unwrap_or_else(|| rest.to_string());
+    let decoded = percent_decode(&rest);
+    let stripped = decoded.strip_prefix('/').unwrap_or(&decoded);
+    let bytes = stripped.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        let mut win_path = stripped.to_string();
+        if cfg!(windows) {
+            win_path = win_path.replace('/', "\\");
+        }
+        return Some(win_path);
+    }
+    if decoded.starts_with('/') {
+        return Some(decoded);
+    }
+    if cfg!(windows) {
+        Some(format!("\\\\{}", decoded.replace('/', "\\")))
+    } else {
+        Some(format!("/{decoded}"))
+    }
+}
+
+fn parse_pbtxt_title(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("title") else {
+            continue;
+        };
+        let Some(rest) = rest.trim_start().strip_prefix(':') else {
+            continue;
+        };
+        let Some(rest) = rest.trim_start().strip_prefix('"') else {
+            continue;
+        };
+        let mut out = String::new();
+        let mut chars = rest.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '"' => {
+                    let s = crate::agent::history::short(&out);
+                    return (!s.is_empty()).then_some(s);
+                }
+                '\\' => {
+                    if let Some(esc) = chars.next() {
+                        out.push(esc);
+                    }
+                }
+                _ => out.push(c),
+            }
+        }
+    }
+    None
+}
+
+fn extract_model_selection(content: &str) -> Option<String> {
+    let mut rest = content;
+    let mut latest = None;
+    while let Some((_, after_open)) = rest.split_once("<USER_SETTINGS_CHANGE>") {
+        let (block, tail) = after_open
+            .split_once("</USER_SETTINGS_CHANGE>")
+            .unwrap_or((after_open, ""));
+        rest = tail;
+        if let Some((_, after_marker)) =
+            block.split_once("changed setting `Model Selection` from ")
+            && let Some((_, after_to)) = after_marker.split_once(" to ")
+        {
+            let line = after_to.lines().next().unwrap_or(after_to);
+            let raw = line.split_once(". ").map_or(line, |(m, _)| m);
+            let model = raw.trim().trim_end_matches('.').trim();
+            if !model.is_empty() {
+                latest = Some(crate::agent::history::short(model));
+            }
+        }
+    }
+    latest
+}
+
 fn is_our_shape(hook: &Value) -> bool {
     hook.get("command")
         .and_then(Value::as_str)
         .and_then(crate::agent::edit::url_in_command)
         .is_some_and(|url| url.contains("/hook/antigravity/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::history;
+    use std::fs;
+
+    fn proto_varint(mut v: u64, out: &mut Vec<u8>) {
+        loop {
+            let mut b = (v & 0x7f) as u8;
+            v >>= 7;
+            if v != 0 {
+                b |= 0x80;
+            }
+            out.push(b);
+            if v == 0 {
+                break;
+            }
+        }
+    }
+
+    fn proto_bytes(field: u32, payload: &[u8], out: &mut Vec<u8>) {
+        proto_varint(u64::from((field << 3) | 2), out);
+        proto_varint(payload.len() as u64, out);
+        out.extend_from_slice(payload);
+    }
+
+    fn proto_varint_field(field: u32, val: u64, out: &mut Vec<u8>) {
+        proto_varint(u64::from(field << 3), out);
+        proto_varint(val, out);
+    }
+
+    fn build_jetbox_entry(
+        id: &str,
+        title: &str,
+        workspace_uri: &str,
+        parent_id: &str,
+        nesting_depth: u64,
+    ) -> Vec<u8> {
+        let mut ws = Vec::new();
+        proto_bytes(1, workspace_uri.as_bytes(), &mut ws);
+
+        let mut traj = Vec::new();
+        if !parent_id.is_empty() {
+            proto_bytes(5, parent_id.as_bytes(), &mut traj);
+        }
+        if nesting_depth > 0 {
+            proto_varint_field(17, nesting_depth, &mut traj);
+        }
+
+        let mut summary = Vec::new();
+        if !title.is_empty() {
+            proto_bytes(1, title.as_bytes(), &mut summary);
+        }
+        proto_bytes(9, &ws, &mut summary);
+        if !traj.is_empty() {
+            proto_bytes(17, &traj, &mut summary);
+        }
+
+        let mut entry = Vec::new();
+        proto_bytes(1, id.as_bytes(), &mut entry);
+        proto_bytes(2, &summary, &mut entry);
+
+        let mut root = Vec::new();
+        proto_bytes(1, &entry, &mut root);
+        root
+    }
+
+    #[test]
+    fn decodes_unix_and_windows_file_uris() {
+        assert_eq!(
+            file_uri_to_path("file:///Users/hiro/online/Gateterm").as_deref(),
+            Some("/Users/hiro/online/Gateterm")
+        );
+        assert_eq!(
+            file_uri_to_path("file:///Users/hiro/My%20Project").as_deref(),
+            Some("/Users/hiro/My Project")
+        );
+        let win1 = file_uri_to_path("file:///C:/Users/hiro/Gateterm").unwrap();
+        let win2 = file_uri_to_path("file:///c%3A/Users/hiro/My%20Repo").unwrap();
+        if cfg!(windows) {
+            assert_eq!(win1, r"C:\Users\hiro\Gateterm");
+            assert_eq!(win2, r"c:\Users\hiro\My Repo");
+        } else {
+            assert_eq!(win1, "C:/Users/hiro/Gateterm");
+            assert_eq!(win2, "c:/Users/hiro/My Repo");
+        }
+    }
+
+    #[test]
+    fn enriches_antigravity_history_and_filters_subagents() {
+        let home = tempfile::tempdir().unwrap();
+        let workspace = home.path().join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        let bin = home.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(
+            bin.join(if cfg!(windows) { "agy.exe" } else { "agy" }),
+            "stub",
+        )
+        .unwrap();
+
+        let main_log = home
+            .path()
+            .join(".gemini/antigravity-cli/brain/main-1/.system_generated/logs/transcript_full.jsonl");
+        fs::create_dir_all(main_log.parent().unwrap()).unwrap();
+        fs::write(
+            &main_log,
+            concat!(
+                "{\"step_index\":0,\"type\":\"USER_INPUT\",\"content\":\"<USER_REQUEST>\\nFix resume bug\\n</USER_REQUEST>\\n<USER_SETTINGS_CHANGE>\\nThe user changed setting `Model Selection` from None to Gemini 4 Argon (High). No need to comment.\\n</USER_SETTINGS_CHANGE>\"}\n",
+                "{\"step_index\":1,\"type\":\"PLANNER_RESPONSE\",\"content\":\"Fixed it.\"}\n"
+            ),
+        )
+        .unwrap();
+
+        let sub_log = home
+            .path()
+            .join(".gemini/antigravity-cli/brain/sub-1/.system_generated/logs/transcript_full.jsonl");
+        fs::create_dir_all(sub_log.parent().unwrap()).unwrap();
+        fs::write(
+            &sub_log,
+            "{\"step_index\":0,\"type\":\"SYSTEM_MESSAGE\",\"content\":\"subagent\"}\n",
+        )
+        .unwrap();
+
+        let ws_slash = workspace.to_string_lossy().replace('\\', "/");
+        let ws_uri = if ws_slash.starts_with('/') {
+            format!("file://{ws_slash}")
+        } else {
+            format!("file:///{ws_slash}")
+        };
+        let mut pb = build_jetbox_entry("main-1", "Antigravity Resume Fix", &ws_uri, "", 0);
+        pb.extend_from_slice(&build_jetbox_entry("sub-1", "", &ws_uri, "main-1", 1));
+        fs::write(
+            home.path()
+                .join(".gemini/antigravity-cli/jetbox_summaries_proto.pb"),
+            pb,
+        )
+        .unwrap();
+
+        let env = DetectEnv {
+            home: home.path().to_path_buf(),
+            path: Some(std::env::join_paths([&bin]).unwrap()),
+        };
+        let catalog = history::scan(&env);
+        let agy_entries: Vec<_> = catalog
+            .entries
+            .iter()
+            .filter(|e| e.agent_id == "antigravity")
+            .collect();
+        assert_eq!(agy_entries.len(), 1);
+        let entry = agy_entries[0];
+        assert_eq!(entry.agent_session_id, "main-1");
+        assert_eq!(entry.title, "Antigravity Resume Fix");
+        assert_eq!(entry.model.as_deref(), Some("Gemini 4 Argon (High)"));
+        assert_eq!(entry.description.as_deref(), Some("Fixed it."));
+        assert_eq!(
+            Path::new(entry.cwd.as_deref().unwrap()),
+            workspace.as_path()
+        );
+        assert!(
+            entry.can_resume,
+            "expected can_resume=true, got unavailable_reason={:?}",
+            entry.unavailable_reason
+        );
+    }
 }

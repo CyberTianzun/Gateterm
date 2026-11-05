@@ -289,7 +289,7 @@ impl AgentAdapter for Codex {
         }
     }
 
-    fn enrich_history_catalog(&self, home: &Path, entries: &mut [history::Entry]) {
+    fn enrich_history_catalog(&self, home: &Path, entries: &mut Vec<history::Entry>) {
         use history::{prompt, sample_with_limits, short, text};
         use std::collections::HashMap;
         // Codex /rename is persisted in its index, independently of the rollout transcript.

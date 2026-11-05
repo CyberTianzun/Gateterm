@@ -28,7 +28,8 @@ button {
   font-size: 13px;
   cursor: pointer;
 }
-button:hover { border-color: var(--accent); color: var(--accent); }
+button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
 
 #app { display: flex; height: 100dvh; }
 

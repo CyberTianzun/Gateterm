@@ -284,6 +284,9 @@ impl Session {
         // 或压根没设置),避免颜色/能力探测出错。
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
+        if let Some(path) = crate::agent::detect::DetectEnv::current().path {
+            cmd.env("PATH", path);
+        }
         // agent 集成的两把钥匙。装进 settings.json 的 hook 里写的是字面量
         // `$GATETERM_SESSION_ID` / `$GATETERM_HOOK_TOKEN`,Claude Code 在 hook 触发时
         // 从**它自己的环境**里插值 —— 而它的环境就是这里给的。于是「这个 agent 属于

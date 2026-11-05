@@ -66,6 +66,7 @@ let termChannel = 0;
 
 let sessions: any[] = [];
 let attachedId: number | null = null;
+let terminalSuspended = false;
 /** hello-ok 报来的服务端系统,决定部分按键的编码(见 keys.ts)。 */
 let serverOs: ServerOs = "";
 let win32InputMode = false;
@@ -237,7 +238,7 @@ syncFont(config.font.family);
     term.options = toTerminalOptions(config);
     mousePolicy?.setBlocked(config.terminal.blockMouseEvents);
     applyRenderer(term);
-    client.setColors(termChannel, termColors(term.options.theme));
+    if (!terminalSuspended) client.setColors(termChannel, termColors(term.options.theme));
     // 字号/行高/字距一变,cell 尺寸就变了,能放下的 cols×rows 也跟着变。xterm
     // 要一帧才把新的 cell 尺寸量出来,这里等一帧再上报,否则量到的还是旧值。
     requestAnimationFrame(refit);
@@ -387,19 +388,24 @@ function showError(message: string) {
 function openTerminal(id: number) {
   setDrawer(false);
   if (attachedId === id) {
+    if (terminalSuspended) resumeTerminal();
     viewMode = "terminal";
     showView();
     term?.focus();
     return;
   }
   if (attachedId !== null) {
-    releaseKeyboard();
-    client.detach(termChannel);
+    if (!terminalSuspended) {
+      releaseKeyboard();
+      client.detach(termChannel);
+    }
+    terminalSuspended = false;
     disposeTerminal();
   }
   attachedId = id;
+  terminalSuspended = false;
   // Never reuse a channel while frames from its previous session can be in flight.
-  const channel = ++termChannel;
+  ++termChannel;
   // 换了会话,上一份对话记录与这一份无关
   resetChatPages();
   chatFallback = null;
@@ -413,8 +419,12 @@ function openTerminal(id: number) {
   applyRenderer(term);
   // onData 只该带用户输入;终端查询由服务端应答,见 queries.ts
   swallowTerminalQueries(term);
-  term.onData((d) => client.sendInput(channel, new TextEncoder().encode(d)));
   const terminal = term;
+  term.onData((d) => {
+    if (term === terminal && !terminalSuspended) {
+      client.sendInput(termChannel, new TextEncoder().encode(d));
+    }
+  });
   const adapter = keyboard = new KeyboardAdapter(
     /Mac/.test(navigator.platform) && !terminal.options.macOptionIsMeta,
   );
@@ -470,7 +480,9 @@ function openTerminal(id: number) {
       // 复制/粘贴/浏览器命令要保留默认动作,也不能再让 xterm 发 Ctrl+V 等字节。
       return serverOs !== "windows" || !browserShortcut(ev, selected);
     }
-    if (seq) client.sendInput(channel, new TextEncoder().encode(seq));
+    if (seq && term === terminal && !terminalSuspended) {
+      client.sendInput(termChannel, new TextEncoder().encode(seq));
+    }
     if (ev.type === "keydown" && !["Shift", "Control", "Alt", "CapsLock", "NumLock", "ScrollLock"].includes(ev.key)) {
       if (terminal.options.scrollOnUserInput) terminal.scrollToBottom();
       if (ev.key === "Enter" || (ev.ctrlKey && ev.key.toLowerCase() === "c")) terminal.textarea!.value = "";
@@ -534,10 +546,11 @@ function disposeTerminal() {
 }
 
 function closeTerminal() {
-  if (attachedId !== null) {
+  if (attachedId !== null && !terminalSuspended) {
     releaseKeyboard();
     client.detach(termChannel);
   }
+  terminalSuspended = false;
   attachedId = null;
   disposeTerminal();
   viewMode = "terminal";
@@ -546,6 +559,39 @@ function closeTerminal() {
   renderSessionList();
   showView();
   client.send({ type: "list-sessions" });
+}
+
+/**
+ * 页面切入后台时挂起终端通道,切回前台时以全新 channel 重新 attach。
+ *
+ * 浏览器在后台会把 xterm.js 内部驱动解析器的 `setTimeout` 节流到 1s 甚至 60s 一次:
+ * 如果后台期间继续保持 attach,成千上万帧流式输出会堆积在客户端队列中,切回前台后
+ * 被逐帧渲染出来,表现为用户肉眼看到漫长的「历史变化快进回放」。
+ * 后台 detach + 前台重新 attach(last_seq=null)直接由服务端下发单次当前屏幕快照(resync),
+ * 一步到位更新到最新画面(与 Android / iOS 的 suspendViewports / resumeViewports 一致)。
+ */
+function suspendTerminal() {
+  if (terminalSuspended || attachedId === null) return;
+  terminalSuspended = true;
+  releaseKeyboard();
+  finishTerminalWrite?.();
+  client.detach(termChannel);
+}
+
+function resumeTerminal() {
+  client.kick();
+  if (!terminalSuspended) return;
+  terminalSuspended = false;
+  if (attachedId === null || !term) return;
+  ++termChannel;
+  const want = proposeSize();
+  client.attach(
+    attachedId,
+    termChannel,
+    want?.cols ?? term.cols,
+    want?.rows ?? term.rows,
+    termColors(term.options.theme),
+  );
 }
 
 /** 量一下当前视口放得下多大。只作为"诉求"上报——多端 attach 同一个会话时 pty
@@ -559,12 +605,22 @@ function proposeSize(): { cols: number; rows: number } | null {
 }
 
 function refit() {
+  if (terminalSuspended) return;
   const want = proposeSize();
   if (want) client.resize(termChannel, want.cols, want.rows);
 }
 
 window.addEventListener("resize", refit);
 window.visualViewport?.addEventListener("resize", refit);
+window.addEventListener("online", () => client.kick());
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    suspendTerminal();
+  } else {
+    resumeTerminal();
+    if (viewMode === "chat") void refreshChat(true);
+  }
+});
 $("terminal-wrap").addEventListener(
   "paste",
   (ev: ClipboardEvent) => {

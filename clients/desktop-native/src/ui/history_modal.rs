@@ -179,7 +179,7 @@ pub fn render_history_modal(
                                     .child(title),
                             ),
                     )
-                    .children(can_resume.then(|| {
+                    .child(if can_resume {
                         Button::new(SharedString::from(format!(
                             "hist-open-{idx}-{}",
                             entry.agent_session_id
@@ -190,7 +190,25 @@ pub fn render_history_modal(
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.open_history_entry(aid_open.clone(), sid_open.clone(), window, cx);
                         }))
-                    })),
+                        .into_any_element()
+                    } else {
+                        let reason = match entry.unavailable_reason.as_deref() {
+                            Some("missing-directory") => {
+                                locale.t("目录不存在", "Missing directory")
+                            }
+                            Some("missing-cli") => locale.t("未安装 CLI", "Missing CLI"),
+                            _ => locale.t("不可恢复", "Unavailable"),
+                        };
+                        div()
+                            .px_1p5()
+                            .py_0p5()
+                            .rounded(px(4.0))
+                            .bg(cx.theme().secondary)
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(reason)
+                            .into_any_element()
+                    }),
             )
             .child(
                 div()
@@ -336,7 +354,13 @@ pub fn render_history_modal(
                                 })),
                         ),
                 )
-                .child(filter_bar),
+                .child(filter_bar)
+                .children(state.error.as_ref().map(|err| {
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().danger)
+                        .child(SharedString::from(err.clone()))
+                })),
         )
         .child(
             h_flex()

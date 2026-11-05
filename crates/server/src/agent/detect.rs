@@ -19,13 +19,50 @@ pub struct DetectEnv {
 
 impl DetectEnv {
     /// 真实进程环境。读不出 home 时回落到当前目录,让扫描退化成「什么都没找到」
-    /// 而不是整个失败。
+    /// 而不是整个失败。桌面 GUI 应用从 Finder / Dock / 开始菜单启动时,进程 PATH
+    /// 往往不含用户级 CLI 安装目录(如 `~/.local/bin`、Homebrew),在此追加常见目录兜底。
     pub fn current() -> Self {
         let home = directories::BaseDirs::new()
             .map(|d| d.home_dir().to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
-        Self { home, path: std::env::var_os("PATH") }
+        let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+            .map(|p| std::env::split_paths(&p).collect())
+            .unwrap_or_default();
+        for extra in fallback_bin_dirs(&home) {
+            if extra.is_dir() && !dirs.contains(&extra) {
+                dirs.push(extra);
+            }
+        }
+        let path = (!dirs.is_empty())
+            .then(|| std::env::join_paths(dirs).ok())
+            .flatten()
+            .or_else(|| std::env::var_os("PATH"));
+        Self { home, path }
     }
+}
+
+fn fallback_bin_dirs(home: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![
+        home.join(".local").join("bin"),
+        home.join(".cargo").join("bin"),
+    ];
+    #[cfg(unix)]
+    {
+        dirs.push(PathBuf::from("/opt/homebrew/bin"));
+        dirs.push(PathBuf::from("/usr/local/bin"));
+    }
+    #[cfg(windows)]
+    {
+        dirs.push(home.join("AppData").join("Roaming").join("npm"));
+        dirs.push(
+            home.join("AppData")
+                .join("Local")
+                .join("Microsoft")
+                .join("WinGet")
+                .join("Links"),
+        );
+    }
+    dirs
 }
 
 /// 在 PATH 上找一个可执行文件。Windows 上还要试 `.cmd` / `.exe` —— agent 的

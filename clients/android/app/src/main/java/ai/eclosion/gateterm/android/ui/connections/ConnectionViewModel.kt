@@ -304,6 +304,7 @@ class ConnectionController(
         private set
     private var proposedCols = 80
     private var proposedRows = 24
+    private var hasProposedSize = false
     private val proposeFlush = Runnable { applyProposedSize() }
     private val publishSoon = Runnable { publishTerm() }
     private val _state = MutableStateFlow(
@@ -861,6 +862,7 @@ class ConnectionController(
             activeId = opens.keys.lastOrNull()
             if (activeId == null) {
                 painted = TermFrame.Empty
+                hasProposedSize = false
                 _state.update {
                     it.copy(
                         attachedId = null,
@@ -1025,10 +1027,16 @@ class ConnectionController(
     }
 
     override fun proposeSize(cols: Int, rows: Int) {
+        val firstMeasurement = !hasProposedSize
+        hasProposedSize = true
         proposedCols = cols.coerceAtLeast(20)
         proposedRows = rows.coerceAtLeast(5)
         main.removeCallbacks(proposeFlush)
-        main.postDelayed(proposeFlush, PROPOSE_DEBOUNCE_MS)
+        if (firstMeasurement || opens.values.any { it.pendingAttach }) {
+            main.post(proposeFlush)
+        } else {
+            main.postDelayed(proposeFlush, PROPOSE_DEBOUNCE_MS)
+        }
     }
 
     override fun requestRename(session: SessionInfo) {
@@ -1082,9 +1090,14 @@ class ConnectionController(
                 }
             }
             is ServerMsg.Attached -> {
-                opens.values.firstOrNull { it.channel == msg.channel }
-                    ?.paintGate
-                    ?.onAttached(replay = msg.mode == AttachMode.Replay)
+                val open = opens.values.firstOrNull { it.channel == msg.channel } ?: return
+                open.paintGate.onAttached(replay = msg.mode == AttachMode.Replay)
+                if (open.paintGate.shouldSendResize() &&
+                    significantResize(proposedCols, proposedRows, open.lastSentCols, open.lastSentRows)
+                ) {
+                    main.removeCallbacks(proposeFlush)
+                    main.post(proposeFlush)
+                }
             }
             is ServerMsg.Resized -> {
                 // 权威几何只改终端网格。提交画面会把「正确重绘」换成裁切后的空/错帧。
@@ -1109,6 +1122,10 @@ class ConnectionController(
                 // 立刻 resize 会 SIGWINCH，对端先发 2J 清屏，空帧就会把
                 // 刚画好的重绘盖掉。
                 open.resizeQuietUntil = SystemClock.uptimeMillis() + RESIZE_QUIET_MS
+                if (significantResize(proposedCols, proposedRows, open.lastSentCols, open.lastSentRows)) {
+                    main.removeCallbacks(proposeFlush)
+                    main.post(proposeFlush)
+                }
             }
             is ServerMsg.SessionExited -> {
                 val open = opens.values.firstOrNull { it.channel == msg.channel }
@@ -1138,6 +1155,7 @@ class ConnectionController(
         }
         val sessionId = st.attachedId ?: return
         if (!st.chatAvailable) return
+        hasProposedSize = false
         suspendViewports()
         _state.update { it.copy(chat = ChatUiState(sessionId = sessionId, loading = true)) }
         // 进聊天视图才去拉 —— 不看的时候不该白读别人的文件
@@ -1296,7 +1314,7 @@ class ConnectionController(
     }
 
     private fun applyProposedSize() {
-        if (viewportsSuspended || !uiForeground || _state.value.chatOpen) return
+        if (!hasProposedSize || viewportsSuspended || !uiForeground || _state.value.chatOpen) return
         main.removeCallbacks(proposeFlush)
         var retryIn = Long.MAX_VALUE
         for (open in opens.values) {
@@ -1357,6 +1375,7 @@ class ConnectionController(
         opens.clear()
         activeId = null
         awaitingCreated = false
+        hasProposedSize = false
         painted = TermFrame.Empty
     }
 

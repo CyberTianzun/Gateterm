@@ -213,3 +213,56 @@ test("a received hello prevents ordinary errors being mistaken for authenticatio
   await tick();
   assert.deepEqual(sockets[1].sent, []);
 });
+
+test("coalesces consecutive queued data frames while a write is pending and preserves control ordering", async () => {
+  const { client, socket } = setup();
+  socket.emit({ type: "resync-end", channel: 1, seq: 100 });
+  await tick();
+  const resolvers = [];
+  const events = [];
+  client.onChannelData = (_ch, payload) => {
+    events.push(`data:${decoder.decode(payload)}`);
+    return new Promise(resolve => { resolvers.push(resolve); });
+  };
+  client.onControl = msg => {
+    events.push(`ctrl:${msg.type}`);
+  };
+  socket.emit("first", 1);
+  await tick();
+  // While "first" write is pending (e.g. throttled background tab), multiple data frames arrive:
+  socket.emit("hello ", 1);
+  socket.emit("world", 1);
+  socket.emit("!", 1);
+  socket.emit({ type: "resized", channel: 1, cols: 100, rows: 30 });
+  socket.emit("after-", 1);
+  socket.emit("resize", 1);
+  assert.deepEqual(events, ["data:first"]);
+  resolvers.shift()();
+  await tick();
+  assert.deepEqual(events, ["data:first", "data:hello world!"]);
+  resolvers.shift()();
+  await tick();
+  assert.deepEqual(events, ["data:first", "data:hello world!", "ctrl:resized", "data:after-resize"]);
+  resolvers.shift()();
+  await tick();
+  socket.emit({ type: "hello-ok", proto: 1 });
+  await tick();
+  assert.equal(socket.sent.at(-1).last_seq, 100 + 5 + 12 + 12);
+});
+
+test("kick immediately redials when waiting on reconnect backoff", async context => {
+  const { client, socket, sockets } = setup();
+  socket.emit({ type: "hello-ok", proto: 1 });
+  await tick();
+  const timers = [];
+  context.mock.method(globalThis, "setTimeout", callback => {
+    timers.push(callback);
+    return timers.length;
+  });
+  context.mock.method(globalThis, "clearTimeout", () => {});
+  socket.onclose();
+  assert.equal(sockets.length, 1);
+  assert.equal(timers.length, 1);
+  client.kick();
+  assert.equal(sockets.length, 2);
+});

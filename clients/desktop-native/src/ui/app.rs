@@ -1618,6 +1618,7 @@ impl GatetermWorkbench {
             0
         };
         self.history_modal.loading = true;
+        self.history_modal.error = None;
         cx.notify();
 
         let task = Tokio::spawn_result(cx, async move {
@@ -1696,6 +1697,7 @@ impl GatetermWorkbench {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.history_modal.error = None;
         let srv_id = self.history_modal.server_id.clone();
         let Some(http) = self.servers.get(&srv_id).and_then(|s| s.http.clone()) else {
             return;
@@ -1704,16 +1706,23 @@ impl GatetermWorkbench {
             http.open_history(&agent_id, &agent_session_id).await
         });
 
-        cx.spawn(async move |this, cx| {
-            if let Ok(resp) = task.await {
+        cx.spawn(async move |this, cx| match task.await {
+            Ok(resp) => {
                 let _ = this.update(cx, |this, cx| {
                     this.history_modal.open = false;
+                    this.history_modal.error = None;
                     if let Some(conn) = this.servers.get_mut(&srv_id) {
                         if !conn.sessions.iter().any(|s| s.id == resp.session.id) {
                             conn.sessions.push(resp.session.clone());
                         }
                     }
                     this.open_session_in_new_tab(&srv_id, resp.session.id, cx);
+                    cx.notify();
+                });
+            }
+            Err(err) => {
+                let _ = this.update(cx, |this, cx| {
+                    this.history_modal.error = Some(err.to_string());
                     cx.notify();
                 });
             }
