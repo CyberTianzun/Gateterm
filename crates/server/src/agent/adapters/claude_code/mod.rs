@@ -149,6 +149,16 @@ impl AgentAdapter for ClaudeCode {
             .collect())
     }
 
+    /// Grok 会兼容执行 `~/.claude/settings.json` 里的 hook。HTTP 那几条它丢掉了
+    /// `headers`、带不上密钥,但 SessionStart 是 command hook,在 gateterm 终端里继承了
+    /// 会话 id 与密钥,能带着合法凭据打进来,把 grok 终端标成 Claude Code。
+    ///
+    /// Grok 的 stdin 永远带驼峰 `hookEventName`(值是它自己的蛇形事件名);Claude Code
+    /// 只发蛇形 `hook_event_name`。见 `~/.grok/docs/user-guide/10-hooks.md`。
+    fn accepts_payload(&self, body: &Value) -> bool {
+        body.get("hookEventName").is_none()
+    }
+
     fn parse(&self, event: &str, body: &Value) -> Option<Update> {
         let state = state_of(event)?;
         let detail = match event {

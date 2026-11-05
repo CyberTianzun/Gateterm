@@ -132,6 +132,16 @@ pub trait AgentAdapter: Send + Sync {
         body.get("session_id").and_then(serde_json::Value::as_str).map(str::to_string)
     }
 
+    /// 这份 payload 是不是真由这家 agent 发出的。
+    ///
+    /// hook 路由里的 agent id 只说明「打的是谁的 URL」,不说明「谁打的」:别家 agent
+    /// 可能兼容读取这家的配置(Grok 会执行 `~/.claude/settings.json` 里的 hook),在
+    /// gateterm 终端里还继承了合法的会话 id 与密钥。返回 `false` 时整条请求安静忽略。
+    fn accepts_payload(&self, body: &serde_json::Value) -> bool {
+        let _ = body;
+        true
+    }
+
     /// 把 agent 方言的 hook payload 归一化成统一更新。
     ///
     /// **不认识的事件返回 `None`,当作忽略而不是错误** —— agent 升级会带来新事件,

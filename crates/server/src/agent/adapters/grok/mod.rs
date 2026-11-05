@@ -21,8 +21,10 @@
 //!    它的话,刚结束的会话会被它重新建回来、一直挂在列表上(实测发生过)。
 //!
 //! 它也会读 `~/.claude/settings.json` 里的 hook(Claude Code 兼容)。如果同时装了
-//! Claude Code 集成,grok 会以 Claude 的身份打过来,但它丢掉了 `headers`,请求不带
-//! 密钥 —— 服务端照规矩安静收下、什么都不做,不会误报成 Claude 会话。
+//! Claude Code 集成,grok 会以 Claude 的身份打过来:HTTP 那几条丢了 `headers`、不带
+//! 密钥;但 SessionStart 是 command hook,继承了终端环境,**带着合法密钥**。所以
+//! claude-code adapter 靠 payload 里 grok 独有的 `hookEventName` 拒收它
+//! (见 `ClaudeCode::accepts_payload`),不会误报成 Claude 会话。
 
 pub mod transcript;
 

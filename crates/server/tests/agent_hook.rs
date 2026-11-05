@@ -163,6 +163,28 @@ async fn notification_marks_waiting() {
     assert_eq!(v["sessions"][0]["detail"], "permission_prompt");
 }
 
+/// Grok 兼容读取 `~/.claude/settings.json`。其中 SessionStart 是 command hook,
+/// 在 gateterm 终端里继承了会话 id 与密钥,会带着合法凭据打到 `/hook/claude-code/`。
+/// 它的 payload 带着 grok 独有的驼峰 `hookEventName`,必须被 claude-code 拒收,
+/// 否则 grok 终端会被识别成 Claude Code。
+#[tokio::test]
+async fn grok_envelope_on_claude_route_is_ignored() {
+    let addr = server().await;
+    for (path, body) in [
+        (
+            "/hook/claude-code/session-start",
+            r#"{"sessionId":"g1","session_id":"g1","hookEventName":"session_start","hook_event_name":"SessionStart","cwd":"/tmp/x"}"#,
+        ),
+        (
+            "/hook/claude-code/permission-request",
+            r#"{"sessionId":"g1","session_id":"g1","hookEventName":"permission_request","tool_name":"Bash"}"#,
+        ),
+    ] {
+        let r = post_hook(addr, path, Some(hook_token()), Some("7"), body).await;
+        assert_quietly_ignored(addr, r).await;
+    }
+}
+
 /// 不假设 `SessionStart` 一定先到 —— Task 3 的端到端里实测过 `-p` 模式下第一个
 /// 到达的是 `UserPromptSubmit`。任何事件都要能惰性建出会话。
 #[tokio::test]

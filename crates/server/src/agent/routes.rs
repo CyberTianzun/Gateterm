@@ -300,6 +300,10 @@ pub async fn hook(
     };
 
     let event = crate::agent::edit::event_of_slug(&event_slug);
+    if !adapter.accepts_payload(&payload) {
+        log_ignored("foreign-agent-payload");
+        return ignored();
+    }
     let is_blocking = adapter.is_blocking(&event);
     let update = if is_blocking {
         None
