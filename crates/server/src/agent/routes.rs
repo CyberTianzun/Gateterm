@@ -386,7 +386,11 @@ async fn blocking_hook(
     session: u64,
     payload: &serde_json::Value,
 ) -> Response {
-    let tool_name = payload.get("tool_name").and_then(|v| v.as_str()).map(str::to_string);
+    let tool_name = payload
+        .get("tool_name")
+        .or_else(|| payload.get("toolName"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     // 先确保会话存在,并把工具名带进去 —— 广播出去的 `AgentEvent.detail` 就是它。
     // 命令原文(`tool_input`)**不进广播**:控制通道有 4 KiB 上限且不许走大块数据
     // (协议 §10 / R4),客户端要详情就去拉 `/api/agents/pending`。
@@ -411,7 +415,11 @@ async fn blocking_hook(
         agent_session_id: agent_session_id.to_string(),
         session: Some(session),
         tool_name,
-        tool_input: payload.get("tool_input").cloned().unwrap_or(serde_json::Value::Null),
+        tool_input: payload
+            .get("tool_input")
+            .or_else(|| payload.get("toolInput"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
         created_at: now,
         expires_at: now + state.agents.pending_timeout_secs,
     };

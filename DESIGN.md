@@ -125,7 +125,8 @@ None of the supported agents are wrapped or proxied — the agent started in a s
 | **Claude Code** | ✓ | ✓ | ✓ | ✓ | Automatic hooks in `~/.claude/settings.json` |
 | **Codex** | ✓ | ✓ | ✓ | ✓ | Automatic hooks (review once with `/hooks` inside Codex) |
 | **Gemini CLI** | ✓ | ✓ | ✓ | ✓ | Automatic hooks in `~/.gemini/settings.json` |
-| **OpenCode** | ✓ | ✓ | ✓ | ✓ | Generated OpenCode plugin hooks |
+| **OpenCode** | ✓ | ✓ | ✓ | ✓ | Generated OpenCode plugin at `~/.config/opencode/plugins/gateterm.js` |
+| **GitHub Copilot (`copilot`)** | ✓ | ✓ | ✓ | ✓ | Hook config at `~/.copilot/hooks/gateterm.json` |
 | **pi** | ✓ | — | ✓ | ✓ | Generated extension at `~/.pi/agent/extensions/gateterm.ts` (resumes via original session file) |
 | **Grok (`grok`)** | ✓ | — | ✓ | ✓ | Hook config at `~/.grok/hooks/gateterm.json` |
 | **Antigravity (`agy`)** | ✓ | — | ✓ | ✓ | `gateterm` entry in `~/.gemini/config/hooks.json` (parses step logs including thinking blocks) |
@@ -134,7 +135,7 @@ None of the supported agents are wrapped or proxied — the agent started in a s
 
 - **Claude Code**: Full support for hook installation, live session state, remote tool permission approval (`PermissionRequest`), Structured Chat View, and session history resume.
 - **Codex**: Supports live state, remote approval, Chat View, and history resume; installed hooks must be reviewed once via `/hooks` inside Codex.
-- **Gemini CLI & OpenCode**: Support live state, remote tool approval, Chat View, and history resume.
+- **Gemini CLI, OpenCode & GitHub Copilot**: Support live state, remote tool approval, Chat View, and history resume.
 - **pi & Grok (`grok`)**: Support live state, Chat View, and history resume; neither CLI exposes a blocking tool-permission hook event, so remote approval is not applicable.
 - **Antigravity CLI (`agy`)**: Targets the standalone Antigravity CLI independently of Gemini CLI and the Antigravity IDE. After upgrading from older Windows builds, reinstall the Antigravity integration in settings and restart running `agy` sessions to replace legacy hook commands.
 
@@ -154,7 +155,7 @@ gateterm-server purge-hooks
 
 ## Agent session history
 
-Clients can browse host-side Claude Code, Codex, pi, Grok, and Antigravity CLI transcripts (including conversations started outside Gateterm), filter by agent or keyword (title, working directory, session ID), preview recent messages, and resume sessions in one click:
+Clients can browse host-side Claude Code, Codex, OpenCode, GitHub Copilot, pi, Grok, and Antigravity CLI transcripts (including conversations started outside Gateterm), filter by agent or keyword (title, working directory, session ID), preview recent messages, and resume sessions in one click:
 
 - **Live attachment vs. spawn**: If a transcript is already associated with a running Gateterm PTY session, selecting it switches directly to that terminal. Otherwise, Gateterm spawns a new terminal in the original working directory and invokes the agent CLI's resume command (coalescing concurrent resume requests for the same session).
 - **Bounded indexing**: Startup asynchronously indexes at most 1,000 deduplicated recent sessions in memory. Clients load 50 metadata entries per page; transcript bodies are read only when previewing a session. Refreshing rebuilds the index in the background without blocking reads. Discovery scans default user agent directories on the host (excluding WSL, other OS users, or custom store paths).

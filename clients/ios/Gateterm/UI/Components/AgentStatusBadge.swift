@@ -1,6 +1,6 @@
 import SwiftUI
 
-private enum AgentKind { case claude, codex, gemini, openCode, pi, grok, agy, generic }
+private enum AgentKind { case claude, codex, gemini, openCode, copilot, pi, grok, agy, generic }
 
 private struct AgentBrand {
     let kind: AgentKind
@@ -15,6 +15,7 @@ private struct AgentBrand {
         case lower.contains("codex"): (kind, label, accent) = (.codex, "Codex", Color(rgb: 0x7A9DFF))
         case lower.contains("gemini"): (kind, label, accent) = (.gemini, "Gemini", Color(rgb: 0x3186FF))
         case lower.contains("opencode"): (kind, label, accent) = (.openCode, "OpenCode", Color(rgb: 0x38BDF8))
+        case lower.contains("copilot"): (kind, label, accent) = (.copilot, "Copilot", Color(rgb: 0xA371F7))
         case lower == "pi" || lower.hasPrefix("pi-"): (kind, label, accent) = (.pi, "pi", Color(rgb: 0xF472B6))
         case lower.contains("grok"): (kind, label, accent) = (.grok, "Grok", Color(rgb: 0xF3F4F6))
         case lower.contains("agy") || lower.contains("antigravity"): (kind, label, accent) = (.agy, "AGY", Color(rgb: 0x3186FF))
@@ -35,6 +36,9 @@ internal let GEMINI_SVG_PATH =
 
 internal let OPENCODE_SVG_PATH =
     "M 16 6 L 8 6 L 8 18 L 16 18 L 16 6 Z M 20 22 L 4 22 L 4 2 L 20 2 L 20 22 Z"
+
+internal let COPILOT_SVG_PATH =
+    "M 23.922 16.992 C 23.061 18.495 18.067 22.012 12 22.012 C 5.933 22.012 0.939 18.495 0.078 16.992 C 0.027 16.895 0 16.785 0 16.673 L 0 14.226 C 0 13.662 0.262 13.131 0.708 12.789 C 1.2 12.406 1.797 11.995 2.525 11.584 C 2.458 9.211 2.838 7.229 3.694 5.799 C 4.539 4.386 5.899 3.558 7.757 3.249 C 9.199 3.012 10.606 2.987 11.999 2.988 C 13.393 2.987 14.8 3.012 16.242 3.249 C 18.1 3.558 19.46 4.386 20.305 5.799 C 21.161 7.229 21.542 9.211 21.475 11.584 C 22.202 11.995 22.8 12.406 23.291 12.789 C 23.738 13.131 24 13.662 24 14.226 L 24 16.673 C 24 16.785 23.973 16.895 23.922 16.992 Z M 4.868 12.966 C 6.238 13.524 8.226 13.861 11.225 13.987 L 11.225 10.228 C 9.488 10.172 8.248 9.914 7.367 9.497 C 6.283 8.983 5.736 8.211 5.367 7.121 C 4.94 8.352 4.764 10.258 4.868 12.966 Z M 12.775 13.987 C 15.774 13.861 17.762 13.524 19.132 12.966 C 19.236 10.258 19.06 8.352 18.633 7.121 C 18.264 8.211 17.717 8.983 16.633 9.497 C 15.752 9.914 14.512 10.172 12.775 10.228 L 12.775 13.987 Z M 9.25 16.25 C 8.56 16.25 8 16.81 8 17.5 C 8 18.19 8.56 18.75 9.25 18.75 C 9.94 18.75 10.5 18.19 10.5 17.5 C 10.5 16.81 9.94 16.25 9.25 16.25 Z M 14.75 16.25 C 14.06 16.25 13.5 16.81 13.5 17.5 C 13.5 18.19 14.06 18.75 14.75 18.75 C 15.44 18.75 16 18.19 16 17.5 C 16 16.81 15.44 16.25 14.75 16.25 Z"
 
 internal let GROK_SVG_PATH =
     "M 9.27 15.29 L 17.248 9.393 C 17.639 9.103 18.198 9.216 18.385 9.665 C 19.365 12.034 18.927 14.88 16.975 16.834 C 15.024 18.788 12.308 19.216 9.826 18.24 L 7.115 19.497 C 11.004 22.158 15.726 21.5 18.677 18.544 C 21.018 16.2 21.743 13.005 21.065 10.124 L 21.071 10.131 C 20.088 5.899 21.313 4.207 23.821 0.748 C 23.881 0.666 23.941 0.584 24 0.5 L 20.699 3.805 L 20.699 3.795 L 9.267 15.292 Z M 7.623 16.723 C 4.831 14.053 5.313 9.922 7.694 7.539 C 9.455 5.776 12.341 5.056 14.86 6.114 L 17.565 4.864 C 17.003 4.45 16.388 4.114 15.736 3.864 C 12.386 2.493 8.541 3.268 5.984 5.83 C 3.451 8.366 2.654 12.266 4.022 15.594 C 5.044 18.081 3.369 19.84 1.682 21.616 C 1.083 22.246 0.483 22.875 0 23.541 L 7.62 16.726 Z"
@@ -82,6 +86,7 @@ private let claudePath = parseSvgPath24(CLAUDE_SVG_PATH)
 private let codexPath = parseSvgPath24(CODEX_SVG_PATH)
 private let geminiPath = parseSvgPath24(GEMINI_SVG_PATH)
 private let openCodePath = parseSvgPath24(OPENCODE_SVG_PATH)
+private let copilotPath = parseSvgPath24(COPILOT_SVG_PATH)
 private let grokPath = parseSvgPath24(GROK_SVG_PATH)
 private let agyPath = parseSvgPath24(AGY_SVG_PATH)
 private let piPath = parseSvgPath24(PI_SVG_PATH)
@@ -135,6 +140,8 @@ struct AgentBrandIcon: View {
             )
         case .openCode:
             ctx.fill(openCodePath, with: .color(color), style: FillStyle(eoFill: true))
+        case .copilot:
+            ctx.fill(copilotPath, with: .color(color), style: FillStyle(eoFill: true))
         case .pi:
             ctx.stroke(
                 piPath,

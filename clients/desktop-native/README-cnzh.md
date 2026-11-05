@@ -28,7 +28,7 @@ Gateterm 的核心设计是 **「后台常驻的 `gateterm-server` 持有你的 
 - **N 叉均分分屏 (`PaneTree`)** — 同方向连续分屏（如连续点击两次上下分屏或左右分屏）自动归并为同级兄弟节点并按 `1/N` 等分空间（2 分屏各 1/2，3 分屏各 1/3，4 分屏各 1/4），单窗格零多余顶栏。
 - **与 `clients/web` 一致的智能新建会话弹窗 (`New Session Modal`)** — 点击 `+` 弹出带实时筛选框的分组菜单，按 `provider`（内置、自定义、iTerm2、Windows Terminal）分组展示 `name` 与 `detail · cwd`，点击即启动。
 - **开箱即用 + 多服务端连接** — 启动时默认在进程内自动拉起内置 `gateterm-server`（端口冲突自动回退），同时支持一键添加多台远端 `gateterm-server` 节点（支持直接粘贴 `http://host:port/#token=...` 链接）。
-- **原生感知 AI Coding Agent** — 实时感知 Claude Code、Codex、Gemini CLI、OpenCode、pi、Grok 与 Antigravity CLI 的运行状态，顶部弹出远程工具审批横幅，并支持一键切换为「结构化对话视图」。
+- **原生感知 AI Coding Agent** — 实时感知 Claude Code、Codex、Gemini CLI、OpenCode、GitHub Copilot、pi、Grok 与 Antigravity CLI 的运行状态，顶部弹出远程工具审批横幅，并支持一键切换为「结构化对话视图」。
 
 ## 有什么 (`What's inside`)
 

@@ -1364,6 +1364,58 @@ mod tests {
     }
 
     #[test]
+    fn scans_opencode_and_copilot_history_sessions() {
+        let home = tempfile::tempdir().unwrap();
+        let ws = home.path().join("project");
+        fs::create_dir_all(&ws).unwrap();
+        let ws_str = ws.to_string_lossy().replace('\\', "\\\\");
+
+        fixture(
+            home.path(),
+            ".local/share/opencode/gateterm-sessions/ses_open1.jsonl",
+            &format!(
+                "{{\"type\":\"session\",\"id\":\"ses_open1\",\"cwd\":\"{ws_str}\",\"title\":\"OpenCode Title\",\"model\":\"claude-sonnet-4\"}}\n\
+                 {{\"id\":\"m1\",\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"text\",\"text\":\"hello opencode\"}}]}}}}\n"
+            ),
+        );
+        fixture(
+            home.path(),
+            ".copilot/session-state/0bd6225d-12e2-4e6d-aef7-c11dd0753a2e/workspace.yaml",
+            &format!("id: 0bd6225d-12e2-4e6d-aef7-c11dd0753a2e\ncwd: {ws}\nname: \"Copilot Title\"\nuser_named: true\n", ws = ws.display()),
+        );
+        fixture(
+            home.path(),
+            ".copilot/session-state/0bd6225d-12e2-4e6d-aef7-c11dd0753a2e/events.jsonl",
+            &format!(
+                "{{\"type\":\"session.start\",\"data\":{{\"sessionId\":\"0bd6225d-12e2-4e6d-aef7-c11dd0753a2e\",\"selectedModel\":\"gpt-5\",\"context\":{{\"cwd\":\"{ws_str}\"}}}},\"id\":\"e0\",\"timestamp\":\"2026-07-31T08:13:02.078Z\"}}\n\
+                 {{\"type\":\"user.message\",\"data\":{{\"content\":\"hello copilot\"}},\"id\":\"e1\",\"timestamp\":\"2026-07-31T08:13:18.610Z\"}}\n"
+            ),
+        );
+
+        let catalog = scan(&DetectEnv {
+            home: home.path().to_path_buf(),
+            path: None,
+        });
+        let oc = catalog
+            .entries
+            .iter()
+            .find(|e| e.agent_id == "opencode")
+            .expect("should find opencode history entry");
+        assert_eq!(oc.agent_session_id, "ses_open1");
+        assert_eq!(oc.title, "OpenCode Title");
+        assert_eq!(oc.model.as_deref(), Some("claude-sonnet-4"));
+
+        let cop = catalog
+            .entries
+            .iter()
+            .find(|e| e.agent_id == "copilot")
+            .expect("should find copilot history entry");
+        assert_eq!(cop.agent_session_id, "0bd6225d-12e2-4e6d-aef7-c11dd0753a2e");
+        assert_eq!(cop.title, "Copilot Title");
+        assert_eq!(cop.model.as_deref(), Some("gpt-5"));
+    }
+
+    #[test]
     fn every_registered_adapter_declares_history_roots_and_resume_spec() {
         let home = Path::new("/tmp/home");
         for adapter in super::super::registry() {

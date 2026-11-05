@@ -29,7 +29,7 @@
 
 - **极致轻量与常驻** — 单一静态二进制守护进程托管会话；关掉桌面窗口、刷新浏览器或切走手机 App，后台任务与 Agent 照常运行。
 - **原生 GPU 桌面工作台 (`clients/desktop-native`)** — 基于 Rust、`gpui` 与 `alacritty_terminal` 构建：沉浸式虚拟标题栏、内置本地服务端自动拉起、多远程节点管理、N 叉等分分屏与终端内回滚搜索。
-- **AI Coding Agent 深度感知** — 原生支持 Claude Code、Codex、Gemini CLI、OpenCode、pi、Grok 与 Antigravity CLI：实时状态图标、远程工具调用权限审批、结构化对话视图（Chat View）以及宿主机历史会话检索与一键恢复。
+- **AI Coding Agent 深度感知** — 原生支持 Claude Code、Codex、Gemini CLI、OpenCode、GitHub Copilot、pi、Grok 与 Antigravity CLI：实时状态图标、远程工具调用权限审批、结构化对话视图（Chat View）以及宿主机历史会话检索与一键恢复。
 - **全平台随时接管** — 在电脑上用原生 GPU 桌面端或浏览器开跑任务，出门用 Android 原生客户端或 Gateterm Cloud 推送随时查看状态、审批工具调用。
 
 ## Release 构建产物与界面预览
@@ -65,7 +65,7 @@
 | **托盘服务端宿主 (`clients/desktop-web`)** | 面向 Windows 与 macOS 的极简托盘常驻进程 · 原生设置窗口（支持扫码配对、AI 钩子管理与 Cloud 登录） · 终端在浏览器或移动端打开 |
 | **Agent 感知与远程审批** | 逐会话品牌图标与实时状态点 (`Waiting` / `Working` / `Thinking` / `Error` / `Idle`) · 工具调用阻塞时顶部弹出审批横幅（一键 **允许** / **拒绝** / 跳转会话） · 设置内一键安装/卸载钩子 |
 | **结构化对话视图 (`Chat View`)** | 随时将运行 Agent 的会话在「终端画面」与「结构化消息流」间切换 · 独立渲染 `Thinking` 思考过程、`ToolUse` 工具参数与 `ToolResult` 结果 |
-| **Agent 历史会话与恢复** | 检索宿主机已有的 Claude Code、Codex、pi、Grok 与 Antigravity 记录（含在 Gateterm 之外启动的对话） · 按 Agent 与关键词搜索、预览对话并一键在原目录恢复 |
+| **Agent 历史会话与恢复** | 检索宿主机已有的 Claude Code、Codex、OpenCode、GitHub Copilot、pi、Grok 与 Antigravity 记录（含在 Gateterm 之外启动的对话） · 按 Agent 与关键词搜索、预览对话并一键在原目录恢复 |
 | **智能启动菜单 (`Launchers`)** | 点击 **+** 直接列出可用启动项 · 自动扫描系统默认 Shell、`config.toml` 自定义项、macOS **iTerm2** Profile 与 **Windows Terminal** 配置 |
 | **Web 与 Android 原生客户端** | `clients/web`（零配置内嵌于服务端二进制） · `clients/android`（Kotlin + Jetpack Compose 原生客户端，支持扫码配对、Agent 双行快捷键栏与后台保活） |
 | **Gateterm Cloud（可选）** | 当 Agent 进入等待确认或任务完成时向手机发送实时通知 · 零终端数据与访问 Token 经过中继 |
@@ -80,6 +80,7 @@
 | **Codex** | ✓ | ✓ | ✓ | ✓ |
 | **Gemini CLI** | ✓ | ✓ | ✓ | ✓ |
 | **OpenCode** | ✓ | ✓ | ✓ | ✓ |
+| **GitHub Copilot (`copilot`)** | ✓ | ✓ | ✓ | ✓ |
 | **pi** | ✓ | — | ✓ | ✓ |
 | **Grok (`grok`)** | ✓ | — | ✓ | ✓ |
 | **Antigravity (`agy`)** | ✓ | — | ✓ | ✓ |

@@ -28,9 +28,11 @@ pub mod transcript;
 pub use adapters::antigravity::transcript as antigravity_transcript;
 pub use adapters::claude_code::transcript as claude_transcript;
 pub use adapters::codex::{transcript as codex_transcript, trust as codex_trust};
+pub use adapters::copilot::transcript as copilot_transcript;
 pub use adapters::grok::transcript as grok_transcript;
+pub use adapters::opencode::transcript as opencode_transcript;
 pub use adapters::pi::transcript as pi_transcript;
-pub use adapters::{antigravity, claude_code, codex, grok, pi};
+pub use adapters::{antigravity, claude_code, codex, copilot, grok, opencode, pi};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -349,7 +351,7 @@ mod tests {
     #[allow(clippy::useless_asref)]
     fn static_registry_and_as_ref_are_zero_alloc_compatible() {
         let all: &'static [&'static dyn AgentAdapter] = registry();
-        assert_eq!(all.len(), 5);
+        assert_eq!(all.len(), 7);
         let claude: &'static dyn AgentAdapter = find("claude-code").unwrap();
         let via_as_ref: &dyn AgentAdapter = claude.as_ref();
         assert_eq!(via_as_ref.id(), "claude-code");
@@ -380,7 +382,7 @@ mod tests {
         ] {
             let src = std::fs::read_to_string(agent_dir.join(file)).unwrap();
             let prod = src.split("#[cfg(test)]").next().unwrap_or(&src);
-            for id in ["\"claude-code\"", "\"codex\"", "\"pi\"", "\"grok\"", "\"antigravity\""] {
+            for id in ["\"claude-code\"", "\"codex\"", "\"pi\"", "\"grok\"", "\"antigravity\"", "\"opencode\"", "\"copilot\""] {
                 assert!(
                     !prod.contains(id),
                     "{file} production code still hardcodes agent id {id}"

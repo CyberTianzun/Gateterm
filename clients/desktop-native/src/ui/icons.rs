@@ -33,6 +33,8 @@ pub enum GatetermIcon {
     AgentGemini,
     /// OpenCode agent icon
     AgentOpenCode,
+    /// GitHub Copilot agent icon
+    AgentCopilot,
     /// pi coding agent icon
     AgentPi,
     /// xAI Grok agent icon
@@ -54,6 +56,8 @@ impl GatetermIcon {
             Self::AgentGemini
         } else if lower.contains("opencode") {
             Self::AgentOpenCode
+        } else if lower.contains("copilot") {
+            Self::AgentCopilot
         } else if lower == "pi" || lower.starts_with("pi-") {
             Self::AgentPi
         } else if lower.contains("grok") {
@@ -81,6 +85,7 @@ impl IconNamed for GatetermIcon {
             Self::AgentCodex => "gateterm/icons/agent-codex.svg".into(),
             Self::AgentGemini => "gateterm/icons/agent-gemini.svg".into(),
             Self::AgentOpenCode => "gateterm/icons/agent-opencode.svg".into(),
+            Self::AgentCopilot => "gateterm/icons/agent-copilot.svg".into(),
             Self::AgentPi => "gateterm/icons/agent-pi.svg".into(),
             Self::AgentGrok => "gateterm/icons/agent-grok.svg".into(),
             Self::AgentAgy => "gateterm/icons/agent-agy.svg".into(),
@@ -113,6 +118,8 @@ const AGENT_GEMINI_SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" wid
 
 const AGENT_OPENCODE_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M 16 6 L 8 6 L 8 18 L 16 18 L 16 6 Z M 20 22 L 4 22 L 4 2 L 20 2 L 20 22 Z"/></svg>"#;
 
+const AGENT_COPILOT_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M 23.922 16.992 C 23.061 18.495 18.067 22.012 12 22.012 C 5.933 22.012 0.939 18.495 0.078 16.992 C 0.027 16.895 0 16.785 0 16.673 L 0 14.226 C 0 13.662 0.262 13.131 0.708 12.789 C 1.2 12.406 1.797 11.995 2.525 11.584 C 2.458 9.211 2.838 7.229 3.694 5.799 C 4.539 4.386 5.899 3.558 7.757 3.249 C 9.199 3.012 10.606 2.987 11.999 2.988 C 13.393 2.987 14.8 3.012 16.242 3.249 C 18.1 3.558 19.46 4.386 20.305 5.799 C 21.161 7.229 21.542 9.211 21.475 11.584 C 22.202 11.995 22.8 12.406 23.291 12.789 C 23.738 13.131 24 13.662 24 14.226 L 24 16.673 C 24 16.785 23.973 16.895 23.922 16.992 Z M 4.868 12.966 C 6.238 13.524 8.226 13.861 11.225 13.987 L 11.225 10.228 C 9.488 10.172 8.248 9.914 7.367 9.497 C 6.283 8.983 5.736 8.211 5.367 7.121 C 4.94 8.352 4.764 10.258 4.868 12.966 Z M 12.775 13.987 C 15.774 13.861 17.762 13.524 19.132 12.966 C 19.236 10.258 19.06 8.352 18.633 7.121 C 18.264 8.211 17.717 8.983 16.633 9.497 C 15.752 9.914 14.512 10.172 12.775 10.228 L 12.775 13.987 Z M 9.25 16.25 C 8.56 16.25 8 16.81 8 17.5 C 8 18.19 8.56 18.75 9.25 18.75 C 9.94 18.75 10.5 18.19 10.5 17.5 C 10.5 16.81 9.94 16.25 9.25 16.25 Z M 14.75 16.25 C 14.06 16.25 13.5 16.81 13.5 17.5 C 13.5 18.19 14.06 18.75 14.75 18.75 C 15.44 18.75 16 18.19 16 17.5 C 16 16.81 15.44 16.25 14.75 16.25 Z"/></svg>"#;
+
 const AGENT_PI_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M 4.5 6.75 L 19.5 6.75 M 9.375 6.75 L 9.375 17.625 M 15.375 6.75 L 15.375 15.375 C 15.375 16.618 16.382 17.625 17.625 17.625"/></svg>"#;
 
 const AGENT_GROK_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M 9.27 15.29 L 17.248 9.393 C 17.639 9.103 18.198 9.216 18.385 9.665 C 19.365 12.034 18.927 14.88 16.975 16.834 C 15.024 18.788 12.308 19.216 9.826 18.24 L 7.115 19.497 C 11.004 22.158 15.726 21.5 18.677 18.544 C 21.018 16.2 21.743 13.005 21.065 10.124 L 21.071 10.131 C 20.088 5.899 21.313 4.207 23.821 0.748 C 23.881 0.666 23.941 0.584 24 0.5 L 20.699 3.805 L 20.699 3.795 L 9.267 15.292 Z M 7.623 16.723 C 4.831 14.053 5.313 9.922 7.694 7.539 C 9.455 5.776 12.341 5.056 14.86 6.114 L 17.565 4.864 C 17.003 4.45 16.388 4.114 15.736 3.864 C 12.386 2.493 8.541 3.268 5.984 5.83 C 3.451 8.366 2.654 12.266 4.022 15.594 C 5.044 18.081 3.369 19.84 1.682 21.616 C 1.083 22.246 0.483 22.875 0 23.541 L 7.62 16.726 Z"/></svg>"#;
@@ -132,6 +139,8 @@ pub fn agent_brand_style(agent_id: &str, cx: &gpui::App) -> (&'static str, gpui:
         ("Gemini", gpui::rgb(0x3186FF).into())
     } else if lower.contains("opencode") {
         ("OpenCode", gpui::rgb(0x38BDF8).into())
+    } else if lower.contains("copilot") {
+        ("Copilot", gpui::rgb(0xA371F7).into())
     } else if lower == "pi" || lower.starts_with("pi-") {
         ("pi", gpui::rgb(0xF472B6).into())
     } else if lower.contains("grok") {
@@ -223,6 +232,7 @@ const ALL_CUSTOM_ICON_PATHS: &[&str] = &[
     "gateterm/icons/agent-codex.svg",
     "gateterm/icons/agent-gemini.svg",
     "gateterm/icons/agent-opencode.svg",
+    "gateterm/icons/agent-copilot.svg",
     "gateterm/icons/agent-pi.svg",
     "gateterm/icons/agent-grok.svg",
     "gateterm/icons/agent-agy.svg",
@@ -248,6 +258,7 @@ impl AssetSource for GatetermAssets {
             "gateterm/icons/agent-codex.svg" => Ok(Some(Cow::Borrowed(AGENT_CODEX_SVG))),
             "gateterm/icons/agent-gemini.svg" => Ok(Some(Cow::Borrowed(AGENT_GEMINI_SVG))),
             "gateterm/icons/agent-opencode.svg" => Ok(Some(Cow::Borrowed(AGENT_OPENCODE_SVG))),
+            "gateterm/icons/agent-copilot.svg" => Ok(Some(Cow::Borrowed(AGENT_COPILOT_SVG))),
             "gateterm/icons/agent-pi.svg" => Ok(Some(Cow::Borrowed(AGENT_PI_SVG))),
             "gateterm/icons/agent-grok.svg" => Ok(Some(Cow::Borrowed(AGENT_GROK_SVG))),
             "gateterm/icons/agent-agy.svg" => Ok(Some(Cow::Borrowed(AGENT_AGY_SVG))),
@@ -286,6 +297,7 @@ mod tests {
             GatetermIcon::AgentCodex,
             GatetermIcon::AgentGemini,
             GatetermIcon::AgentOpenCode,
+            GatetermIcon::AgentCopilot,
             GatetermIcon::AgentPi,
             GatetermIcon::AgentGrok,
             GatetermIcon::AgentAgy,
@@ -319,6 +331,7 @@ mod tests {
         assert_eq!(GatetermIcon::for_agent("codex"), GatetermIcon::AgentCodex);
         assert_eq!(GatetermIcon::for_agent("gemini-cli"), GatetermIcon::AgentGemini);
         assert_eq!(GatetermIcon::for_agent("opencode"), GatetermIcon::AgentOpenCode);
+        assert_eq!(GatetermIcon::for_agent("copilot"), GatetermIcon::AgentCopilot);
         assert_eq!(GatetermIcon::for_agent("pi"), GatetermIcon::AgentPi);
         assert_eq!(GatetermIcon::for_agent("grok"), GatetermIcon::AgentGrok);
         assert_eq!(GatetermIcon::for_agent("agy"), GatetermIcon::AgentAgy);

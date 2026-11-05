@@ -69,5 +69,7 @@ fun agentDisplayName(agentId: String): String = when (agentId) {
     "grok" -> "Grok"
     "pi" -> "Pi"
     "antigravity" -> "Antigravity"
+    "opencode" -> "OpenCode"
+    "copilot" -> "GitHub Copilot"
     else -> agentId
 }

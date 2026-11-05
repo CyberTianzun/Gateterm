@@ -28,7 +28,7 @@ Gateterm's core boundary is that **a background `gateterm-server` owns your PTY 
 - **N-ary Equal Split Panes (`PaneTree`)** — Splitting repeatedly along the same axis (e.g., clicking vertical or horizontal split twice) automatically flattens into sibling nodes and divides space into equal `1/N` shares (2 panes = 1/2 each, 3 panes = 1/3 each, 4 panes = 1/4 each), with zero per-pane header chrome when unsplit.
 - **Provider-Grouped New Session Popup (`New Session Modal`)** — Matches `clients/web`: clicking `+` opens a filterable popover grouped by `provider` (`built-in`, `config`, `iTerm2`, `Windows Terminal`), displaying `name` and `detail · cwd` for one-click launch.
 - **Out-of-the-Box Local Server + Multi-Server Remote Connections** — Automatically supervises an in-process `gateterm-server` on launch (with automatic port fallback), while letting you connect to any number of remote `gateterm-server` hosts (including pasting `http://host:port/#token=...` URLs directly).
-- **Native AI Coding Agent Awareness** — Tracks live status for Claude Code, Codex, Gemini CLI, OpenCode, pi, Grok, and Antigravity CLI, surfaces a top permission approval banner when an agent blocks on a tool call, and switches between the raw VT terminal and a Structured Chat View in one click.
+- **Native AI Coding Agent Awareness** — Tracks live status for Claude Code, Codex, Gemini CLI, OpenCode, GitHub Copilot, pi, Grok, and Antigravity CLI, surfaces a top permission approval banner when an agent blocks on a tool call, and switches between the raw VT terminal and a Structured Chat View in one click.
 
 ## What's Inside
 

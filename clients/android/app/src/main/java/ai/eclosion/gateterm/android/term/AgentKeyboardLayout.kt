@@ -54,7 +54,7 @@ data class AgentKeyLayout(
 object AgentKeyboardLayouts {
     val agents = linkedMapOf(
         "claude-code" to "Claude Code", "codex" to "Codex", "pi" to "pi",
-        "grok" to "Grok", "antigravity" to "Antigravity",
+        "grok" to "Grok", "antigravity" to "Antigravity", "opencode" to "OpenCode", "copilot" to "GitHub Copilot",
     )
     val defaultPriority = listOf(
         KeyboardShortcut.Keyboard, KeyboardShortcut.CtrlC, KeyboardShortcut.Escape, KeyboardShortcut.Tab,

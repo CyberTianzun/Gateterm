@@ -251,10 +251,14 @@ test("答案以问题原文为键,并保留原入参的其它字段", () => {
 test("agentBrandLabel and agentBrandIconSvg return official brand icons and colors", async () => {
   const { agentBrandLabel, agentBrandIconSvg } = await import("./.agents.build.mjs");
   assert.equal(agentBrandLabel("codex"), "Codex");
+  assert.equal(agentBrandLabel("opencode"), "OpenCode");
+  assert.equal(agentBrandLabel("copilot"), "Copilot");
   assert.equal(agentBrandLabel("grok"), "Grok");
   assert.equal(agentBrandLabel("agy"), "AGY");
   assert.equal(agentBrandLabel("antigravity"), "AGY");
   assert.ok(agentBrandIconSvg("codex").includes("#7A9DFF"));
+  assert.ok(agentBrandIconSvg("opencode").includes("M 16 6 L 8 6"));
+  assert.ok(agentBrandIconSvg("copilot").includes("M 23.922 16.992"));
   assert.ok(agentBrandIconSvg("grok").includes("M 9.27 15.29"));
   const agySvg = agentBrandIconSvg("agy");
   assert.ok(agySvg.includes("M 21.751 22.607"));

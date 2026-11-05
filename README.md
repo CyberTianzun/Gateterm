@@ -29,7 +29,7 @@
 
 - **Memory-frugal & persistent** — A tiny single-binary daemon hosts your sessions. Quit the desktop app, close the browser tab, or switch away on your phone — your shells and coding agents keep running.
 - **Native GPU Desktop Workbench (`clients/desktop-native`)** — Built with Rust, `gpui`, and `alacritty_terminal`: integrated virtual title bar, embedded local server out of the box, multi-server remote connections, N-ary equal split panes, and in-terminal scrollback search.
-- **Agent-aware** — First-class integration with Claude Code, Codex, Gemini CLI, OpenCode, pi, Grok, and Antigravity CLI: live status badges, remote tool permission approval, Structured Chat View, and past session browsing & resume.
+- **Agent-aware** — First-class integration with Claude Code, Codex, Gemini CLI, OpenCode, GitHub Copilot, pi, Grok, and Antigravity CLI: live status badges, remote tool permission approval, Structured Chat View, and past session browsing & resume.
 - **Take over from any device** — Start an agent in the desktop workbench or browser on your workstation, then check its progress or approve a tool call from the native Android client or Gateterm Cloud notifications.
 
 ## Release builds & screenshots
@@ -65,7 +65,7 @@ Starts an embedded local `gateterm-server` automatically on launch, renders term
 | **Tray Server Host (`clients/desktop-web`)** | Lightweight tray-resident server process for Windows & macOS · Native settings window with QR pairing, AI hook installer, and Cloud sign-in · Open terminals in any browser or mobile client |
 | **Agent Awareness & Remote Approval** | Per-session live brand icons & status badges (`Waiting` / `Working` / `Thinking` / `Error` / `Idle`) · Top approval banner when an agent blocks on a tool call (**Allow** / **Deny** / focus session) · One-click hook management |
 | **Structured Chat View (`Chat View`)** | Switch any active agent session between its terminal screen and a structured message stream · Renders `Thinking` blocks, `ToolUse` inputs, and `ToolResult` outputs |
-| **Agent Session History & Resume** | Browse host-side Claude Code, Codex, pi, Grok, and Antigravity records (including sessions started outside Gateterm) · Filter by agent, search titles/directories, preview transcripts, and resume in one click |
+| **Agent Session History & Resume** | Browse host-side Claude Code, Codex, OpenCode, GitHub Copilot, pi, Grok, and Antigravity records (including sessions started outside Gateterm) · Filter by agent, search titles/directories, preview transcripts, and resume in one click |
 | **Smart Launchers** | Clicking **+** opens a ready-to-launch menu discovering default shells, custom `config.toml` entries, macOS **iTerm2** profiles, and **Windows Terminal** profiles |
 | **Web & Native Android Clients** | `clients/web` (bundled directly into the server binary) · `clients/android` (Kotlin + Jetpack Compose client with QR server pairing, agent-adaptive shortcut bar, and background keepalive) |
 | **Gateterm Cloud (Optional)** | Pushes mobile notifications when an agent enters `Waiting` or completes a turn · Zero terminal data or access tokens transit the relay |
@@ -80,6 +80,7 @@ Installing an agent's hook under **Settings → AI Agent Hooks** unlocks live st
 | **Codex** | ✓ | ✓ | ✓ | ✓ |
 | **Gemini CLI** | ✓ | ✓ | ✓ | ✓ |
 | **OpenCode** | ✓ | ✓ | ✓ | ✓ |
+| **GitHub Copilot (`copilot`)** | ✓ | ✓ | ✓ | ✓ |
 | **pi** | ✓ | — | ✓ | ✓ |
 | **Grok (`grok`)** | ✓ | — | ✓ | ✓ |
 | **Antigravity (`agy`)** | ✓ | — | ✓ | ✓ |

@@ -6,7 +6,9 @@
 pub mod antigravity;
 pub mod claude_code;
 pub mod codex;
+pub mod copilot;
 pub mod grok;
+pub mod opencode;
 pub mod pi;
 
 pub static REGISTRY: &[&dyn super::AgentAdapter] = &[
@@ -15,4 +17,6 @@ pub static REGISTRY: &[&dyn super::AgentAdapter] = &[
     &pi::Pi,
     &grok::Grok,
     &antigravity::Antigravity,
+    &opencode::OpenCode,
+    &copilot::Copilot,
 ];

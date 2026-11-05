@@ -103,7 +103,7 @@ struct AgentKeyLayout: Equatable {
 /// Same JSON shape and ordering rules as Android `AgentKeyboardLayouts`.
 enum AgentKeyboardLayouts {
     static let agents: [(id: String, name: String)] = [
-        ("claude-code", "Claude Code"), ("codex", "Codex"), ("pi", "pi"), ("grok", "Grok"), ("antigravity", "Antigravity"),
+        ("claude-code", "Claude Code"), ("codex", "Codex"), ("pi", "pi"), ("grok", "Grok"), ("antigravity", "Antigravity"), ("opencode", "OpenCode"), ("copilot", "GitHub Copilot"),
     ]
     static let defaultPriority: [KeyboardShortcut] = [.keyboard, .ctrlC, .escape, .tab, .up, .down, .left, .right]
     static let priorityOptions: [KeyboardShortcut] = defaultPriority + [

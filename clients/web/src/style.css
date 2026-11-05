@@ -548,6 +548,7 @@ body[data-sidebar-position="hidden"] #menu { display: none; }
 .aicon[data-agent*="codex"] { color: #7a9dff; }
 .aicon[data-agent*="gemini"] { color: #3186ff; }
 .aicon[data-agent*="opencode"] { color: #38bdf8; }
+.aicon[data-agent*="copilot"] { color: #a371f7; }
 .aicon[data-agent="pi"], .aicon[data-agent^="pi-"] { color: #f472b6; }
 .aicon[data-agent*="grok"] { color: var(--text); }
 .aicon[data-agent*="agy"], .aicon[data-agent*="antigravity"] { color: #3186ff; }

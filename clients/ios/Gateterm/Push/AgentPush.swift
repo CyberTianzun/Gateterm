@@ -39,6 +39,8 @@ func agentDisplayName(_ agentId: String) -> String {
     case "grok": "Grok"
     case "pi": "Pi"
     case "antigravity": "Antigravity"
+    case "opencode": "OpenCode"
+    case "copilot": "GitHub Copilot"
     default: agentId
     }
 }
