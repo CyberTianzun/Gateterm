@@ -160,7 +160,7 @@ mod tests {
     fn windows_shortcuts_match_native_conpty_probe_records() {
         let st = dummy_state();
         let cases = [
-            // Shift+Enter (multiline in Claude Code / Codex / Gemini CLI)
+            // Shift+Enter (multiline in Claude Code / Codex / Antigravity CLI)
             (
                 stroke("enter", true, false, false),
                 "\x1b[13;28;13;1;16;1_\x1b[13;28;13;0;16;1_",

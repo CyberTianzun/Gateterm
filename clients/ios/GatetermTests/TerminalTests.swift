@@ -130,7 +130,6 @@ final class AgentBrandIconTests: XCTestCase {
         let icons: [(String, String)] = [
             ("claude", CLAUDE_SVG_PATH),
             ("codex", CODEX_SVG_PATH),
-            ("gemini", GEMINI_SVG_PATH),
             ("opencode", OPENCODE_SVG_PATH),
             ("copilot", COPILOT_SVG_PATH),
             ("grok", GROK_SVG_PATH),

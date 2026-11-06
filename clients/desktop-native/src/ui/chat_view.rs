@@ -164,7 +164,7 @@ pub fn render_chat_view(
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
                     .child(locale.t(
-                        "暂无结构化对话记录。若此会话正在运行 Claude / Codex / Gemini / OpenCode，请点击刷新。",
+                        "暂无结构化对话记录。若此会话正在运行 Claude / Codex / OpenCode / Antigravity，请点击刷新。",
                         "No structured transcript messages yet. Click Refresh if an AI agent is running in this session.",
                     )),
             )

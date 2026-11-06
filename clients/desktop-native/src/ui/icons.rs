@@ -29,8 +29,6 @@ pub enum GatetermIcon {
     AgentClaude,
     /// OpenAI Codex agent icon
     AgentCodex,
-    /// Google Gemini CLI agent icon
-    AgentGemini,
     /// OpenCode agent icon
     AgentOpenCode,
     /// GitHub Copilot agent icon
@@ -52,8 +50,6 @@ impl GatetermIcon {
             Self::AgentClaude
         } else if lower.contains("codex") {
             Self::AgentCodex
-        } else if lower.contains("gemini") {
-            Self::AgentGemini
         } else if lower.contains("opencode") {
             Self::AgentOpenCode
         } else if lower.contains("copilot") {
@@ -83,7 +79,6 @@ impl IconNamed for GatetermIcon {
             Self::QrCode => "gateterm/icons/qr-code.svg".into(),
             Self::AgentClaude => "gateterm/icons/agent-claude.svg".into(),
             Self::AgentCodex => "gateterm/icons/agent-codex.svg".into(),
-            Self::AgentGemini => "gateterm/icons/agent-gemini.svg".into(),
             Self::AgentOpenCode => "gateterm/icons/agent-opencode.svg".into(),
             Self::AgentCopilot => "gateterm/icons/agent-copilot.svg".into(),
             Self::AgentPi => "gateterm/icons/agent-pi.svg".into(),
@@ -114,8 +109,6 @@ const AGENT_CLAUDE_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" widt
 
 const AGENT_CODEX_SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><defs><linearGradient id="gt-codex-g" x1="12" y1="0" x2="12" y2="24" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#B1A7FF"/><stop offset="0.45" stop-color="#7A9DFF"/><stop offset="1" stop-color="#3941FF"/></linearGradient></defs><path fill="url(#gt-codex-g)" fill-rule="evenodd" d="M 8.086 0.457 C 9.049 0.061 10.098 -0.082 11.132 0.042 C 12.465 0.195 13.653 0.762 14.696 1.742 C 14.725 1.769 14.765 1.78 14.803 1.771 C 16.211 1.425 17.565 1.547 18.864 2.137 L 18.927 2.167 L 19.081 2.243 C 20.438 2.946 21.411 4.013 21.999 5.441 C 22.277 6.12 22.417 6.829 22.42 7.567 C 22.44 8.117 22.379 8.666 22.24 9.198 C 22.226 9.253 22.241 9.312 22.28 9.353 C 23.066 10.15 23.613 11.152 23.858 12.244 C 24.243 14.145 23.848 15.859 22.675 17.384 L 22.493 17.604 C 21.716 18.494 20.696 19.137 19.559 19.455 C 19.509 19.47 19.468 19.508 19.451 19.557 C 19.196 20.293 18.94 20.921 18.464 21.549 C 17.265 23.131 15.502 24.011 13.516 24 C 11.933 23.992 10.53 23.413 9.306 22.264 C 9.268 22.229 9.215 22.217 9.166 22.232 C 8.648 22.399 8.126 22.423 7.562 22.417 C 6.661 22.41 5.773 22.197 4.967 21.795 C 4.123 21.376 3.388 20.766 2.821 20.014 C 2.618 19.745 2.417 19.492 2.27 19.193 C 2.067 18.781 1.902 18.352 1.775 17.91 C 1.509 16.907 1.503 15.852 1.758 14.846 C 1.766 14.822 1.769 14.797 1.766 14.772 C 1.761 14.747 1.748 14.725 1.729 14.708 C 1.113 14.084 0.641 13.333 0.349 12.506 C 0.155 11.997 0.043 11.461 0.016 10.917 C -0.032 10.201 0.031 9.482 0.204 8.785 C 0.654 7.301 1.513 6.137 2.781 5.292 C 3.063 5.104 3.331 4.958 3.583 4.854 C 3.869 4.734 4.156 4.634 4.444 4.55 C 4.486 4.538 4.519 4.505 4.531 4.463 C 4.749 3.678 5.125 2.945 5.635 2.31 C 6.315 1.464 7.132 0.846 8.086 0.457 Z M 7.282 8.307 C 7.049 7.9 6.531 7.759 6.125 7.992 C 5.718 8.224 5.576 8.742 5.809 9.149 L 7.503 12.114 L 5.815 14.962 C 5.6 15.363 5.739 15.862 6.131 16.094 C 6.522 16.326 7.027 16.207 7.275 15.826 L 9.215 12.554 C 9.371 12.291 9.373 11.965 9.222 11.7 L 7.282 8.307 Z M 12.728 14.547 C 12.279 14.574 11.929 14.945 11.929 15.395 C 11.929 15.844 12.279 16.215 12.728 16.242 L 17.576 16.242 C 18.028 16.22 18.384 15.847 18.384 15.394 C 18.384 14.941 18.028 14.568 17.576 14.546 L 12.728 14.546 Z"/></svg>"##;
 
-const AGENT_GEMINI_SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><defs><linearGradient id="gt-gemini-g" x1="4" y1="18" x2="20" y2="6" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#3186FF"/><stop offset="0.45" stop-color="#08B962"/><stop offset="0.75" stop-color="#FABC12"/><stop offset="1" stop-color="#F94543"/></linearGradient></defs><path fill="url(#gt-gemini-g)" d="M 20.616 10.835 C 18.955 10.128 17.444 9.109 16.166 7.834 C 14.386 6.05 13.116 3.822 12.488 1.382 C 12.431 1.159 12.231 1.003 12 1.003 C 11.77 1.003 11.57 1.159 11.513 1.382 C 10.884 3.822 9.614 6.05 7.834 7.834 C 6.556 9.109 5.045 10.128 3.384 10.835 C 2.734 11.115 2.066 11.34 1.382 11.513 C 1.158 11.568 1 11.769 1 12.001 C 1 12.232 1.158 12.433 1.382 12.488 C 2.066 12.66 2.732 12.885 3.384 13.165 C 5.045 13.872 6.556 14.891 7.834 16.166 C 9.615 17.95 10.885 20.178 11.513 22.619 C 11.568 22.843 11.769 23.001 12 23.001 C 12.232 23.001 12.433 22.843 12.488 22.619 C 12.66 21.934 12.885 21.268 13.165 20.616 C 13.872 18.955 14.891 17.444 16.166 16.166 C 17.95 14.386 20.178 13.116 22.619 12.488 C 22.842 12.431 22.998 12.231 22.998 12 C 22.998 11.77 22.842 11.57 22.619 11.513 C 21.934 11.341 21.265 11.114 20.616 10.835 Z"/></svg>"##;
-
 const AGENT_OPENCODE_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M 16 6 L 8 6 L 8 18 L 16 18 L 16 6 Z M 20 22 L 4 22 L 4 2 L 20 2 L 20 22 Z"/></svg>"#;
 
 const AGENT_COPILOT_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M 23.922 16.992 C 23.061 18.495 18.067 22.012 12 22.012 C 5.933 22.012 0.939 18.495 0.078 16.992 C 0.027 16.895 0 16.785 0 16.673 L 0 14.226 C 0 13.662 0.262 13.131 0.708 12.789 C 1.2 12.406 1.797 11.995 2.525 11.584 C 2.458 9.211 2.838 7.229 3.694 5.799 C 4.539 4.386 5.899 3.558 7.757 3.249 C 9.199 3.012 10.606 2.987 11.999 2.988 C 13.393 2.987 14.8 3.012 16.242 3.249 C 18.1 3.558 19.46 4.386 20.305 5.799 C 21.161 7.229 21.542 9.211 21.475 11.584 C 22.202 11.995 22.8 12.406 23.291 12.789 C 23.738 13.131 24 13.662 24 14.226 L 24 16.673 C 24 16.785 23.973 16.895 23.922 16.992 Z M 4.868 12.966 C 6.238 13.524 8.226 13.861 11.225 13.987 L 11.225 10.228 C 9.488 10.172 8.248 9.914 7.367 9.497 C 6.283 8.983 5.736 8.211 5.367 7.121 C 4.94 8.352 4.764 10.258 4.868 12.966 Z M 12.775 13.987 C 15.774 13.861 17.762 13.524 19.132 12.966 C 19.236 10.258 19.06 8.352 18.633 7.121 C 18.264 8.211 17.717 8.983 16.633 9.497 C 15.752 9.914 14.512 10.172 12.775 10.228 L 12.775 13.987 Z M 9.25 16.25 C 8.56 16.25 8 16.81 8 17.5 C 8 18.19 8.56 18.75 9.25 18.75 C 9.94 18.75 10.5 18.19 10.5 17.5 C 10.5 16.81 9.94 16.25 9.25 16.25 Z M 14.75 16.25 C 14.06 16.25 13.5 16.81 13.5 17.5 C 13.5 18.19 14.06 18.75 14.75 18.75 C 15.44 18.75 16 18.19 16 17.5 C 16 16.81 15.44 16.25 14.75 16.25 Z"/></svg>"#;
@@ -135,8 +128,6 @@ pub fn agent_brand_style(agent_id: &str, cx: &gpui::App) -> (&'static str, gpui:
         ("Claude", gpui::rgb(0xD97757).into())
     } else if lower.contains("codex") {
         ("Codex", gpui::rgb(0x7A9DFF).into())
-    } else if lower.contains("gemini") {
-        ("Gemini", gpui::rgb(0x3186FF).into())
     } else if lower.contains("opencode") {
         ("OpenCode", gpui::rgb(0x38BDF8).into())
     } else if lower.contains("copilot") {
@@ -159,7 +150,6 @@ fn render_multicolor_agent_svg(
     use std::sync::{Arc, OnceLock};
 
     static CODEX_IMAGE: OnceLock<Option<Arc<gpui::RenderImage>>> = OnceLock::new();
-    static GEMINI_IMAGE: OnceLock<Option<Arc<gpui::RenderImage>>> = OnceLock::new();
     static AGY_IMAGE: OnceLock<Option<Arc<gpui::RenderImage>>> = OnceLock::new();
 
     match icon {
@@ -167,13 +157,6 @@ fn render_multicolor_agent_svg(
             .get_or_init(|| {
                 cx.svg_renderer()
                     .render_single_frame(AGENT_CODEX_SVG, 2.0, true)
-                    .ok()
-            })
-            .clone(),
-        GatetermIcon::AgentGemini => GEMINI_IMAGE
-            .get_or_init(|| {
-                cx.svg_renderer()
-                    .render_single_frame(AGENT_GEMINI_SVG, 2.0, true)
                     .ok()
             })
             .clone(),
@@ -230,7 +213,6 @@ const ALL_CUSTOM_ICON_PATHS: &[&str] = &[
     "gateterm/icons/qr-code.svg",
     "gateterm/icons/agent-claude.svg",
     "gateterm/icons/agent-codex.svg",
-    "gateterm/icons/agent-gemini.svg",
     "gateterm/icons/agent-opencode.svg",
     "gateterm/icons/agent-copilot.svg",
     "gateterm/icons/agent-pi.svg",
@@ -256,7 +238,6 @@ impl AssetSource for GatetermAssets {
             "gateterm/icons/qr-code.svg" => Ok(Some(Cow::Borrowed(QR_CODE_SVG))),
             "gateterm/icons/agent-claude.svg" => Ok(Some(Cow::Borrowed(AGENT_CLAUDE_SVG))),
             "gateterm/icons/agent-codex.svg" => Ok(Some(Cow::Borrowed(AGENT_CODEX_SVG))),
-            "gateterm/icons/agent-gemini.svg" => Ok(Some(Cow::Borrowed(AGENT_GEMINI_SVG))),
             "gateterm/icons/agent-opencode.svg" => Ok(Some(Cow::Borrowed(AGENT_OPENCODE_SVG))),
             "gateterm/icons/agent-copilot.svg" => Ok(Some(Cow::Borrowed(AGENT_COPILOT_SVG))),
             "gateterm/icons/agent-pi.svg" => Ok(Some(Cow::Borrowed(AGENT_PI_SVG))),
@@ -295,7 +276,6 @@ mod tests {
             GatetermIcon::QrCode,
             GatetermIcon::AgentClaude,
             GatetermIcon::AgentCodex,
-            GatetermIcon::AgentGemini,
             GatetermIcon::AgentOpenCode,
             GatetermIcon::AgentCopilot,
             GatetermIcon::AgentPi,
@@ -329,7 +309,6 @@ mod tests {
     fn maps_agent_ids_to_brand_icons() {
         assert_eq!(GatetermIcon::for_agent("claude-code"), GatetermIcon::AgentClaude);
         assert_eq!(GatetermIcon::for_agent("codex"), GatetermIcon::AgentCodex);
-        assert_eq!(GatetermIcon::for_agent("gemini-cli"), GatetermIcon::AgentGemini);
         assert_eq!(GatetermIcon::for_agent("opencode"), GatetermIcon::AgentOpenCode);
         assert_eq!(GatetermIcon::for_agent("copilot"), GatetermIcon::AgentCopilot);
         assert_eq!(GatetermIcon::for_agent("pi"), GatetermIcon::AgentPi);
@@ -341,7 +320,7 @@ mod tests {
     #[test]
     fn multicolor_agent_svgs_rasterize_cleanly() {
         let renderer = gpui::SvgRenderer::new(std::sync::Arc::new(GatetermAssets));
-        for svg in [AGENT_CODEX_SVG, AGENT_GEMINI_SVG, AGENT_AGY_SVG] {
+        for svg in [AGENT_CODEX_SVG, AGENT_AGY_SVG] {
             let img = renderer
                 .render_single_frame(svg, 2.0, true)
                 .expect("multicolor agent SVG should rasterize without error");

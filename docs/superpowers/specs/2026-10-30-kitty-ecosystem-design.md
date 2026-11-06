@@ -5,7 +5,7 @@
 
 ## 1. 背景与意图 (Intent & Why)
 
-随着现代 TUI 应用（如 Neovim、Helix、Fish、Yazi）以及 AI Coding Agent（Claude Code、Codex、Gemini CLI、OpenCode、pi、Antigravity）的演进，以 **Kitty 协议家族**（Kitty Keyboard Protocol `CSI ... u`、Kitty Clipboard Protocol `OSC 5522`、Kitty Graphics Protocol `APC G`）为代表的现代终端扩展已成为事实标准。
+随着现代 TUI 应用（如 Neovim、Helix、Fish、Yazi）以及 AI Coding Agent（Claude Code、Codex、OpenCode、pi、Antigravity）的演进，以 **Kitty 协议家族**（Kitty Keyboard Protocol `CSI ... u`、Kitty Clipboard Protocol `OSC 5522`、Kitty Graphics Protocol `APC G`）为代表的现代终端扩展已成为事实标准。
 
 目前 Octoterm 的终端层基于纯 Rust 的 `alacritty_terminal 0.25`（服务端 `SessionGrid`、Desktop Native、Android `ClientTerm`）与 Web 端的 `xterm.js`，存在以下痛点：
 1. **`alacritty_terminal` 内置的 Kitty 能力未开启**：`alacritty_terminal 0.25` 原生已实现 Kitty 键盘协议状态机（`CSI ? u` 应答、主/副屏模式栈、`TermMode::KITTY_KEYBOARD_PROTOCOL`）、`OSC 52` 剪贴板、花式下划线（`UNDERCURL` 等）和 `OSC 8` 超链接，但因 `Config::default().kitty_keyboard` 默认为 `false` 且 `ClientTerm` 使用了 `VoidListener`，导致这些能力处于休眠或丢弃状态。

@@ -1,6 +1,6 @@
 import SwiftUI
 
-private enum AgentKind { case claude, codex, gemini, openCode, copilot, pi, grok, agy, generic }
+private enum AgentKind { case claude, codex, openCode, copilot, pi, grok, agy, generic }
 
 private struct AgentBrand {
     let kind: AgentKind
@@ -13,7 +13,6 @@ private struct AgentBrand {
         switch true {
         case lower.contains("claude"): (kind, label, accent) = (.claude, "Claude", Color(rgb: 0xD97757))
         case lower.contains("codex"): (kind, label, accent) = (.codex, "Codex", Color(rgb: 0x7A9DFF))
-        case lower.contains("gemini"): (kind, label, accent) = (.gemini, "Gemini", Color(rgb: 0x3186FF))
         case lower.contains("opencode"): (kind, label, accent) = (.openCode, "OpenCode", Color(rgb: 0x38BDF8))
         case lower.contains("copilot"): (kind, label, accent) = (.copilot, "Copilot", Color(rgb: 0xA371F7))
         case lower == "pi" || lower.hasPrefix("pi-"): (kind, label, accent) = (.pi, "pi", Color(rgb: 0xF472B6))
@@ -30,9 +29,6 @@ internal let CLAUDE_SVG_PATH =
 
 internal let CODEX_SVG_PATH =
     "M 8.086 0.457 C 9.049 0.061 10.098 -0.082 11.132 0.042 C 12.465 0.195 13.653 0.762 14.696 1.742 C 14.725 1.769 14.765 1.78 14.803 1.771 C 16.211 1.425 17.565 1.547 18.864 2.137 L 18.927 2.167 L 19.081 2.243 C 20.438 2.946 21.411 4.013 21.999 5.441 C 22.277 6.12 22.417 6.829 22.42 7.567 C 22.44 8.117 22.379 8.666 22.24 9.198 C 22.226 9.253 22.241 9.312 22.28 9.353 C 23.066 10.15 23.613 11.152 23.858 12.244 C 24.243 14.145 23.848 15.859 22.675 17.384 L 22.493 17.604 C 21.716 18.494 20.696 19.137 19.559 19.455 C 19.509 19.47 19.468 19.508 19.451 19.557 C 19.196 20.293 18.94 20.921 18.464 21.549 C 17.265 23.131 15.502 24.011 13.516 24 C 11.933 23.992 10.53 23.413 9.306 22.264 C 9.268 22.229 9.215 22.217 9.166 22.232 C 8.648 22.399 8.126 22.423 7.562 22.417 C 6.661 22.41 5.773 22.197 4.967 21.795 C 4.123 21.376 3.388 20.766 2.821 20.014 C 2.618 19.745 2.417 19.492 2.27 19.193 C 2.067 18.781 1.902 18.352 1.775 17.91 C 1.509 16.907 1.503 15.852 1.758 14.846 C 1.766 14.822 1.769 14.797 1.766 14.772 C 1.761 14.747 1.748 14.725 1.729 14.708 C 1.113 14.084 0.641 13.333 0.349 12.506 C 0.155 11.997 0.043 11.461 0.016 10.917 C -0.032 10.201 0.031 9.482 0.204 8.785 C 0.654 7.301 1.513 6.137 2.781 5.292 C 3.063 5.104 3.331 4.958 3.583 4.854 C 3.869 4.734 4.156 4.634 4.444 4.55 C 4.486 4.538 4.519 4.505 4.531 4.463 C 4.749 3.678 5.125 2.945 5.635 2.31 C 6.315 1.464 7.132 0.846 8.086 0.457 Z M 7.282 8.307 C 7.049 7.9 6.531 7.759 6.125 7.992 C 5.718 8.224 5.576 8.742 5.809 9.149 L 7.503 12.114 L 5.815 14.962 C 5.6 15.363 5.739 15.862 6.131 16.094 C 6.522 16.326 7.027 16.207 7.275 15.826 L 9.215 12.554 C 9.371 12.291 9.373 11.965 9.222 11.7 L 7.282 8.307 Z M 12.728 14.547 C 12.279 14.574 11.929 14.945 11.929 15.395 C 11.929 15.844 12.279 16.215 12.728 16.242 L 17.576 16.242 C 18.028 16.22 18.384 15.847 18.384 15.394 C 18.384 14.941 18.028 14.568 17.576 14.546 L 12.728 14.546 Z"
-
-internal let GEMINI_SVG_PATH =
-    "M 20.616 10.835 C 18.955 10.128 17.444 9.109 16.166 7.834 C 14.386 6.05 13.116 3.822 12.488 1.382 C 12.431 1.159 12.231 1.003 12 1.003 C 11.77 1.003 11.57 1.159 11.513 1.382 C 10.884 3.822 9.614 6.05 7.834 7.834 C 6.556 9.109 5.045 10.128 3.384 10.835 C 2.734 11.115 2.066 11.34 1.382 11.513 C 1.158 11.568 1 11.769 1 12.001 C 1 12.232 1.158 12.433 1.382 12.488 C 2.066 12.66 2.732 12.885 3.384 13.165 C 5.045 13.872 6.556 14.891 7.834 16.166 C 9.615 17.95 10.885 20.178 11.513 22.619 C 11.568 22.843 11.769 23.001 12 23.001 C 12.232 23.001 12.433 22.843 12.488 22.619 C 12.66 21.934 12.885 21.268 13.165 20.616 C 13.872 18.955 14.891 17.444 16.166 16.166 C 17.95 14.386 20.178 13.116 22.619 12.488 C 22.842 12.431 22.998 12.231 22.998 12 C 22.998 11.77 22.842 11.57 22.619 11.513 C 21.934 11.341 21.265 11.114 20.616 10.835 Z"
 
 internal let OPENCODE_SVG_PATH =
     "M 16 6 L 8 6 L 8 18 L 16 18 L 16 6 Z M 20 22 L 4 22 L 4 2 L 20 2 L 20 22 Z"
@@ -84,7 +80,6 @@ internal func parseSvgPath24(_ d: String) -> Path {
 
 private let claudePath = parseSvgPath24(CLAUDE_SVG_PATH)
 private let codexPath = parseSvgPath24(CODEX_SVG_PATH)
-private let geminiPath = parseSvgPath24(GEMINI_SVG_PATH)
 private let openCodePath = parseSvgPath24(OPENCODE_SVG_PATH)
 private let copilotPath = parseSvgPath24(COPILOT_SVG_PATH)
 private let grokPath = parseSvgPath24(GROK_SVG_PATH)
@@ -126,17 +121,6 @@ struct AgentBrandIcon: View {
                 codexPath,
                 with: .linearGradient(gradient, startPoint: CGPoint(x: 0, y: 0), endPoint: CGPoint(x: 0, y: 24)),
                 style: FillStyle(eoFill: true)
-            )
-        case .gemini:
-            let gradient = Gradient(colors: [
-                Color(rgb: 0x3186FF),
-                Color(rgb: 0x08B962),
-                Color(rgb: 0xFABC12),
-                Color(rgb: 0xF94543),
-            ])
-            ctx.fill(
-                geminiPath,
-                with: .linearGradient(gradient, startPoint: CGPoint(x: 4, y: 18), endPoint: CGPoint(x: 20, y: 6))
             )
         case .openCode:
             ctx.fill(openCodePath, with: .color(color), style: FillStyle(eoFill: true))

@@ -546,7 +546,6 @@ body[data-sidebar-position="hidden"] #menu { display: none; }
 }
 .aicon[data-agent*="claude"] { color: #d97757; }
 .aicon[data-agent*="codex"] { color: #7a9dff; }
-.aicon[data-agent*="gemini"] { color: #3186ff; }
 .aicon[data-agent*="opencode"] { color: #38bdf8; }
 .aicon[data-agent*="copilot"] { color: #a371f7; }
 .aicon[data-agent="pi"], .aicon[data-agent^="pi-"] { color: #f472b6; }

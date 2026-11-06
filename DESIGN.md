@@ -124,7 +124,6 @@ None of the supported agents are wrapped or proxied — the agent started in a s
 | :--- | :---: | :---: | :---: | :---: | :--- |
 | **Claude Code** | ✓ | ✓ | ✓ | ✓ | Automatic hooks in `~/.claude/settings.json` |
 | **Codex** | ✓ | ✓ | ✓ | ✓ | Automatic hooks (review once with `/hooks` inside Codex) |
-| **Gemini CLI** | ✓ | ✓ | ✓ | ✓ | Automatic hooks in `~/.gemini/settings.json` |
 | **OpenCode** | ✓ | ✓ | ✓ | ✓ | Generated OpenCode plugin at `~/.config/opencode/plugins/gateterm.js` |
 | **GitHub Copilot (`copilot`)** | ✓ | ✓ | ✓ | ✓ | Hook config at `~/.copilot/hooks/gateterm.json` |
 | **pi** | ✓ | — | ✓ | ✓ | Generated extension at `~/.pi/agent/extensions/gateterm.ts` (resumes via original session file) |
@@ -135,9 +134,9 @@ None of the supported agents are wrapped or proxied — the agent started in a s
 
 - **Claude Code**: Full support for hook installation, live session state, remote tool permission approval (`PermissionRequest`), Structured Chat View, and session history resume.
 - **Codex**: Supports live state, remote approval, Chat View, and history resume; installed hooks must be reviewed once via `/hooks` inside Codex.
-- **Gemini CLI, OpenCode & GitHub Copilot**: Support live state, remote tool approval, Chat View, and history resume.
+- **OpenCode & GitHub Copilot**: Support live state, remote tool approval, Chat View, and history resume.
 - **pi & Grok (`grok`)**: Support live state, Chat View, and history resume; neither CLI exposes a blocking tool-permission hook event, so remote approval is not applicable.
-- **Antigravity CLI (`agy`)**: Targets the standalone Antigravity CLI independently of Gemini CLI and the Antigravity IDE. After upgrading from older Windows builds, reinstall the Antigravity integration in settings and restart running `agy` sessions to replace legacy hook commands.
+- **Antigravity CLI (`agy`)**: Targets the standalone Antigravity CLI independently of the Antigravity IDE. After upgrading from older Windows builds, reinstall the Antigravity integration in settings and restart running `agy` sessions to replace legacy hook commands.
 
 ### Structured Chat View & security boundary (`agents.transcript_enabled`)
 

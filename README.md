@@ -29,7 +29,7 @@
 
 - **Memory-frugal & persistent** — A tiny single-binary daemon hosts your sessions. Quit the desktop app, close the browser tab, or switch away on your phone — your shells and coding agents keep running.
 - **Native GPU Desktop Workbench (`clients/desktop-native`)** — Built with Rust, `gpui`, and `alacritty_terminal`: integrated virtual title bar, embedded local server out of the box, multi-server remote connections, N-ary equal split panes, and in-terminal scrollback search.
-- **Agent-aware** — First-class integration with Claude Code, Codex, Gemini CLI, OpenCode, GitHub Copilot, pi, Grok, and Antigravity CLI: live status badges, remote tool permission approval, Structured Chat View, and past session browsing & resume.
+- **Agent-aware** — First-class integration with Claude Code, Codex, OpenCode, GitHub Copilot, pi, Grok, and Antigravity CLI: live status badges, remote tool permission approval, Structured Chat View, and past session browsing & resume.
 - **Take over from any device** — Start an agent in the desktop workbench or browser on your workstation, then check its progress or approve a tool call from the native Android client or Gateterm Cloud notifications.
 
 ## Release builds & screenshots
@@ -78,7 +78,6 @@ Installing an agent's hook under **Settings → AI Agent Hooks** unlocks live st
 | :--- | :---: | :---: | :---: | :---: |
 | **Claude Code** | ✓ | ✓ | ✓ | ✓ |
 | **Codex** | ✓ | ✓ | ✓ | ✓ |
-| **Gemini CLI** | ✓ | ✓ | ✓ | ✓ |
 | **OpenCode** | ✓ | ✓ | ✓ | ✓ |
 | **GitHub Copilot (`copilot`)** | ✓ | ✓ | ✓ | ✓ |
 | **pi** | ✓ | — | ✓ | ✓ |

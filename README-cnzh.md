@@ -29,7 +29,7 @@
 
 - **极致轻量与常驻** — 单一静态二进制守护进程托管会话；关掉桌面窗口、刷新浏览器或切走手机 App，后台任务与 Agent 照常运行。
 - **原生 GPU 桌面工作台 (`clients/desktop-native`)** — 基于 Rust、`gpui` 与 `alacritty_terminal` 构建：沉浸式虚拟标题栏、内置本地服务端自动拉起、多远程节点管理、N 叉等分分屏与终端内回滚搜索。
-- **AI Coding Agent 深度感知** — 原生支持 Claude Code、Codex、Gemini CLI、OpenCode、GitHub Copilot、pi、Grok 与 Antigravity CLI：实时状态图标、远程工具调用权限审批、结构化对话视图（Chat View）以及宿主机历史会话检索与一键恢复。
+- **AI Coding Agent 深度感知** — 原生支持 Claude Code、Codex、OpenCode、GitHub Copilot、pi、Grok 与 Antigravity CLI：实时状态图标、远程工具调用权限审批、结构化对话视图（Chat View）以及宿主机历史会话检索与一键恢复。
 - **全平台随时接管** — 在电脑上用原生 GPU 桌面端或浏览器开跑任务，出门用 Android 原生客户端或 Gateterm Cloud 推送随时查看状态、审批工具调用。
 
 ## Release 构建产物与界面预览
@@ -78,7 +78,6 @@
 | :--- | :---: | :---: | :---: | :---: |
 | **Claude Code** | ✓ | ✓ | ✓ | ✓ |
 | **Codex** | ✓ | ✓ | ✓ | ✓ |
-| **Gemini CLI** | ✓ | ✓ | ✓ | ✓ |
 | **OpenCode** | ✓ | ✓ | ✓ | ✓ |
 | **GitHub Copilot (`copilot`)** | ✓ | ✓ | ✓ | ✓ |
 | **pi** | ✓ | — | ✓ | ✓ |

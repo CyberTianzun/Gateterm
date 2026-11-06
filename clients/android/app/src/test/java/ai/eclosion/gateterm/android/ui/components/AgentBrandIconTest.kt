@@ -11,7 +11,6 @@ class AgentBrandIconTest {
         val icons = mapOf(
             "claude" to CLAUDE_SVG_PATH,
             "codex" to CODEX_SVG_PATH,
-            "gemini" to GEMINI_SVG_PATH,
             "opencode" to OPENCODE_SVG_PATH,
             "copilot" to COPILOT_SVG_PATH,
             "grok" to GROK_SVG_PATH,
