@@ -370,12 +370,17 @@ fn supersedes(event: &str) -> bool {
 /// 上会显示一个永远等不到答复的「有事找你」。
 struct PendingGuard {
     store: std::sync::Arc<AgentSessionStore>,
+    manager: std::sync::Arc<crate::session::manager::SessionManager>,
     id: String,
 }
 
 impl Drop for PendingGuard {
     fn drop(&mut self) {
-        self.store.remove_pending(&self.id);
+        if let Some(meta) = self.store.remove_pending(&self.id)
+            && let Some(s) = self.store.snapshot(&meta.agent_id, &meta.agent_session_id)
+        {
+            self.manager.publish(s.to_msg());
+        }
     }
 }
 
@@ -425,7 +430,7 @@ async fn blocking_hook(
     };
 
     let rx = state.agent_sessions.insert_pending(meta);
-    let guard = PendingGuard { store: state.agent_sessions.clone(), id: id.clone() };
+    let guard = PendingGuard { store: state.agent_sessions.clone(), manager: state.manager.clone(), id: id.clone() };
     if let Some(s) = state.agent_sessions.snapshot(adapter.id(), agent_session_id) {
         state.manager.publish(s.to_msg());
         super::process::watch_agent(state, adapter, &s, "PermissionRequest").await;
@@ -443,9 +448,6 @@ async fn blocking_hook(
         }
     };
     drop(guard);
-    if let Some(s) = state.agent_sessions.snapshot(adapter.id(), agent_session_id) {
-        state.manager.publish(s.to_msg());
-    }
     Json(adapter.render(&decision)).into_response()
 }
 

@@ -311,7 +311,10 @@ pub fn decide(
         return Some(Sweep::Drop);
     }
     if age > working_stale_secs
-        && matches!(s.state, AgentState::Working | AgentState::Thinking)
+        && matches!(
+            s.state,
+            AgentState::Working | AgentState::Thinking | AgentState::Waiting
+        )
     {
         return Some(Sweep::MarkIdle);
     }
@@ -621,6 +624,7 @@ impl AgentSessionStore {
                 }
                 Some(Sweep::MarkIdle) => {
                     s.state = AgentState::Idle;
+                    s.detail = None;
                     // 刻意不动 updated_at:见 `decide` 的文档
                     changed.push(s.clone());
                     true
@@ -664,6 +668,38 @@ impl AgentSessionStore {
     }
 
     /// 托管会话没了 ⇒ 里面的 agent 必死。这是比任何超时都硬的证据。
+    pub fn on_terminal_input(&self, session_id: u64, data: &[u8]) -> Vec<AgentSession> {
+        let is_interrupt = data.contains(&0x03)
+            || std::str::from_utf8(data)
+                .is_ok_and(|s| s.contains("\x1b[67;46;3;1;"));
+        let is_submit = data.contains(&b'\r')
+            || data.contains(&b'\n')
+            || std::str::from_utf8(data)
+                .is_ok_and(|s| s.contains("\x1b[13;28;13;1;"));
+        if !is_interrupt && !is_submit {
+            return Vec::new();
+        }
+        let mut changed = Vec::new();
+        let mut guard = self.sessions.lock().unwrap();
+        let ts = now();
+        for s in guard.values_mut() {
+            if s.session == Some(session_id)
+                && s.state == AgentState::Waiting
+                && s.pending.is_none()
+            {
+                s.state = if is_interrupt {
+                    AgentState::Idle
+                } else {
+                    AgentState::Working
+                };
+                s.detail = None;
+                s.updated_at = ts;
+                changed.push(s.clone());
+            }
+        }
+        changed
+    }
+
     pub fn drop_by_session(&self, session: u64) -> Vec<AgentSession> {
         let mut guard = self.sessions.lock().unwrap();
         let dead: Vec<_> = guard
@@ -878,5 +914,29 @@ mod tests {
         let (_, gone) = store.apply_superseding("claude-code", "x", Some(2), Update::default());
         assert!(gone.is_empty());
         assert_eq!(store.list().len(), 3);
+    }
+
+    #[test]
+    fn stuck_waiting_without_pending_becomes_idle_on_sweep_or_terminal_input() {
+        let s = session(AgentState::Waiting, 0);
+        assert_eq!(decide(301, &s, true, 600, 300), Some(Sweep::MarkIdle));
+
+        let store = AgentSessionStore::new();
+        store.apply(
+            "claude-code",
+            "s-wait",
+            Some(9),
+            Update {
+                state: Some(AgentState::Waiting),
+                detail: Some("idle_prompt".into()),
+                ..Default::default()
+            },
+        );
+        // Typing ordinary characters does not clear Waiting until Enter or Ctrl+C
+        assert!(store.on_terminal_input(9, b"hello").is_empty());
+        let changed = store.on_terminal_input(9, b"\r");
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].state, AgentState::Working);
+        assert_eq!(changed[0].detail, None);
     }
 }

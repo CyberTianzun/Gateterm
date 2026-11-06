@@ -13,8 +13,12 @@
 //! 1. 环境里没有 `GATETERM_SESSION_ID` / `GATETERM_HOOK_TOKEN` → **立刻退出,不联网**。
 //!    这是「只管托管会话」这条边界的执行点:在 gateterm 之外启动的 agent 拿不到这两个
 //!    变量,于是连一个包都不会发出去。
-//! 2. 任何失败都**静默 exit 0 且不打印** —— 不打印就等于「无决定」,agent 回落到它自己
-//!    的审批流程。宿主不在、端口换了、网络抽风,都绝不能把 agent 卡住或者替它决定。
+//! 2. 任何失败都**静默 exit 0 且不打印**(若 adapter 要求固定遥测 JSON 如 `{}` 则输出该兜底)
+//!    —— 不打印就等于「无决定」,agent 回落到它自己的审批流程。宿主不在、端口换了、
+//!    网络抽风,都绝不能把 agent 卡住或者替它决定。
+//! 3. **区分阻塞与非阻塞事件**:只有决策类(`is_blocking == true`)才等待最长 590 秒的
+//!    人工审批;状态遥测类(`is_blocking == false`)采用毫秒级连接与读取超时,确保服务端
+//!    未运行或繁忙时绝不拖慢 agent CLI。
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -24,9 +28,14 @@ use std::time::Duration;
 /// 帮助,超了就当读不到 —— 与服务端 `/hook/*` 的 body 上限一致。
 const MAX_STDIN: usize = 512 * 1024;
 
-/// 决策类 hook 那头最长等 600 秒,我们比它短一点收手,好让「无决定」由我们写出来。
-const READ_TIMEOUT: Duration = Duration::from_secs(590);
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+/// 决策类(阻塞式)hook 那头最长等 600 秒,我们比它短一点收手,好让「无决定」由我们写出来。
+const BLOCKING_READ_TIMEOUT: Duration = Duration::from_secs(590);
+const BLOCKING_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// 遥测类(非阻塞)hook 只用于状态同步:正常回环耗时 < 1ms,服务端不在线或繁忙时必须
+/// 毫秒级 fail-open 极速返回,绝不能把用户的 agent CLI 卡住数秒乃至 590 秒。
+const NON_BLOCKING_READ_TIMEOUT: Duration = Duration::from_millis(500);
+const NON_BLOCKING_CONNECT_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// `type: "command"` 类 hook 在目标平台上的命令包装策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,21 +123,68 @@ pub(crate) fn decode_windows_command(command: &str) -> Option<String> {
     String::from_utf16(&words).ok()
 }
 
-fn uses_shared_daemon(url: &str) -> bool {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HookTargetMeta {
+    pub is_blocking: bool,
+    pub uses_shared_daemon: bool,
+    pub telemetry_fallback: Option<Vec<u8>>,
+}
+
+pub(crate) fn hook_target_meta(url: &str) -> HookTargetMeta {
     let Some((_, path)) = split_url(url) else {
-        return false;
+        return HookTargetMeta {
+            is_blocking: false,
+            uses_shared_daemon: false,
+            telemetry_fallback: None,
+        };
     };
     let Some(rest) = path.strip_prefix("/hook/") else {
-        return false;
+        return HookTargetMeta {
+            is_blocking: false,
+            uses_shared_daemon: false,
+            telemetry_fallback: None,
+        };
     };
-    let Some((agent, _)) = rest.split_once('/') else {
-        return false;
+    let Some((agent, slug)) = rest.split_once('/') else {
+        return HookTargetMeta {
+            is_blocking: false,
+            uses_shared_daemon: false,
+            telemetry_fallback: None,
+        };
     };
-    super::find(agent).is_some_and(|a| a.process_watch().is_some())
+    let Some(adapter) = super::find(agent) else {
+        return HookTargetMeta {
+            is_blocking: false,
+            uses_shared_daemon: false,
+            telemetry_fallback: None,
+        };
+    };
+    let event = super::edit::event_of_slug(slug);
+    let is_blocking = adapter.is_blocking(&event);
+    let telemetry_fallback = if !is_blocking {
+        adapter
+            .telemetry_reply()
+            .and_then(|v| serde_json::to_vec(&v).ok())
+    } else {
+        None
+    };
+    HookTargetMeta {
+        is_blocking,
+        uses_shared_daemon: adapter.process_watch().is_some(),
+        telemetry_fallback,
+    }
 }
 
 /// 返回进程退出码。永远是 0 —— 见模块文档第 2 条。
 pub fn run(url: &str) -> i32 {
+    let meta = hook_target_meta(url);
+    let emit_fallback = || {
+        if let Some(ref fb) = meta.telemetry_fallback {
+            let _ = std::io::stdout().write_all(fb);
+            let _ = std::io::stdout().flush();
+        }
+    };
+
     let env_session = std::env::var("GATETERM_SESSION_ID")
         .ok()
         .filter(|s| !s.is_empty());
@@ -141,6 +197,7 @@ pub fn run(url: &str) -> i32 {
             let mut body = Vec::new();
             let mut stdin = std::io::stdin().take(MAX_STDIN as u64);
             if stdin.read_to_end(&mut body).is_err() {
+                emit_fallback();
                 return 0;
             }
             (session, token, body)
@@ -149,30 +206,42 @@ pub fn run(url: &str) -> i32 {
             // 共享守护进程可能最先在非 gateterm 终端里被拉起,环境中没有会话 id / 密钥。
             // 仅对声明了 `process_watch` 的守护进程型 agent,在收到真实 payload 且本机已有
             // 落盘 hook-token 时转发给服务端,由服务端按存活终端里的 CLI 进程决定归属或忽略。
-            if !uses_shared_daemon(url) {
+            if !meta.uses_shared_daemon {
+                emit_fallback();
                 return 0;
             }
             let mut body = Vec::new();
             let mut stdin = std::io::stdin().take(MAX_STDIN as u64);
             if stdin.read_to_end(&mut body).is_err() || body.is_empty() {
+                emit_fallback();
                 return 0;
             }
             let Some(token) = env_token.or_else(|| {
                 super::store::default_hook_token_path()
                     .and_then(|p| super::store::read_hook_token(&p).ok().flatten())
             }) else {
+                emit_fallback();
                 return 0;
             };
             (env_session.unwrap_or_else(|| "0".into()), token, body)
         }
     };
 
-    match post(url, &session, &token, &body) {
+    let (connect_timeout, read_timeout) = if meta.is_blocking {
+        (BLOCKING_CONNECT_TIMEOUT, BLOCKING_READ_TIMEOUT)
+    } else {
+        (NON_BLOCKING_CONNECT_TIMEOUT, NON_BLOCKING_READ_TIMEOUT)
+    };
+
+    match post_with_timeouts(url, &session, &token, &body, connect_timeout, read_timeout) {
         // 原样透传响应体:决策的方言由服务端的 adapter 渲染,这里不解释它
         Ok(reply) if !reply.is_empty() => {
             let _ = std::io::stdout().write_all(&reply);
+            let _ = std::io::stdout().flush();
         }
-        _ => {}
+        _ => {
+            emit_fallback();
+        }
     }
     0
 }
@@ -185,14 +254,21 @@ fn split_url(url: &str) -> Option<(String, String)> {
     Some((format!("127.0.0.1:{port}"), format!("/{path}")))
 }
 
-fn post(url: &str, session: &str, token: &str, body: &[u8]) -> std::io::Result<Vec<u8>> {
+fn post_with_timeouts(
+    url: &str,
+    session: &str,
+    token: &str,
+    body: &[u8],
+    connect_timeout: Duration,
+    read_timeout: Duration,
+) -> std::io::Result<Vec<u8>> {
     let (addr, path) = split_url(url)
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "bad url"))?;
     let sock = addr
         .parse()
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "bad addr"))?;
-    let mut stream = TcpStream::connect_timeout(&sock, CONNECT_TIMEOUT)?;
-    stream.set_read_timeout(Some(READ_TIMEOUT))?;
+    let mut stream = TcpStream::connect_timeout(&sock, connect_timeout)?;
+    stream.set_read_timeout(Some(read_timeout))?;
 
     let head = format!(
         "POST {path} HTTP/1.1\r\n\
@@ -281,5 +357,57 @@ mod tests {
             "\"/bin/gateterm-server\" hook http://127.0.0.1:7683/hook/future-agent/stop"
         );
         assert_eq!(CommandWrap::StandardQuoted, CommandWrap::StandardQuoted);
+    }
+
+    #[test]
+    fn classifies_blocking_and_non_blocking_hook_targets() {
+        let claude_perm = hook_target_meta("http://127.0.0.1:7683/hook/claude-code/permission-request");
+        assert!(claude_perm.is_blocking);
+        assert!(claude_perm.telemetry_fallback.is_none());
+
+        let codex_perm = hook_target_meta("http://127.0.0.1:7683/hook/codex/permission-request");
+        assert!(codex_perm.is_blocking);
+        assert!(codex_perm.uses_shared_daemon);
+
+        let codex_pre = hook_target_meta("http://127.0.0.1:7683/hook/codex/pre-tool-use");
+        assert!(!codex_pre.is_blocking);
+        assert!(codex_pre.uses_shared_daemon);
+
+        let claude_stop = hook_target_meta("http://127.0.0.1:7683/hook/claude-code/stop");
+        assert!(!claude_stop.is_blocking);
+        assert!(claude_stop.telemetry_fallback.is_none());
+
+        let agy_pre = hook_target_meta("http://127.0.0.1:7683/hook/antigravity/pre-invocation");
+        assert!(!agy_pre.is_blocking);
+        assert_eq!(agy_pre.telemetry_fallback.as_deref(), Some(b"{}".as_slice()));
+    }
+
+    #[test]
+    fn non_blocking_post_fails_open_quickly_when_server_hangs() {
+        // Bind a TCP listener that accepts a connection and never replies, simulating a hung server.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let _server = std::thread::spawn(move || {
+            if let Ok((_stream, _)) = listener.accept() {
+                std::thread::sleep(Duration::from_secs(5));
+            }
+        });
+
+        let url = format!("http://127.0.0.1:{port}/hook/antigravity/stop");
+        let start = std::time::Instant::now();
+        let res = post_with_timeouts(
+            &url,
+            "1",
+            "tok",
+            b"{}",
+            NON_BLOCKING_CONNECT_TIMEOUT,
+            NON_BLOCKING_READ_TIMEOUT,
+        );
+        let elapsed = start.elapsed();
+        assert!(res.is_err() || res.unwrap().is_empty());
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "non-blocking hook should fail open in <2s, took {elapsed:?}"
+        );
     }
 }

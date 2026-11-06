@@ -211,6 +211,13 @@ async fn read_loop(
                         tracing::warn!(channel = frame.channel, error = %e, "session input failed");
                         send_err_ch(out, &format!("session input failed: {e:#}"), frame.channel)
                             .await;
+                    } else {
+                        for updated in state
+                            .agent_sessions
+                            .on_terminal_input(a.session.info().id, &frame.payload)
+                        {
+                            state.manager.publish(updated.to_msg());
+                        }
                     }
                 }
                 None => send_err_ch(out, "no such channel", frame.channel).await,
