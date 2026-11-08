@@ -101,7 +101,7 @@
     <string name="term_jump_bottom">Jump to bottom</string>
     <string name="term_tab_close">Close</string>
 
-    <string name="launcher_filter">Filter</string>
+
     <string name="agent_state_idle">Idle</string>
     <string name="agent_state_thinking">Thinking</string>
     <string name="agent_state_working">Working</string>

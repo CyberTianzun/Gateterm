@@ -195,15 +195,6 @@ private fun LauncherSheet(
     onDismiss: () -> Unit,
     onPick: (Launcher) -> Unit,
 ) {
-    var query by remember { mutableStateOf("") }
-    val shown = menu.items.filter { launcher ->
-        val q = query.trim()
-        if (q.isEmpty()) true
-        else {
-            val name = launcher.name.ifBlank { "shell" }
-            "$name ${launcher.detail} ${launcher.provider}".contains(q, ignoreCase = true)
-        }
-    }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
@@ -212,15 +203,6 @@ private fun LauncherSheet(
             text = stringResource(R.string.session_new),
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-        )
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            singleLine = true,
-            label = { Text(stringResource(R.string.launcher_filter)) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 24.dp),
         )
         if (menu.loading && menu.items.size <= 1) {
             Text(
@@ -237,7 +219,7 @@ private fun LauncherSheet(
                 .padding(bottom = 32.dp),
         ) {
             var group: String? = null
-            shown.forEach { launcher ->
+            menu.items.forEach { launcher ->
                 if (launcher.provider != group) {
                     group = launcher.provider
                     Text(
