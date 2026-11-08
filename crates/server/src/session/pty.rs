@@ -365,8 +365,13 @@ impl Session {
         let parse_handle = std::thread::Builder::new()
             .name(format!("pty-parse-{id}"))
             .spawn(move || {
+                #[cfg(windows)]
+                let mut prev_was_esc = false;
                 while let Ok(first) = chunk_rx.recv() {
-                    let batch = coalesce_pty_chunks(first, &chunk_rx, COALESCE_PARSE_MAX);
+                    #[allow(unused_mut)]
+                    let mut batch = coalesce_pty_chunks(first, &chunk_rx, COALESCE_PARSE_MAX);
+                    #[cfg(windows)]
+                    sanitize_conpty_c0(&mut batch, &mut prev_was_esc);
                     s.process_output_batch(batch);
                 }
                 s.mark_exited();
@@ -892,5 +897,34 @@ mod tests {
             effective_size(WindowSize::Smallest, &vps),
             Some((MIN_COLS, MIN_ROWS))
         );
+    }
+
+    #[test]
+    fn sanitize_conpty_c0_replaces_bare_so_si_and_preserves_esc_prefixed() {
+        let mut prev_esc = false;
+        let mut chunk1 = b"A\x0eB\x0fC\x1b".to_vec();
+        sanitize_conpty_c0(&mut chunk1, &mut prev_esc);
+        assert_eq!(&chunk1, b"A B C\x1b");
+        assert!(prev_esc);
+
+        // Immediately following ESC in next chunk must NOT be replaced
+        let mut chunk2 = b"\x0eD\x0f".to_vec();
+        sanitize_conpty_c0(&mut chunk2, &mut prev_esc);
+        assert_eq!(&chunk2, b"\x0eD ");
+        assert!(!prev_esc);
+    }
+}
+
+/// Windows ConPTY 对裸 `0x0E` (SO) / `0x0F` (SI) 会按 CP437 图形字符推进 1 列光标,
+/// 而标准 VT 解析器 (`vte` / `alacritty_terminal` / `xterm.js`) 将其视为 0 宽度的字符集切换控制码,
+/// 从而产生 1 列光标漂移。将非 `ESC` 前导的裸 `0x0E` / `0x0F` 替换为空格 `0x20`。
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn sanitize_conpty_c0(buf: &mut [u8], prev_was_esc: &mut bool) {
+    for b in buf.iter_mut() {
+        let raw = *b;
+        if (raw == 0x0E || raw == 0x0F) && !*prev_was_esc {
+            *b = b' ';
+        }
+        *prev_was_esc = raw == 0x1B;
     }
 }

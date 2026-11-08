@@ -76,6 +76,7 @@ pub struct TerminalView {
     pub pending_clipboard_read: Option<Vec<String>>,
 
     render_image_cache: RefCell<HashMap<(u32, usize), Arc<RenderImage>>>,
+    pub(crate) row_shape_cache: Rc<RefCell<super::element::RowShapeCache>>,
 
     on_input: Option<InputCallback>,
     on_resize: Option<ResizeCallback>,
@@ -123,6 +124,7 @@ impl TerminalView {
             pending_paste: None,
             pending_clipboard_read: None,
             render_image_cache: RefCell::new(HashMap::new()),
+            row_shape_cache: Rc::new(RefCell::new(super::element::RowShapeCache::default())),
             on_input: None,
             on_resize: None,
             http_client: None,
@@ -238,6 +240,7 @@ impl TerminalView {
         self.pending_paste = None;
         self.pending_clipboard_read = None;
         self.render_image_cache.borrow_mut().clear();
+        self.row_shape_cache.borrow_mut().clear();
         cx.notify();
     }
 

@@ -98,12 +98,64 @@ async fn send_resync(
     true
 }
 
+/// 追踪某条附着通道是否有尚未闭合的 Bracketed Paste (`\x1b[200~` 已写入但尚未写入 `\x1b[201~`)。
+/// 当客户端在粘贴中途断连或 detach 时自动补发 `\x1b[201~`,防止 shell / Agent 卡死在粘贴模式。
+#[derive(Default, Debug, Clone)]
+pub(crate) struct BracketedPasteTracker {
+    open: bool,
+    tail: Vec<u8>,
+}
+
+impl BracketedPasteTracker {
+    const START: &'static [u8] = b"\x1b[200~";
+    const END: &'static [u8] = b"\x1b[201~";
+
+    pub(crate) fn feed(&mut self, data: &[u8]) {
+        if data.is_empty() {
+            return;
+        }
+        let mut buf = Vec::with_capacity(self.tail.len() + data.len());
+        buf.extend_from_slice(&self.tail);
+        buf.extend_from_slice(data);
+
+        let mut i = 0;
+        while i + 6 <= buf.len() {
+            if &buf[i..i + 6] == Self::START {
+                self.open = true;
+                i += 6;
+            } else if &buf[i..i + 6] == Self::END {
+                self.open = false;
+                i += 6;
+            } else {
+                i += 1;
+            }
+        }
+        let keep_from = buf.len().saturating_sub(5);
+        self.tail.clear();
+        self.tail.extend_from_slice(&buf[keep_from..]);
+    }
+
+    pub(crate) fn is_open(&self) -> bool {
+        self.open
+    }
+}
+
 struct Attachment {
     session: Arc<Session>,
     /// 本 attach 在会话尺寸表里的席位:Attachment 一旦从 map 里移除(detach、
     /// 或连接结束时整张表被 drop),它跟着析构,会话尺寸自动重算。
     viewport: Viewport,
     pump: tokio::task::JoinHandle<()>,
+    paste_tracker: BracketedPasteTracker,
+}
+
+impl Drop for Attachment {
+    fn drop(&mut self) {
+        self.pump.abort();
+        if self.paste_tracker.is_open() {
+            let _ = self.session.write_input(b"\x1b[201~");
+        }
+    }
 }
 
 #[derive(Default)]
@@ -137,9 +189,7 @@ pub async fn run(socket: WebSocket, state: AppState) {
     let mut conn = ConnState::default();
     read_loop(stream, &state, &out, &mut conn).await;
 
-    for (_, a) in conn.attachments {
-        a.pump.abort();
-    }
+    drop(conn.attachments);
     event_task.abort();
     drop(out);
     let _ = writer.await;
@@ -205,8 +255,9 @@ async fn read_loop(
                 }
             }
         } else {
-            match conn.attachments.get(&frame.channel) {
+            match conn.attachments.get_mut(&frame.channel) {
                 Some(a) => {
+                    a.paste_tracker.feed(&frame.payload);
                     if let Err(e) = a.session.write_input(&frame.payload) {
                         tracing::warn!(channel = frame.channel, error = %e, "session input failed");
                         send_err_ch(out, &format!("session input failed: {e:#}"), frame.channel)
@@ -362,11 +413,12 @@ async fn handle_control(
                     session,
                     viewport,
                     pump,
+                    paste_tracker: BracketedPasteTracker::default(),
                 },
             );
         }
         ClientMsg::Detach { channel } => match conn.attachments.remove(&channel) {
-            Some(a) => a.pump.abort(), // a 在此析构 → viewport 摘除 → 尺寸重算
+            Some(_a) => {} // _a 在此析构 → pump abort + 未闭合粘贴补齐 + viewport 摘除 → 尺寸重算
             None => send_err_ch(out, "no such channel", channel).await,
         },
         ClientMsg::Resize {
@@ -728,5 +780,27 @@ mod tests {
         let out = trim_by_watermark(&mut watermark, 3, &bytes);
         assert_eq!(out, Some(b"xyz".to_vec()));
         assert_eq!(watermark, 3);
+    }
+
+    #[test]
+    fn bracketed_paste_tracker_detects_unclosed_and_split_sequences() {
+        let mut tracker = BracketedPasteTracker::default();
+        assert!(!tracker.is_open());
+
+        // Split start sequence across two frames
+        tracker.feed(b"\x1b[2");
+        assert!(!tracker.is_open());
+        tracker.feed(b"00~hello world");
+        assert!(tracker.is_open());
+
+        // Split end sequence across two frames
+        tracker.feed(b"\x1b[20");
+        assert!(tracker.is_open());
+        tracker.feed(b"1~");
+        assert!(!tracker.is_open());
+
+        // Multiple start/end in one frame leaves final state accurate
+        tracker.feed(b"\x1b[200~a\x1b[201~\x1b[200~unclosed");
+        assert!(tracker.is_open());
     }
 }
