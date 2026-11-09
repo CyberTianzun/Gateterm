@@ -300,4 +300,14 @@
     <string name="notif_permission_title">%1$s needs your approval</string>
     <string name="notif_permission_body">Tool: %1$s</string>
     <string name="notif_tap_to_open">Tap to open the session</string>
+    <string name="about_title">About</string>
+    <string name="about_version">Version: v%1$s (%2$d)</string>
+    <string name="about_description">Cross-platform terminal and AI Agent workbench: persistent sessions, seamless resume, native agent awareness.</string>
+    <string name="about_close">OK</string>
+    <string name="about_check_update">Check for updates</string>
+    <string name="about_checking_update">Checking for updates…</string>
+    <string name="about_up_to_date">You are on the latest version</string>
+    <string name="about_update_available">Update available: v%1$s</string>
+    <string name="about_open_release">Download v%1$s</string>
+    <string name="about_update_failed">Could not check for updates. Check your network and try again.</string>
 </resources>

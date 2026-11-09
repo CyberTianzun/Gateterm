@@ -34,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import ai.eclosion.gateterm.android.R
+import ai.eclosion.gateterm.android.ui.components.AboutIconButton
 import ai.eclosion.gateterm.android.ui.components.AppBarTitle
 import ai.eclosion.gateterm.android.appearance.AppearanceCodec
 import ai.eclosion.gateterm.android.appearance.TermAppearance
@@ -72,6 +73,7 @@ fun AppearanceScreen(
         topBar = {
             TopAppBar(
                 title = { AppBarTitle(stringResource(R.string.settings_title)) },
+                actions = { AboutIconButton() },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(

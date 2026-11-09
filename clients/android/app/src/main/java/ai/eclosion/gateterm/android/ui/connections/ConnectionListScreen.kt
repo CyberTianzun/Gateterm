@@ -49,6 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import ai.eclosion.gateterm.android.R
+import ai.eclosion.gateterm.android.ui.components.AboutIconButton
 import ai.eclosion.gateterm.android.ui.components.AppBarTitle
 import ai.eclosion.gateterm.android.connection.ServerConnection
 import ai.eclosion.gateterm.android.connection.ServerConnectionStatus
@@ -84,6 +85,7 @@ fun ConnectionListScreen(
                     IconButton(onClick = onSettings) {
                         Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.settings_title))
                     }
+                    AboutIconButton()
                 },
             )
         },
