@@ -3,12 +3,12 @@ resolver = "2"
 members = ["crates/protocol", "crates/server", "crates/client-core", "clients/desktop-web", "crates/cloud-client", "crates/cloud-ffi"]
 
 [workspace.package]
-version = "0.3.5"
+version = "0.3.6"
 edition = "2024"
 license = "MIT"
 
 [workspace.metadata.android]
-version_code = 15
+version_code = 16
 
 [profile.release]
 opt-level = 'z'      # Optimize for size, even at the cost of some performance
