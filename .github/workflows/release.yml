@@ -73,6 +73,9 @@ jobs:
             os: ubuntu-latest
             linker: aarch64-linux-gnu-gcc
             apt: gcc-aarch64-linux-gnu
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            desktop: true
           - target: aarch64-apple-darwin
             os: macos-latest
             desktop: true
