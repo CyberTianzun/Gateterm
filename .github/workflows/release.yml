@@ -8,7 +8,10 @@ on:
   push:
     # 发布脚本改动自动试跑打包;分支构建不创建 Release。
     branches: [dev]
-    paths: [".github/workflows/release.yml"]
+    paths:
+      - ".github/workflows/release.yml"
+      - "scripts/bundle-macos.sh"
+      - "scripts/bundle-windows.bat"
     tags: ["release-v[0-9]+.[0-9]+.[0-9]+*"]
   # 手动触发只构建、上传 Actions 产物,不发 Release:用来在打 tag 前试跑一遍
   workflow_dispatch:
@@ -136,11 +139,10 @@ jobs:
           server="gateterm-server-${VERSION}-${{ matrix.target }}.tar.gz"
           tar -czf "dist/$server" -C "target/${{ matrix.target }}/release" gateterm-server
           if [ "${{ matrix.desktop }}" = "true" ]; then
-            desktop_web="gateterm-desktop-web-${VERSION}-${{ matrix.target }}.zip"
-            desktop_native="gateterm-desktop-native-${VERSION}-${{ matrix.target }}.zip"
-            # ditto 保留 .app 的权限位和扩展属性,比 zip -r 可靠
-            ditto -c -k --keepParent target/bundle/gateterm-desktop-web.app "dist/$desktop_web"
-            ditto -c -k --keepParent target/bundle/gateterm-desktop-native.app "dist/$desktop_native"
+            desktop_web="gateterm-desktop-web-${VERSION}-${{ matrix.target }}.dmg"
+            desktop_native="gateterm-desktop-native-${VERSION}-${{ matrix.target }}.dmg"
+            cp target/bundle/gateterm-desktop-web.dmg "dist/$desktop_web"
+            cp target/bundle/gateterm-desktop-native.dmg "dist/$desktop_native"
           fi
           cd dist && for f in *; do shasum -a 256 "$f" > "$f.sha256"; done
 

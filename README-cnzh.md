@@ -38,9 +38,9 @@
 
 | 构建产物 | 支持平台 | 包含内容 | 适用场景 |
 | :--- | :--- | :--- | :--- |
-| **`gateterm-desktop-native`** | Windows (`x86_64` `.zip`)<br/>macOS (`aarch64` `.app.tar.gz`) | 原生 GPU 终端工作台 (`gpui` + `alacritty_terminal`) + 进程内内嵌本地 `gateterm-server` + 系统托盘常驻 | Windows 与 macOS 主力桌面终端：开箱即用、GPU 渲染、N 叉等分分屏，并可在同一窗口同时管理本机与多台远程 `gateterm-server` 节点 |
-| **`gateterm-desktop-web`** | Windows (`x86_64` `.zip`)<br/>macOS (`aarch64` `.app.tar.gz`) | 轻量系统托盘宿主 + 原生设置窗口（局域网扫码配对、AI 钩子一键安装、Cloud 登录） + 内嵌 Web 端 | 偏好使用浏览器作为终端界面，或希望以极小桌面开销将电脑作为后台宿主供手机/平板扫码连接 |
-| **`gateterm-server`** | Linux (`x86_64`, `aarch64`)<br/>Windows (`x86_64`)<br/>macOS (`aarch64`) | 纯命令行单一静态二进制守护进程（已内嵌完整 `clients/web` 前端） | Linux 桌面、远程服务器、云开发机与 NAS：既可直接用浏览器打开，也可作为远程节点接入 `gateterm-desktop-native` 或 `gateterm-android` |
+| **`gateterm-desktop-native`** | Windows (`x86_64` `.zip`)<br/>macOS (`aarch64`, `x86_64` `.dmg`) | 原生 GPU 终端工作台 (`gpui` + `alacritty_terminal`) + 进程内内嵌本地 `gateterm-server` + 系统托盘常驻 | Windows 与 macOS 主力桌面终端：开箱即用、GPU 渲染、N 叉等分分屏，并可在同一窗口同时管理本机与多台远程 `gateterm-server` 节点 |
+| **`gateterm-desktop-web`** | Windows (`x86_64` `.zip`)<br/>macOS (`aarch64`, `x86_64` `.dmg`) | 轻量系统托盘宿主 + 原生设置窗口（局域网扫码配对、AI 钩子一键安装、Cloud 登录） + 内嵌 Web 端 | 偏好使用浏览器作为终端界面，或希望以极小桌面开销将电脑作为后台宿主供手机/平板扫码连接 |
+| **`gateterm-server`** | Linux (`x86_64`, `aarch64`)<br/>Windows (`x86_64`)<br/>macOS (`aarch64`, `x86_64`) | 纯命令行单一静态二进制守护进程（已内嵌完整 `clients/web` 前端） | Linux 桌面、远程服务器、云开发机与 NAS：既可直接用浏览器打开，也可作为远程节点接入 `gateterm-desktop-native` 或 `gateterm-android` |
 | **`gateterm-android`** | Android (`arm64-v8a` `.apk`) | Jetpack Compose 原生客户端，支持二维码扫码配对、多服务器切换与 Agent 自适应双行快捷键栏 | 出门在外随时查看 Agent 进度、一键审批工具调用（`允许` / `拒绝`）或在手机上接管终端会话 |
 
 ### 1. 原生 GPU 桌面工作台 (`gateterm-desktop-native`)
