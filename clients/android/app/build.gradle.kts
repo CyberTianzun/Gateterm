@@ -79,6 +79,7 @@ val buildCloudFfi by tasks.registering(Exec::class) {
     inputs.dir(File(repoRoot, "crates/cloud-ffi/src"))
     inputs.dir(File(repoRoot, "crates/cloud-client/src"))
     inputs.file(File(repoRoot, "scripts/build-android-ffi.sh"))
+    inputs.file(File(repoRoot, "clients/android/uniffi.toml"))
     // 依赖版本/特性变化也要重编
     inputs.file(File(repoRoot, "Cargo.toml"))
     inputs.file(File(repoRoot, "Cargo.lock"))

@@ -73,6 +73,6 @@ case "$OUT_KT" in
     ;;
 esac
 cargo run -q -p gateterm-cloud-ffi --features cli --bin uniffi-bindgen -- \
-  generate --library "$HOST_LIB" --language kotlin --out-dir "$OUT_KT" --no-format
+  generate --library "$HOST_LIB" --language kotlin --config "$ROOT/clients/android/uniffi.toml" --out-dir "$OUT_KT" --no-format
 # 空输出说明元数据没读到:必须失败,别让 Gradle 拿着空目录继续
 [ -n "$(find "$OUT_KT" -name '*.kt' -print -quit)" ] || { echo "UniFFI 没有生成任何 Kotlin 文件" >&2; exit 1; }
