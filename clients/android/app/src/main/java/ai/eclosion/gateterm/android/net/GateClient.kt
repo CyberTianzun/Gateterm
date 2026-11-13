@@ -140,7 +140,11 @@ class GateClient(
                 }
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                    dispatch { webSocket.close(code, reason); onSocketGone() }
+                    dispatch {
+                        // OkHttp reports an empty close frame as 1005, which cannot be sent.
+                        webSocket.close(if (code == 1005) 1000 else code, reason)
+                        onSocketGone()
+                    }
                 }
             },
         )

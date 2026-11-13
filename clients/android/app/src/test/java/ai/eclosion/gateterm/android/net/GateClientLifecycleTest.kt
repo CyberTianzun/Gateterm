@@ -6,6 +6,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okhttp3.internal.ws.WebSocketProtocol
 import okio.ByteString
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -15,12 +16,18 @@ class GateClientLifecycleTest {
     private class Socket(private val request: Request, val listener: WebSocketListener) : WebSocket {
         val sent = mutableListOf<ByteString>()
         var closes = 0
+        val closeFrames = mutableListOf<Pair<Int, String?>>()
         var cancels = 0
         override fun request() = request
         override fun queueSize() = 0L
         override fun send(text: String) = error("binary protocol only")
         override fun send(bytes: ByteString): Boolean { sent += bytes; return true }
-        override fun close(code: Int, reason: String?): Boolean { closes++; return true }
+        override fun close(code: Int, reason: String?): Boolean {
+            WebSocketProtocol.validateCloseCode(code)
+            closeFrames += code to reason
+            closes++
+            return true
+        }
         override fun cancel() { cancels++ }
         fun hello() = listener.onMessage(this, ByteString.of(*Frame.encode(0, """{"type":"hello-ok","proto":1}""".toByteArray())))
         fun fail() = listener.onFailure(this, IllegalStateException("network lost"), null)
@@ -107,6 +114,41 @@ class GateClientLifecycleTest {
         h.flush(); h.advance(250)
         assertEquals(1, retries)
         assertEquals(2, h.sockets.size)
+    }
+
+    @Test fun emptyCloseFrameBeforeHelloReconnectsWithoutSendingReservedCode() {
+        val h = Harness()
+        h.client.connect("ws://localhost/ws", "test-token")
+        val socket = h.sockets.single()
+        var retries = 0
+        h.client.onReconnecting = { retries++ }
+        socket.listener.onClosing(socket, 1005, "")
+        socket.listener.onClosed(socket, 1005, "")
+        h.flush()
+        assertEquals(listOf(1000 to ""), socket.closeFrames)
+        h.advance(250)
+        assertEquals(1, retries)
+        assertEquals(2, h.sockets.size)
+    }
+
+    @Test fun emptyCloseFrameAfterHelloRetainsTerminalForReconnect() {
+        val h = Harness(); val socket = h.connect()
+        h.client.attach(9, 1, 40, 20, colors)
+        socket.listener.onClosing(socket, 1005, "")
+        h.flush(); h.advance(250)
+        h.sockets.last().hello(); h.flush()
+        assertEquals(2, h.sockets.size)
+        assertEquals(listOf("attach"), h.sockets.last().types())
+    }
+
+    @Test fun closingWithStatusEchoesValidCodeAndReason() {
+        for (code in listOf(1000, 1001, 1011, 4001)) {
+            val h = Harness(); val socket = h.connect()
+            socket.listener.onClosing(socket, code, "server closing")
+            h.flush(); h.advance(250)
+            assertEquals(listOf(code to "server closing"), socket.closeFrames)
+            assertEquals(2, h.sockets.size)
+        }
     }
 
     @Test fun manualDisconnectInvalidatesPendingReconnectAndLateHello() {
