@@ -310,4 +310,14 @@
     <string name="about_update_available">Update available: v%1$s</string>
     <string name="about_open_release">Download v%1$s</string>
     <string name="about_update_failed">Could not check for updates. Check your network and try again.</string>
+    <string name="privacy_policy">Privacy policy</string>
+    <string name="account_deletion_information">Account and data deletion</string>
+    <string name="aliyun_privacy_policy">Alibaba Cloud EMAS SDK privacy policy</string>
+    <string name="cloud_consent_title">Before enabling Cloud</string>
+    <string name="cloud_consent_disclosure">Cloud is optional. Sign-in and push send your account email, device label, authentication information and push identifier to your selected Cloud service for authentication, device linking and Agent status notifications.\n\nNotifications use the provider selected by Cloud: Alibaba Cloud Mobile Push (EMAS) or Google Firebase Cloud Messaging. The provider processes device information (brand, model and OS version), a push identifier, and notification routing and event information. The Alibaba Cloud SDK initializes only after you agree and Cloud selects Alibaba Cloud.\n\nBy tapping Agree and continue, you confirm that you have read and agree to the privacy policy and the selected push service data processing. Declining or dismissing cancels this Cloud opt-in. Direct terminal connections remain available. Signed-in users can still sign out or delete their account. See the deletion information below; contact support@eclosion.ai for privacy questions.</string>
+    <string name="cloud_consent_accept">Agree and continue</string>
+    <string name="cloud_consent_decline">Not now</string>
+    <string name="cloud_consent_required">Review the updated Cloud privacy disclosure before enabling push.</string>
+    <string name="cloud_consent_review">Review and enable Cloud</string>
+    <string name="cloud_consent_save_failed">Could not save your choice. Please try again.</string>
 </resources>

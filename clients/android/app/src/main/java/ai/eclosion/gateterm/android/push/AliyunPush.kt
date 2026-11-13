@@ -1,6 +1,7 @@
 package ai.eclosion.gateterm.android.push
 
 import ai.eclosion.gateterm.android.BuildConfig
+import ai.eclosion.gateterm.android.cloud.CloudConsentStore
 import android.app.Application
 import android.util.Log
 import com.alibaba.sdk.android.push.CloudPushService
@@ -25,9 +26,9 @@ object AliyunPush {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val observingExistingRegistration = AtomicBoolean(false)
 
-    /** Parameter initialization only; called on the Application main thread in every SDK process. */
-    fun initialize(app: Application) {
-        if (!configured || initialized) return
+    /** Called only after Cloud selects Aliyun, on the Application main thread. */
+    private fun initialize(app: Application) {
+        if (!CloudConsentStore.load(app).accepted || !configured || initialized) return
         try {
             PushServiceFactory.init(PushInitConfig.Builder().application(app)
                 .appKey(BuildConfig.ALIYUN_APP_KEY).appSecret(BuildConfig.ALIYUN_APP_SECRET).build())
@@ -57,7 +58,7 @@ object AliyunPush {
                         scope.launch {
                             try {
                                 var interval = 500L
-                                while (isActive && File(app.filesDir, "cloud.json").isFile &&
+                                while (isActive && CloudConsentStore.load(app).accepted && File(app.filesDir, "cloud.json").isFile &&
                                     registration?.awaitingExistingDeviceId == true) {
                                     val id = runCatching { service.deviceId }.getOrNull()
                                     if (!id.isNullOrBlank()) {
@@ -81,6 +82,7 @@ object AliyunPush {
 
     /** Establish the channel only after Cloud has selected Aliyun for the signed-in device. */
     suspend fun deviceId(app: Application): String = withContext(Dispatchers.Main.immediate) {
+        check(CloudConsentStore.load(app).accepted) { "Cloud privacy consent is required" }
         if (!initialized) initialize(app)
         if (!initialized) throw AliyunPushException("initialize", initializationFailure)
         checkNotNull(registration).deviceId()

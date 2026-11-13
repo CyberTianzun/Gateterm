@@ -40,23 +40,30 @@ data class CloudUiState(
     val browserLaunch: String? = null,
     val message: CloudMessage? = null,
     val askNotificationPermission: Boolean = false,
+    val cloudConsentAccepted: Boolean = false,
+    val showCloudConsent: Boolean = false,
 )
 
 class CloudAccountViewModel(private val app: Application) : AndroidViewModel(app) {
+    private val consent = CloudConsentStore.load(app)
     private val accountDelegate: Lazy<CloudAccount> = lazy { PushRegistrar.account(app) }
     private val account: CloudAccount get() = accountDelegate.value
     private val pendingStore = BrowserLoginStore(app.noBackupFilesDir)
     private val initialStatus = currentStatus()
-    private val restored = if (initialStatus == null) pendingStore.load() else null
+    private val restored = if (initialStatus == null && consent.accepted) pendingStore.load() else null
     private val _state = MutableStateFlow(CloudUiState(
         status = initialStatus,
         form = CloudForm(region = initialStatus?.let { RelayRegion.fromUrl(it.url) } ?: restored?.region ?: RelayRegion.China),
         waitingForBrowser = restored != null,
+        cloudConsentAccepted = consent.accepted,
     ))
     val state: StateFlow<CloudUiState> = _state.asStateFlow()
     private var expiry: Job? = null
 
-    init { restored?.let(::scheduleExpiry) }
+    init {
+        if (!consent.accepted) pendingStore.clear()
+        restored?.let(::scheduleExpiry)
+    }
 
     private fun currentStatus(): CloudStatus? =
         if (accountDelegate.isInitialized() || File(app.filesDir, "cloud.json").isFile) account.status() else null
@@ -77,12 +84,16 @@ class CloudAccountViewModel(private val app: Application) : AndroidViewModel(app
         if (_state.value.busy) return
         if (_state.value.waitingForBrowser && pendingStore.load() == null) expireLogin()
         val status = currentStatus()
-        _state.update { it.copy(status = status,
+        _state.update { it.copy(status = status, cloudConsentAccepted = consent.accepted,
             form = if (status == null && it.status != null) it.form.copy(password = "", code = "", confirmDelete = false) else it.form) }
     }
 
     fun retryPushRegistration() {
         if (_state.value.busy || _state.value.status == null) return
+        if (!consent.accepted) {
+            requestConsent(::retryPushRegistration)
+            return
+        }
         _state.update { it.copy(busy = true, message = null) }
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
@@ -90,6 +101,21 @@ class CloudAccountViewModel(private val app: Application) : AndroidViewModel(app
             }
             _state.update { it.copy(busy = false, status = currentStatus(), askNotificationPermission = true) }
         }
+    }
+
+    private fun requestConsent(action: () -> Unit) {
+        if (!consent.request(action)) _state.update { it.copy(showCloudConsent = true, message = null) }
+    }
+
+    fun acceptCloudConsent() {
+        val accepted = consent.accept()
+        _state.update { it.copy(cloudConsentAccepted = consent.accepted, showCloudConsent = !accepted,
+            message = if (accepted) it.message else CloudMessage(false, R.string.cloud_consent_save_failed)) }
+    }
+
+    fun dismissCloudConsent() {
+        consent.dismiss()
+        _state.update { it.copy(showCloudConsent = false) }
     }
 
     fun run(action: CloudAction) {
@@ -102,6 +128,10 @@ class CloudAccountViewModel(private val app: Application) : AndroidViewModel(app
             return
         }
         if (action == CloudAction.ReopenBrowser) {
+            if (!consent.accepted) {
+                requestConsent { run(action) }
+                return
+            }
             val pending = pendingStore.load()
             if (pending == null) expireLogin() else _state.update { it.copy(browserLaunch = pending.authorizationUrl()) }
             return
@@ -112,6 +142,10 @@ class CloudAccountViewModel(private val app: Application) : AndroidViewModel(app
             return
         }
         if (job is CloudJob.BrowserLogin) {
+            if (!consent.accepted) {
+                requestConsent { run(action) }
+                return
+            }
             val system = Resources.getSystem().configuration.locales
             val language = resolveLocale(LocaleStore.load(app), (0 until system.size()).map { system[it].toLanguageTag() }).tag
             val pending = PendingCloudLogin.create(job.region, language, Build.MODEL ?: "Android")
@@ -137,7 +171,7 @@ class CloudAccountViewModel(private val app: Application) : AndroidViewModel(app
 
     /** Consuming the persisted attempt before exchange prevents duplicate intents from signing in twice. */
     fun finishBrowserLogin(callback: String): Boolean {
-        if (_state.value.busy) return false
+        if (_state.value.busy || !consent.accepted) return false
         val (pending, code) = pendingStore.claim(callback) ?: return false
         expiry?.cancel()
         _state.update { it.copy(busy = true, waitingForBrowser = false, browserLaunch = null, message = null) }

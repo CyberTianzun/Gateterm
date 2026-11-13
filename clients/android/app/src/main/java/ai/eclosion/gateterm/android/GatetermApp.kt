@@ -190,6 +190,8 @@ fun GatetermApp(viewModel: ConnectionViewModel) {
                     pushRegistration = pushRegistration,
                     pushFailureCode = pushFailureCode,
                     onRetryPush = cloudViewModel::retryPushRegistration,
+                    onAcceptConsent = cloudViewModel::acceptCloudConsent,
+                    onDismissConsent = cloudViewModel::dismissCloudConsent,
                     onForm = cloudViewModel::updateForm,
                     onAction = cloudViewModel::run,
                     onOpenNotificationSettings = {

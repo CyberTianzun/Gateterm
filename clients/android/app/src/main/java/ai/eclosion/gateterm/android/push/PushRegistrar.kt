@@ -3,8 +3,8 @@ package ai.eclosion.gateterm.android.push
 import android.content.Context
 import android.app.Application
 import ai.eclosion.gateterm.android.BuildConfig
+import ai.eclosion.gateterm.android.cloud.CloudConsentStore
 import android.util.Log
-import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.GoogleApiAvailabilityLight
@@ -35,9 +35,9 @@ object PushRegistrar {
     private val _failureCode = MutableStateFlow<String?>(null)
     val failureCode = _failureCode.asStateFlow()
 
-    fun pushAvailable(context: Context): Boolean = AliyunPush.configured || FirebaseApp.getApps(context).isNotEmpty()
+    fun pushAvailable(context: Context): Boolean = AliyunPush.configured || FcmPush.configured(context)
 
-    fun acceptsMessage(context: Context, provider: String): Boolean = accountFile(context).isFile &&
+    fun acceptsMessage(context: Context, provider: String): Boolean = CloudConsentStore.load(context).accepted && accountFile(context).isFile &&
         context.getSharedPreferences("push", Context.MODE_PRIVATE).getString("provider", null) == provider
 
     private fun accountFile(context: Context) = File(context.filesDir, "cloud.json")
@@ -46,6 +46,7 @@ object PushRegistrar {
         CloudAccount(accountFile(context).absolutePath, android.os.Build.MODEL ?: "Android")
 
     suspend fun registerCurrentToken(context: Context, account: CloudAccount, refreshedToken: String? = null) = registration.withLock {
+        if (!hasConsent(context)) return@withLock
         if (!pushAvailable(context)) {
             _state.value = PushRegistration.MissingConfiguration
             return@withLock
@@ -68,12 +69,16 @@ object PushRegistrar {
                     AliyunPush.deviceId(context.applicationContext as Application)
                 }
                 "fcm" -> {
-                    if (FirebaseApp.getApps(context).isEmpty()) {
+                    if (!FcmPush.configured(context)) {
                         _state.value = PushRegistration.MissingConfiguration
                         return@withLock
                     }
                     if (GoogleApiAvailabilityLight.getInstance().isGooglePlayServicesAvailable(context) != ConnectionResult.SUCCESS) {
                         _state.value = PushRegistration.MissingPlayServices
+                        return@withLock
+                    }
+                    if (!FcmPush.initialize(context, provider)) {
+                        _state.value = PushRegistration.MissingConfiguration
                         return@withLock
                     }
                     refreshedToken ?: suspendCancellableCoroutine { cont ->
@@ -105,6 +110,7 @@ object PushRegistrar {
     /** FCM 换了 token:已登录就重新登记;失败只记日志,下次启动/登录会再登记。 */
     fun onNewToken(context: Context, token: String) {
         val app = context.applicationContext
+        if (!hasConsent(app)) return
         if (!accountFile(app).exists()) return
         scope.launch {
             account(app).use { account ->
@@ -117,6 +123,7 @@ object PushRegistrar {
     /** App 启动时调用:已登录则补登一次(token 可能在 App 未运行时变过)。 */
     fun refreshOnStart(context: Context) {
         val app = context.applicationContext
+        if (!hasConsent(app)) return
         // 从没登录过就没有账号文件:直接返回,不为不用 Cloud 的用户加载原生库。
         if (!accountFile(app).exists()) return
         scope.launch {
@@ -125,6 +132,13 @@ object PushRegistrar {
                 registerWithTimeout { registerCurrentToken(app, account) }?.let(::logFailure)
             }
         }
+    }
+
+    private fun hasConsent(context: Context): Boolean {
+        if (CloudConsentStore.load(context).accepted) return true
+        _state.value = PushRegistration.ConsentRequired
+        _failureCode.value = null
+        return false
     }
 
     /** 只记异常类型:FFI 的 reason 文本可能带服务器返回的内容,不进 logcat。 */

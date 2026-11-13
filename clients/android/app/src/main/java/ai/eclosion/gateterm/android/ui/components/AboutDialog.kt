@@ -87,6 +87,7 @@ fun AboutDialog(onDismiss: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                PrivacyLinks()
                 if (checking) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,

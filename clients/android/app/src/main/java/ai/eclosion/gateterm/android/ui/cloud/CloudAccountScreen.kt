@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -48,6 +49,7 @@ import ai.eclosion.gateterm.android.cloud.CloudForm
 import ai.eclosion.gateterm.android.cloud.CloudUiState
 import ai.eclosion.gateterm.android.cloud.RelayRegion
 import ai.eclosion.gateterm.android.push.PushRegistration
+import ai.eclosion.gateterm.android.ui.components.PrivacyLinks
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -58,12 +60,35 @@ fun CloudAccountScreen(
     pushRegistration: PushRegistration,
     pushFailureCode: String?,
     onRetryPush: () -> Unit,
+    onAcceptConsent: () -> Unit,
+    onDismissConsent: () -> Unit,
     onForm: ((CloudForm) -> CloudForm) -> Unit,
     onAction: (CloudAction) -> Unit,
     onOpenNotificationSettings: () -> Unit,
     onBack: () -> Unit,
 ) {
     val enabled = !state.busy && !state.waitingForBrowser
+    if (state.showCloudConsent) {
+        AlertDialog(
+            onDismissRequest = onDismissConsent,
+            title = { Text(stringResource(R.string.cloud_consent_title)) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text(stringResource(R.string.cloud_consent_disclosure))
+                    PrivacyLinks()
+                    if (state.message?.res == R.string.cloud_consent_save_failed) {
+                        Text(stringResource(R.string.cloud_consent_save_failed), color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = onAcceptConsent) { Text(stringResource(R.string.cloud_consent_accept)) }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismissConsent) { Text(stringResource(R.string.cloud_consent_decline)) }
+            },
+        )
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -102,6 +127,7 @@ fun CloudAccountScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            PrivacyLinks()
             if (!pushAvailable) {
                 Text(
                     stringResource(R.string.cloud_push_unavailable),
@@ -110,7 +136,7 @@ fun CloudAccountScreen(
                 )
             }
             val status = state.status
-            if (status != null && pushAvailable && !notificationsEnabled) {
+            if (status != null && state.cloudConsentAccepted && pushAvailable && !notificationsEnabled) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         stringResource(R.string.cloud_notifications_off),
@@ -137,9 +163,15 @@ fun CloudAccountScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (pushAvailable) {
+                if (!state.cloudConsentAccepted) {
+                    Text(stringResource(R.string.cloud_consent_required), style = MaterialTheme.typography.bodyMedium)
+                    Button(onClick = onRetryPush, enabled = enabled) {
+                        Text(stringResource(R.string.cloud_consent_review))
+                    }
+                } else if (pushAvailable) {
                     val pushText = when (pushRegistration) {
                         PushRegistration.Idle -> R.string.cloud_push_not_registered
+                        PushRegistration.ConsentRequired -> R.string.cloud_consent_required
                         PushRegistration.Registering -> R.string.cloud_push_registering
                         PushRegistration.Registered -> R.string.cloud_push_registered
                         PushRegistration.RegisteredAliyun -> R.string.cloud_push_registered_aliyun
