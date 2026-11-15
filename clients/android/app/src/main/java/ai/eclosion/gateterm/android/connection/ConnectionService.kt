@@ -49,7 +49,7 @@ class ConnectionService : Service() {
             return START_NOT_STICKY
         }
         ServiceCompat.startForeground(this, NOTIFICATION, notification(),
-            if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING else 0)
+            if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0)
         controller.onConnectionServiceRunning(true)
         controller.restoreDesiredConnections()
         observer?.cancel()

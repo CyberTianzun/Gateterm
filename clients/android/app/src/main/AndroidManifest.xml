@@ -8,7 +8,7 @@
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
         android:name=".GatetermApplication"
@@ -25,7 +25,10 @@
             android:authorities="${applicationId}.firebaseinitprovider"
             tools:node="remove" />
         <service android:name=".connection.ConnectionService" android:exported="false"
-            android:stopWithTask="false" android:foregroundServiceType="remoteMessaging" />
+            android:stopWithTask="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Maintains user-requested persistent connections to remote servers and live agent status while background connections are enabled. An ongoing notification opens connection management or disconnects all servers. The service stops when background connections are disabled or no active connections remain." />
+        </service>
         <receiver android:name=".push.AliyunMessageReceiver" android:exported="false">
             <intent-filter><action android:name="com.alibaba.sdk.android.push.RECEIVE" /></intent-filter>
             <intent-filter><action android:name="com.alibaba.push2.action.NOTIFICATION_OPENED" /></intent-filter>

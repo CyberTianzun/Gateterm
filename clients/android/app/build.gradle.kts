@@ -40,7 +40,14 @@ val aliyunConfig = if (aliyunServicesFile.isFile) {
     }
 } else emptyMap<Any, Any>()
 // 签名文件放在仓库同级的 GatetermSecrets，其它机器保持这个相对位置即可（兼顾 .worktrees 子目录）。
-val signingPropertiesFile = listOfNotNull(
+val signingPropertiesOverride = System.getenv("GATETERM_SIGNING_PROPERTIES")?.let { configuredPath ->
+    File(configuredPath).also {
+        require(configuredPath.isNotBlank() && it.isFile) {
+            "GATETERM_SIGNING_PROPERTIES must point to an existing signing properties file"
+        }
+    }
+}
+val signingPropertiesFile = signingPropertiesOverride ?: listOfNotNull(
     File(repoRoot.parentFile, "GatetermSecrets/gateterm-release.signing.properties"),
     repoRoot.parentFile?.parentFile?.parentFile?.let { File(it, "GatetermSecrets/gateterm-release.signing.properties") },
 ).firstOrNull { it.isFile } ?: File(repoRoot.parentFile, "GatetermSecrets/gateterm-release.signing.properties")
