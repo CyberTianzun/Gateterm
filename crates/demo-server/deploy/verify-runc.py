@@ -104,6 +104,7 @@ def main():
         rootfs.mkdir(mode=0o755)
         (rootfs / "proc").mkdir()
         (rootfs / "dev").mkdir()
+        (rootfs / "sys/fs/cgroup").mkdir(parents=True)
         shutil.copy2(binary, rootfs / "gateterm-demo")
         subprocess.run(["musl-gcc", "-static", "-Os", "-Wall", "-Wextra", "-Werror", str(HERE / "seccomp_probe.c"), "-o", str(rootfs / "probe")], check=True)
         identity = "gateterm-demo-" + uuid.uuid4().hex[:12]
@@ -118,7 +119,8 @@ def main():
             "root": {"path": str(rootfs), "readonly": True},
             "hostname": "virtual-demo",
             "mounts": [{"destination": "/proc", "type": "proc", "source": "proc", "options": ["nosuid", "noexec", "nodev", "ro"]},
-                       {"destination": "/dev", "type": "tmpfs", "source": "tmpfs", "options": ["nosuid", "noexec", "mode=755", "size=65536"]}],
+                       {"destination": "/dev", "type": "tmpfs", "source": "tmpfs", "options": ["nosuid", "noexec", "mode=755", "size=65536"]},
+                       {"destination": "/sys/fs/cgroup", "type": "cgroup2", "source": "cgroup", "options": ["nosuid", "noexec", "nodev", "ro"]}],
             "linux": {"namespaces": [{"type": n} for n in ["pid", "mount", "uts", "ipc", "cgroup"]],
                       "devices": [{"path": "/dev/null", "type": "c", "major": 1, "minor": 3, "fileMode": 438, "uid": 0, "gid": 0}],
                       "cgroupsPath": "/" + identity,

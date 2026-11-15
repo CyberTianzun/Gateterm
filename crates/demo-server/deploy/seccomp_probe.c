@@ -14,6 +14,22 @@ static void require(int pass, const char *what) {
     if (!pass) { perror(what); exit(1); }
 }
 
+static void require_cgroup(const char *path, const char *first, const char *second) {
+    FILE *control = fopen(path, "r");
+    require(control != NULL, path);
+    char actual_first[32] = "", actual_second[32] = "", extra[2];
+    int count = fscanf(control, "%31s %31s %1s", actual_first, actual_second, extra);
+    require(!ferror(control), "read cgroup control");
+    fclose(control);
+    if (count != (second ? 2 : 1) || strcmp(actual_first, first)
+            || (second && strcmp(actual_second, second))) {
+        fprintf(stderr, "FAIL: %s expected %s%s%s; got %s %s (tokens=%d)\n",
+                path, first, second ? " " : "", second ? second : "",
+                actual_first, actual_second, count);
+        exit(1);
+    }
+}
+
 int main(void) {
     require(getuid() == 65532 && getgid() == 65532, "non-root identity");
     const int flags[] = {0, SOCK_NONBLOCK, SOCK_CLOEXEC, SOCK_NONBLOCK | SOCK_CLOEXEC};
@@ -71,6 +87,11 @@ int main(void) {
     }
     fclose(status);
     require(nnp && caps && bounding && filter, "no-new-privileges, effective/bounding capabilities and seccomp");
+    require_cgroup("/sys/fs/cgroup/memory.max", "134217728", NULL);
+    require_cgroup("/sys/fs/cgroup/memory.swap.max", "0", NULL);
+    require_cgroup("/sys/fs/cgroup/pids.max", "64", NULL);
+    require_cgroup("/sys/fs/cgroup/cpu.max", "50000", "100000");
     puts("PASS: uid/gid65532, read-only root, zero capabilities, no-new-privileges, seccomp filter; TCP sockets allowed; connect, TCP Fast Open, IPv4/IPv6 UDP (all flags), Unix sockets, io_uring and fork denied");
+    puts("PASS: in-container cgroup v2 memory=128MiB, swap=0, pids=64, cpu=50000/100000 (0.5)");
     return 0;
 }
