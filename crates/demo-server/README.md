@@ -1,4 +1,4 @@
-# Gateterm virtual demo (local review only)
+# Gateterm virtual demo
 
 `gateterm-demo` is a separate Rust service for clean terminal screenshots and client review. Its banner and session names identify it as **Virtual demo — no host shell / no real files**. It speaks the existing Gateterm v1 binary WebSocket protocol; Android 0.3.9 needs no changes.
 
@@ -54,9 +54,9 @@ The 60-row cap leaves room for full dense Unicode screen previews after base64/J
 
 Slow consumers are disconnected when their bounded queue fills or a socket write takes more than five seconds. Other clients continue; the workspace remains available for replay/resync on reconnect. No output is silently skipped on an open connection. Authentication requires a binary hello within five seconds. Server Ping is every 30 seconds; read idle timeout is 90 seconds.
 
-Every `/api` route requires the same Bearer token, including unknown paths. Safe GET routes return a single virtual launcher, disconnected Cloud status, empty agents/sessions/pending, `transcript_enabled:false`, and a static update response with no update/check timestamp. Other authenticated GET routes return 404; all authenticated API mutations return 403. All other paths return 404. There are no host features, discovery, hooks, agent history, file/image upload, arbitrary static-path serving, forwarding or real AI execution.
+Every `/api` route requires the same Bearer token, including unknown paths. Safe GET routes return a single virtual launcher, disconnected Cloud status, explicitly synthetic agent/session/message fixtures, empty pending approvals, `transcript_enabled:true`, and a static update response with no update/check timestamp. The fixture session is initialized when inspected; messages support the existing cursor API. `review allow` and `review deny` in the virtual terminal change only the simulated tool approval. There are no native pending approvals, and `/answer` remains denied. Other authenticated GET routes return 404; all authenticated API mutations return 403. All other paths return 404. There are no host features, discovery, hooks, real agent history, file/image upload, arbitrary static-path serving, forwarding or real AI execution.
 
-The production dependency tree has no Gateterm server, PTY runtime or HTTP client. The service never calls process spawning, host file APIs or outbound networking. It only reads its CLI/environment configuration, listens locally and maintains bounded memory. Test-only HTTP clients talk to ephemeral loopback listeners. No Docker, public deployment, cloud registration or TLS setup is included or authorized by this local artifact.
+The production dependency tree has no Gateterm server, PTY runtime or HTTP client. The service never calls process spawning, host file APIs or outbound networking. It only reads its CLI/environment configuration, listens locally and maintains bounded memory. Test-only HTTP clients talk to ephemeral loopback listeners. For the separately authorized public review environment, see [Linux deployment](deploy/README.md) for the static image, runtime restrictions and verification gates.
 
 Validation:
 

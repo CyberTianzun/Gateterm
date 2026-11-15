@@ -1,0 +1,8 @@
+# Offline alternative after build-linux.sh; the context must contain only the
+# verified Linux amd64 static executable named gateterm-demo.
+FROM scratch
+COPY gateterm-demo /gateterm-demo
+USER 65532:65532
+ENV TOKIO_WORKER_THREADS=2
+ENTRYPOINT ["/gateterm-demo"]
+CMD ["--host", "127.0.0.1", "--port", "17685"]

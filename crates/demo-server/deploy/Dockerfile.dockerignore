@@ -1,0 +1,13 @@
+# Dockerfile-specific whitelist: never transfer .git, target, .env, keys or
+# operator records even though the build command uses the repository root.
+**
+!Cargo.toml
+!Cargo.lock
+!crates/
+!crates/**/
+!crates/**/Cargo.toml
+!crates/**/src/**
+!clients/
+!clients/desktop-web/
+!clients/desktop-web/Cargo.toml
+!clients/desktop-web/src/**

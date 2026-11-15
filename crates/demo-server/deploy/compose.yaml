@@ -1,0 +1,26 @@
+services:
+  demo:
+    image: ${GATETERM_DEMO_IMAGE:?Set an immutable image digest}
+    platform: linux/amd64
+    user: "65532:65532"
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./seccomp.json
+    environment:
+      GATETERM_DEMO_TOKENS: ${GATETERM_DEMO_TOKENS:?Set a dedicated random review token}
+      TOKIO_WORKER_THREADS: "2"
+    command: ["--host", "127.0.0.1", "--port", "17685"]
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.50
+    pids_limit: 64
+    ulimits:
+      nofile: {soft: 256, hard: 256}
+      core: {soft: 0, hard: 0}
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "1m", max-file: "2"}
