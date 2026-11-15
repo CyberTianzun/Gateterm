@@ -147,7 +147,7 @@ async fn http_auth_shapes_and_host_features_fail_closed() {
         let json: serde_json::Value = response.json().await.unwrap();
         assert!(json[key].is_array());
         if path.ends_with("sessions") {
-            assert_eq!(json["transcript_enabled"], false);
+            assert_eq!(json["transcript_enabled"], true);
         }
     }
     let cloud: serde_json::Value = http

@@ -1,9 +1,12 @@
 use crate::{
+    review::{self, Review},
     screen::Screen,
     virtual_shell::{Shell, VirtualFs},
 };
 use base64::Engine;
-use gateterm_protocol::{AttachMode, ClientMsg, Frame, ServerMsg, SessionEventKind, SessionInfo};
+use gateterm_protocol::{
+    AgentState, AttachMode, ClientMsg, Frame, ServerMsg, SessionEventKind, SessionInfo,
+};
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, watch};
@@ -45,6 +48,86 @@ fn geometry(cols: u16, rows: u16) -> (u16, u16) {
 }
 
 impl Workspace {
+    fn create_session(&mut self, name: Option<String>, cwd: String, review: bool) -> u64 {
+        self.next_session += 1;
+        let id = self.next_session;
+        let info = SessionInfo {
+            id,
+            name: format!(
+                "Virtual demo — {}",
+                name.unwrap_or_else(|| format!("terminal {id}"))
+            ),
+            cols: 80,
+            rows: 24,
+            created_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            cwd: Some(cwd.clone()),
+        };
+        let mut shell = Shell::new(&cwd);
+        if review {
+            shell.review = Some(Review::default());
+        }
+        let banner = format!(
+            "Virtual demo — no host shell / no real files\r\nIn-memory workspace. Type help to see virtual commands.\r\n{}{}",
+            if review {
+                review::PROMPT.replace('\n', "\r\n")
+            } else {
+                String::new()
+            },
+            shell.prompt()
+        );
+        self.sessions.insert(
+            id,
+            Session {
+                info: info.clone(),
+                shell,
+                screen: Screen::new(80, 24),
+                ring: VecDeque::with_capacity(65536),
+                seq: 0,
+                zero_width_left: 1024,
+                last_resize_seq: None,
+            },
+        );
+        self.output(id, banner.into_bytes());
+        self.event(SessionEventKind::Created, info);
+        id
+    }
+    fn review_session(&self) -> Option<(&Session, &Review)> {
+        self.sessions
+            .values()
+            .find_map(|s| s.shell.review.as_ref().map(|r| (s, r)))
+    }
+    pub fn review_snapshot(&mut self) -> serde_json::Value {
+        // At most one fixture per token, sharing the existing eight-terminal quota.
+        // Recreate it after deletion, but never evict a user's virtual terminal.
+        if self.review_session().is_none() && self.sessions.len() < 8 {
+            self.create_session(
+                Some("Simulated coding-agent review".into()),
+                "/workspace".into(),
+                true,
+            );
+        }
+        let sessions: Vec<_> = self.review_session().into_iter().map(|(s, r)| serde_json::json!({
+            "agent_id":review::AGENT_ID,"agent_session_id":format!("simulated-{}",s.info.id),
+            "session":s.info.id,"state":if r.decision.is_some() {"idle"} else {"waiting"},
+            "detail":r.detail(),"pending":null,"supports_transcript":true,
+        })).collect();
+        serde_json::json!({"sessions":sessions,"transcript_enabled":true})
+    }
+    pub fn review_messages(&self, query: &BTreeMap<String, String>) -> Option<serde_json::Value> {
+        let (s, r) = self.review_session()?;
+        if query.get("agent_id")? != review::AGENT_ID
+            || query.get("agent_session_id")? != &format!("simulated-{}", s.info.id)
+        {
+            return None;
+        }
+        Some(r.messages(
+            query.get("after").map(String::as_str),
+            query.get("before").map(String::as_str),
+        ))
+    }
     pub fn connect(&mut self, tx: mpsc::Sender<Frame>, close: watch::Sender<bool>) -> u64 {
         self.next_client += 1;
         let id = self.next_client;
@@ -215,41 +298,7 @@ impl Workspace {
                 let cwd = cwd
                     .and_then(|p| self.fs.directory(&p))
                     .unwrap_or_else(|| "/workspace".into());
-                self.next_session += 1;
-                let id = self.next_session;
-                let info = SessionInfo {
-                    id,
-                    name: format!(
-                        "Virtual demo — {}",
-                        name.unwrap_or_else(|| format!("terminal {id}"))
-                    ),
-                    cols: 80,
-                    rows: 24,
-                    created_at: SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs(),
-                    cwd: Some(cwd.clone()),
-                };
-                let shell = Shell::new(&cwd);
-                let banner = format!(
-                    "Virtual demo — no host shell / no real files\r\nIn-memory workspace. Type help to see virtual commands.\r\n{}",
-                    shell.prompt()
-                );
-                self.sessions.insert(
-                    id,
-                    Session {
-                        info: info.clone(),
-                        shell,
-                        screen: Screen::new(80, 24),
-                        ring: VecDeque::with_capacity(65536),
-                        seq: 0,
-                        zero_width_left: 1024,
-                        last_resize_seq: None,
-                    },
-                );
-                self.output(id, banner.into_bytes());
-                self.event(SessionEventKind::Created, info);
+                self.create_session(name, cwd, false);
             }
             ClientMsg::RenameSession { id, name } => {
                 if !valid_name(&name) {
@@ -400,9 +449,28 @@ impl Workspace {
             .map(|a| a.session);
         if let Some(id) = session {
             let s = self.sessions.get_mut(&id).unwrap();
+            let previous = s.shell.review.as_ref().and_then(|r| r.decision);
             let bytes = s.shell.input(&mut self.fs, bytes);
             s.info.cwd = Some(s.shell.cwd.clone());
+            let event = s
+                .shell
+                .review
+                .as_ref()
+                .filter(|r| r.decision != previous)
+                .map(|r| ServerMsg::AgentEvent {
+                    agent_id: review::AGENT_ID.into(),
+                    agent_session_id: format!("simulated-{id}"),
+                    session: Some(id),
+                    state: AgentState::Idle,
+                    pending: None,
+                    detail: Some(r.detail().into()),
+                });
             self.output(id, bytes);
+            if let Some(event) = event {
+                for &conn in self.clients.keys() {
+                    self.message(conn, event.clone());
+                }
+            }
         } else {
             self.error(conn, Some(channel), "no such channel");
         }

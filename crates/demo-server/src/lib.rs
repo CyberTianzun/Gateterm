@@ -1,4 +1,5 @@
 //! Inbound-only virtual terminal demo. No host shell or host files exist here.
+mod review;
 mod screen;
 mod virtual_shell;
 mod workspace;
@@ -67,9 +68,9 @@ async fn http(State(state): State<AppState>, request: Request) -> Response {
             .get(header::AUTHORIZATION)
             .and_then(|h| h.to_str().ok())
             .and_then(|h| h.strip_prefix("Bearer "));
-        if !token.is_some_and(|t| state.workspaces.contains_key(t)) {
+        let Some(workspace) = token.and_then(|t| state.workspaces.get(t)) else {
             return StatusCode::UNAUTHORIZED.into_response();
-        }
+        };
         if request.method() != Method::GET {
             return StatusCode::FORBIDDEN.into_response();
         }
@@ -78,8 +79,25 @@ async fn http(State(state): State<AppState>, request: Request) -> Response {
                 serde_json::json!({"launchers":[{"id":"demo:terminal","provider":"demo","name":"Virtual demo terminal","detail":"Virtual demo — no host shell / no real files","command":["demo"],"cwd":"/workspace"}]})
             }
             "/api/cloud/status" => serde_json::json!({"connected":false,"email":null}),
-            "/api/agents" => serde_json::json!({"agents":[]}),
-            "/api/agents/sessions" => serde_json::json!({"sessions":[],"transcript_enabled":false}),
+            "/api/agents" => review::agents(),
+            "/api/agents/sessions" => workspace.lock().unwrap().review_snapshot(),
+            "/api/agents/messages" => {
+                let Ok(axum::extract::Query(query)) =
+                    axum::extract::Query::<BTreeMap<String, String>>::try_from_uri(request.uri())
+                else {
+                    return StatusCode::BAD_REQUEST.into_response();
+                };
+                if !query.contains_key("agent_id")
+                    || !query.contains_key("agent_session_id")
+                    || (query.contains_key("after") && query.contains_key("before"))
+                {
+                    return StatusCode::BAD_REQUEST.into_response();
+                }
+                let Some(value) = workspace.lock().unwrap().review_messages(&query) else {
+                    return StatusCode::NOT_FOUND.into_response();
+                };
+                value
+            }
             "/api/agents/pending" => serde_json::json!({"pending":[]}),
             "/api/update" => {
                 serde_json::json!({"current_version":env!("CARGO_PKG_VERSION"),"update":null,"checked_at":null})

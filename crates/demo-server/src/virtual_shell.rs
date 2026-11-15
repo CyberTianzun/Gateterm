@@ -165,6 +165,7 @@ fn parse(line: &str) -> Result<Vec<Token>, String> {
 }
 
 pub struct Shell {
+    pub review: Option<crate::review::Review>,
     pub cwd: String,
     line: String,
     pending: Vec<u8>,
@@ -176,6 +177,7 @@ pub struct Shell {
 impl Shell {
     pub fn new(cwd: &str) -> Self {
         Self {
+            review: None,
             cwd: cwd.into(),
             line: String::new(),
             pending: Vec::with_capacity(4),
@@ -321,8 +323,13 @@ impl Shell {
         match cmd {
             "help" => {
                 arity(0, 0)?;
-                Ok("Virtual demo — no host shell / no real files\nCommands: help pwd ls cd mkdir touch cat echo clear\necho supports > and >> virtual files. No pipes/chains/substitutions.\n".into())
+                Ok("Virtual demo — no host shell / no real files\nCommands: help pwd ls cd mkdir touch cat echo clear\nIn the simulated review terminal: review, review allow, review deny.\necho supports > and >> virtual files. No pipes/chains/substitutions.\n".into())
             }
+            "review" => self
+                .review
+                .as_mut()
+                .ok_or("open the Simulated coding-agent review terminal")?
+                .command(&args[1..]),
             "pwd" => {
                 arity(0, 0)?;
                 Ok(format!("{}\n", self.cwd))
