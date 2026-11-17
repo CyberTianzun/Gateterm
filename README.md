@@ -13,6 +13,10 @@
 [![Clients](https://img.shields.io/badge/Clients-Desktop%20%C2%B7%20Web%20%C2%B7%20Android-blue)](#)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE.md)
 
+<a href="https://play.google.com/store/apps/details?id=ai.eclosion.gateterm.android&pli=1">
+  <img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get it on Google Play" width="200" />
+</a>
+
 <sub>English · [简体中文](README-cnzh.md)</sub>
 
 <br />
