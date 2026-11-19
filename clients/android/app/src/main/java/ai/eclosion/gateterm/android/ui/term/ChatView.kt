@@ -143,9 +143,10 @@ private fun Messages(
     val messages = chat.messages
     val userPrompts = remember(messages) { Chat.userPrompts(messages) }
     val displayedMessages = if (userOnly) userPrompts else messages
+    val trailingItemIndex = if (userOnly && userPrompts.isEmpty()) 2 else displayedMessages.size + 1
 
     // The trailing item anchors the viewport below even a very tall final message.
-    val listState = rememberLazyListState(initialFirstVisibleItemIndex = displayedMessages.size + 1)
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = trailingItemIndex)
     var historyPage by remember { mutableStateOf(chat.historyPage) }
     var historyAnchor by remember { mutableStateOf<Pair<String, Int>?>(null) }
     val olderLoading by rememberUpdatedState(chat.olderLoading)
@@ -170,7 +171,7 @@ private fun Messages(
             else null
         }.collect { anchor -> if (anchor != null) historyAnchor = anchor }
     }
-    LaunchedEffect(messages, chat.historyPage) {
+    LaunchedEffect(messages, chat.historyPage, userOnly) {
         if (historyPage != chat.historyPage) {
             historyPage = chat.historyPage
             val anchor = historyAnchor
@@ -185,7 +186,7 @@ private fun Messages(
         }
         if (follow && pendingJumpId == null) {
             scrollingToBottom = true
-            try { listState.scrollToItem(displayedMessages.size + 1) }
+            try { listState.scrollToItem(trailingItemIndex) }
             finally { scrollingToBottom = false }
         }
     }
