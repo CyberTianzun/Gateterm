@@ -262,6 +262,7 @@ private fun HistoryConversationScreen(
     var loading by remember(entry.key) { mutableStateOf(true) }
     var error by remember(entry.key) { mutableStateOf<String?>(null) }
     var detailsOpen by remember(entry.key) { mutableStateOf(false) }
+    var userOnly by remember(entry.key) { mutableStateOf(false) }
     LaunchedEffect(entry.key) {
         try {
             transcript = onPreview(entry)
@@ -273,7 +274,9 @@ private fun HistoryConversationScreen(
             loading = false
         }
     }
-    BackHandler(onBack = onBack)
+    BackHandler {
+        if (userOnly) userOnly = false else onBack()
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -288,6 +291,13 @@ private fun HistoryConversationScreen(
                 },
                 navigationIcon = { HistoryBackButton(onBack) },
                 actions = {
+                    IconButton(onClick = { userOnly = !userOnly }) {
+                        Icon(
+                            painterResource(R.drawable.ic_filter),
+                            contentDescription = stringResource(R.string.chat_filter_user),
+                            tint = if (userOnly) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                        )
+                    }
                     IconToggleButton(checked = detailsOpen, onCheckedChange = { detailsOpen = it }) {
                         Icon(Icons.Filled.Info, contentDescription = stringResource(R.string.history_details))
                     }
@@ -315,6 +325,8 @@ private fun HistoryConversationScreen(
                 ChatView(
                     chat = ChatUiState(messages = (transcript as? ChatWindow.Transcript)?.messages.orEmpty(), loading = loading),
                     onOpenTerminal = onBack,
+                    userOnly = userOnly,
+                    onUserOnlyChange = { userOnly = it },
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                 )
             }

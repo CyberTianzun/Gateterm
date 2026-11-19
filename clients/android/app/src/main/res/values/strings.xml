@@ -209,6 +209,12 @@
     <string name="chat_tool_result_error">失败</string>
     <string name="chat_show_more">展开</string>
     <string name="chat_show_less">收起</string>
+    <string name="chat_filter_user">只看用户消息</string>
+    <string name="chat_filter_banner">仅显示用户消息（%1$d）· 点击任意消息定位</string>
+    <string name="chat_filter_clear">显示全部</string>
+    <string name="chat_filter_empty">当前已加载的对话中没有用户消息</string>
+    <string name="chat_copy_code">复制</string>
+    <string name="chat_copied_code">已复制</string>
     <string name="chat_open_terminal_instead">用终端打开</string>
     <string name="chat_fallback_no_agent">这个会话里没有认出正在运行的 AI —— 聊天视图要靠 agent 自己写的对话记录，而它是通过 hook 报上来的。到电脑上的「设置 → AI 集成」看看装没装。</string>
     <string name="chat_fallback_disabled">服务端关闭了聊天视图。把 config.toml 里 [agents] 段下的 transcript_enabled 改成 true（或删掉这一行），然后重启服务端。</string>

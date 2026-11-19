@@ -16,10 +16,28 @@ data class UiPalette(
     val dim: Int,
     val accent: Int,
     val danger: Int,
+    val mdHeading: Int,
+    val mdCode: Int,
 )
 
 fun TermAppearance.uiPalette(): UiPalette {
     val light = isLightTheme()
+    val accent = readableAccent(ansi[4], ansi[12], background)
+    val readableFallback = if (contrast(accent, background) >= 3.0) accent else foreground
+    val headingCandidates = listOfNotNull(
+        ansi.getOrNull(6),
+        ansi.getOrNull(14),
+        ansi.getOrNull(4),
+        ansi.getOrNull(12),
+    )
+    val codeCandidates = listOfNotNull(
+        ansi.getOrNull(3),
+        ansi.getOrNull(11),
+        ansi.getOrNull(2),
+        ansi.getOrNull(10),
+        ansi.getOrNull(6),
+        ansi.getOrNull(14),
+    )
     return UiPalette(
         light = light,
         background = background,
@@ -28,8 +46,10 @@ fun TermAppearance.uiPalette(): UiPalette {
         panel2 = mixRgb(foreground, background, if (light) 0.11 else 0.14),
         line = mixRgb(foreground, background, if (light) 0.2 else 0.22),
         dim = mixRgb(foreground, background, 0.55),
-        accent = readableAccent(ansi[4], ansi[12], background),
+        accent = accent,
         danger = readableAccent(ansi[1], ansi[9], background),
+        mdHeading = pickReadableColor(headingCandidates, background, readableFallback),
+        mdCode = pickReadableColor(codeCandidates, background, readableFallback),
     )
 }
 
@@ -54,6 +74,9 @@ private fun readableAccent(normal: Int, bright: Int, background: Int): Int = whe
     contrast(bright, background) > contrast(normal, background) -> bright
     else -> normal
 }
+
+internal fun pickReadableColor(candidates: List<Int>, background: Int, fallback: Int): Int =
+    candidates.firstOrNull { contrast(it, background) >= 3.0 } ?: fallback
 
 private fun luminance(rgb: Int): Double {
     fun linear(shift: Int): Double {

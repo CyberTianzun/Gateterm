@@ -43,4 +43,53 @@ class UiPaletteTest {
         }
         assertEquals(0xFFFFFF, theme.copy(ansi = ansi).uiPalette().accent)
     }
+
+    @Test
+    fun markdownHeadingAndCodeColorsMeetContrastForAllBuiltins() {
+        for (theme in AppearanceCodec.builtins()) {
+            val palette = theme.uiPalette()
+            val headingContrast = contrast(palette.mdHeading, palette.background)
+            val codeContrast = contrast(palette.mdCode, palette.background)
+            assertTrue(
+                "${theme.name} mdHeading contrast $headingContrast < 3.0",
+                headingContrast >= 3.0,
+            )
+            assertTrue(
+                "${theme.name} mdCode contrast $codeContrast < 3.0",
+                codeContrast >= 3.0,
+            )
+        }
+    }
+
+    @Test
+    fun syntheticPaleLightThemeFallsBackToAccentAndForeground() {
+        // Solarized-Light-like theme where cyan/yellow/green are too low contrast against #FDF6E3
+        val paleSolarized = AppearanceCodec.default(false).copy(
+            name = "Pale Solarized",
+            background = 0xFDF6E3,
+            foreground = 0x586E75,
+            ansi = listOf(
+                0x073642, 0xDC322F, 0x93A1A1, 0xEEE8D5,
+                0x268BD2, 0xD33682, 0x93A1A1, 0xEEE8D5,
+                0x002B36, 0xCB4B16, 0xEEE8D5, 0xFDF6E3,
+                0x839496, 0x6C71C4, 0xEEE8D5, 0xFDF6E3,
+            ),
+        )
+        val palette = paleSolarized.uiPalette()
+        assertEquals(palette.accent, palette.mdHeading)
+        assertEquals(palette.accent, palette.mdCode)
+        assertTrue(contrast(palette.mdHeading, palette.background) >= 3.0)
+        assertTrue(contrast(palette.mdCode, palette.background) >= 3.0)
+
+        // When even accent (blue/brightBlue) is < 3.0 contrast, fall back to foreground
+        val allPaleAnsi = paleSolarized.ansi.toMutableList().apply {
+            this[4] = 0xEEE8D5
+            this[12] = 0xFDF6E3
+        }
+        val extremePalette = paleSolarized.copy(ansi = allPaleAnsi).uiPalette()
+        assertEquals(extremePalette.foreground, extremePalette.mdHeading)
+        assertEquals(extremePalette.foreground, extremePalette.mdCode)
+        assertTrue(contrast(extremePalette.mdHeading, extremePalette.background) >= 3.0)
+        assertTrue(contrast(extremePalette.mdCode, extremePalette.background) >= 3.0)
+    }
 }

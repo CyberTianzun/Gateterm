@@ -204,6 +204,12 @@
     <string name="chat_tool_result_error">failed</string>
     <string name="chat_show_more">Show more</string>
     <string name="chat_show_less">Show less</string>
+    <string name="chat_filter_user">User messages only</string>
+    <string name="chat_filter_banner">Showing user messages only (%1$d) · Tap a message to jump</string>
+    <string name="chat_filter_clear">Show all</string>
+    <string name="chat_filter_empty">No user messages in loaded conversation</string>
+    <string name="chat_copy_code">Copy</string>
+    <string name="chat_copied_code">Copied</string>
     <string name="chat_open_terminal_instead">Open the terminal instead</string>
     <string name="chat_fallback_no_agent">No running agent was recognised in this session. The chat view reads the agent\'s own transcript, and hooks are what report it — check Settings → Agents on the computer to see whether they are installed.</string>
     <string name="chat_fallback_disabled">The chat view is turned off on the server. Set transcript_enabled = true under [agents] in config.toml (or remove the line), then restart it.</string>

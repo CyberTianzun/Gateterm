@@ -26,6 +26,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -111,6 +113,7 @@ fun TerminalScreen(
     var topBarVisible by remember(activeId) { mutableStateOf(true) }
     var topBarRevealTick by remember(activeId) { mutableIntStateOf(0) }
     var topBarHeightPx by remember { mutableIntStateOf(0) }
+    var chatUserOnly by remember(activeId, chatOpen) { mutableStateOf(false) }
     fun revealTopBar() {
         topBarVisible = true
         topBarRevealTick++
@@ -173,8 +176,17 @@ fun TerminalScreen(
     LaunchedEffect(generation) {
         TerminalView.drainClipboardToSystem(context, term)
     }
-    // 聊天视图里按返回 = 回终端,不是直接退出会话
-    BackHandler { if (chatOpen) onToggleChat() else { releaseKeyboard(); onBack() } }
+    // 聊天视图里按返回 = 先退出用户消息筛选，再回终端，不是直接退出会话
+    BackHandler {
+        when {
+            chatOpen && chatUserOnly -> chatUserOnly = false
+            chatOpen -> onToggleChat()
+            else -> {
+                releaseKeyboard()
+                onBack()
+            }
+        }
+    }
     Scaffold(
         bottomBar = {
             if (!chatOpen) ExtraKeysBar(
@@ -238,6 +250,8 @@ fun TerminalScreen(
                         agentId = agentId,
                         chatOpen = true,
                         chatAvailable = chatAvailable,
+                        userOnly = chatUserOnly,
+                        onToggleUserOnly = { chatUserOnly = !chatUserOnly },
                         onBack = { releaseKeyboard(); onBack() },
                         onToggleChat = ::toggleChat,
                     )
@@ -245,6 +259,8 @@ fun TerminalScreen(
                         chat = chat,
                         onOpenTerminal = onToggleChat,
                         onLoadOlder = onLoadOlderChat,
+                        userOnly = chatUserOnly,
+                        onUserOnlyChange = { chatUserOnly = it },
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
@@ -458,6 +474,8 @@ private fun TerminalTopBar(
     chatAvailable: Boolean,
     onBack: () -> Unit,
     onToggleChat: () -> Unit,
+    userOnly: Boolean = false,
+    onToggleUserOnly: () -> Unit = {},
 ) {
     TopAppBar(
         windowInsets = WindowInsets(0, 0, 0, 0),
@@ -485,6 +503,15 @@ private fun TerminalTopBar(
             }
         },
         actions = {
+            if (chatOpen) {
+                IconButton(onClick = onToggleUserOnly) {
+                    Icon(
+                        painterResource(R.drawable.ic_filter),
+                        contentDescription = stringResource(R.string.chat_filter_user),
+                        tint = if (userOnly) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                    )
+                }
+            }
             // 只有本会话里有读得了记录的 agent 才给入口;已经在聊天里时回终端永远可以
             if (chatOpen || chatAvailable) {
                 val desc = stringResource(

@@ -5,13 +5,17 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import ai.eclosion.gateterm.android.appearance.AppearanceCodec
 import ai.eclosion.gateterm.android.appearance.TermAppearance
 import ai.eclosion.gateterm.android.appearance.contrast
 import ai.eclosion.gateterm.android.appearance.mixRgb
 import ai.eclosion.gateterm.android.appearance.uiPalette
+
+val LocalTermAppearance = staticCompositionLocalOf { AppearanceCodec.default() }
 
 private fun rgb(value: Int): Color = Color(value or 0xFF000000.toInt())
 
@@ -65,5 +69,7 @@ fun GatetermTheme(
             scrim = Color.Black,
         )
     }
-    MaterialTheme(colorScheme = colors, content = content)
+    CompositionLocalProvider(LocalTermAppearance provides appearance) {
+        MaterialTheme(colorScheme = colors, content = content)
+    }
 }

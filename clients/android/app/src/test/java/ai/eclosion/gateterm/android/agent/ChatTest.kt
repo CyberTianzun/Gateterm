@@ -1,6 +1,7 @@
 package ai.eclosion.gateterm.android.agent
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -100,5 +101,76 @@ class ChatTest {
     fun fallbackWindowLeavesMessagesAlone() {
         val prev = listOf(msg("a"))
         assertEquals(prev, Chat.merge(prev, ChatWindow.Terminal(ChatFallback.Disabled)))
+    }
+
+    @Test
+    fun identifiesRealUserPromptsAndExtractsOnlyNonBlankTextBlocks() {
+        val pureUser = ChatMessage("u1", ChatRole.User, null, listOf(ChatBlock.Text("Fix bug")))
+        assertTrue(pureUser.isUserPrompt())
+        assertEquals(listOf(ChatBlock.Text("Fix bug")), pureUser.userPromptTextBlocks())
+
+        val mixedUser = ChatMessage(
+            "u2",
+            ChatRole.User,
+            null,
+            listOf(
+                ChatBlock.ToolResult(true, "output"),
+                ChatBlock.Text("   "),
+                ChatBlock.Text("Now add tests"),
+                ChatBlock.ToolUse("Read", "a.kt"),
+                ChatBlock.Text("Second line"),
+            ),
+        )
+        assertTrue(mixedUser.isUserPrompt())
+        assertEquals(
+            listOf(ChatBlock.Text("Now add tests"), ChatBlock.Text("Second line")),
+            mixedUser.userPromptTextBlocks(),
+        )
+
+        val pureToolResult = ChatMessage("tr1", ChatRole.User, null, listOf(ChatBlock.ToolResult(true, "ok")))
+        assertFalse(pureToolResult.isUserPrompt())
+        assertEquals(emptyList<ChatBlock.Text>(), pureToolResult.userPromptTextBlocks())
+
+        val piToolTurn = ChatMessage(
+            "pi1",
+            ChatRole.User,
+            null,
+            listOf(ChatBlock.ToolUse("bash", "ls"), ChatBlock.ToolResult(true, "file.txt")),
+        )
+        assertFalse(piToolTurn.isUserPrompt())
+        assertEquals(emptyList<ChatBlock.Text>(), piToolTurn.userPromptTextBlocks())
+
+        val blankUser = ChatMessage("u-blank", ChatRole.User, null, listOf(ChatBlock.Text("  \n\t ")))
+        assertFalse(blankUser.isUserPrompt())
+        assertEquals(emptyList<ChatBlock.Text>(), blankUser.userPromptTextBlocks())
+
+        val emptyUser = ChatMessage("u-empty", ChatRole.User, null, emptyList())
+        assertFalse(emptyUser.isUserPrompt())
+
+        val assistant = ChatMessage("a1", ChatRole.Assistant, null, listOf(ChatBlock.Text("Sure")))
+        assertFalse(assistant.isUserPrompt())
+        assertEquals(emptyList<ChatBlock.Text>(), assistant.userPromptTextBlocks())
+
+        val system = ChatMessage("s1", ChatRole.System, null, listOf(ChatBlock.Text("System notice")))
+        assertFalse(system.isUserPrompt())
+        assertEquals(emptyList<ChatBlock.Text>(), system.userPromptTextBlocks())
+    }
+
+    @Test
+    fun userPromptsPreservesChronologicalOrderAndSkipsNonPrompts() {
+        val messages = listOf(
+            ChatMessage("u1", ChatRole.User, null, listOf(ChatBlock.Text("First"))),
+            ChatMessage("a1", ChatRole.Assistant, null, listOf(ChatBlock.ToolUse("bash", "ls"))),
+            ChatMessage("tr1", ChatRole.User, null, listOf(ChatBlock.ToolResult(true, "out"))),
+            ChatMessage("s1", ChatRole.System, null, listOf(ChatBlock.Text("notice"))),
+            ChatMessage(
+                "u2",
+                ChatRole.User,
+                null,
+                listOf(ChatBlock.ToolResult(false, "err"), ChatBlock.Text("Follow up")),
+            ),
+            ChatMessage("u-blank", ChatRole.User, null, listOf(ChatBlock.Text("\n"))),
+        )
+        assertEquals(listOf("u1", "u2"), Chat.userPrompts(messages).map { it.id })
     }
 }
