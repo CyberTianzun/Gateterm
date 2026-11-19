@@ -91,8 +91,16 @@ private struct MarkdownBlockListView: View {
     let listDepth: Int
     let strikeThrough: Bool
 
+    @ViewBuilder
     var body: some View {
-        if depth < mdMaxDepth + 8 {
+        if depth >= mdMaxDepth - 1 {
+            MarkdownFlattenedBlockListView(
+                doc: doc,
+                indices: indices,
+                palette: palette,
+                strikeThrough: strikeThrough
+            )
+        } else {
             ForEach(Array(indices.enumerated()), id: \.offset) { _, idx in
                 let blockIndex = Int(idx)
                 if doc.blocks.indices.contains(blockIndex) {
@@ -110,12 +118,31 @@ private struct MarkdownBlockListView: View {
     }
 }
 
-private struct MarkdownBlockView: View {
+private struct MarkdownFlattenedBlockListView: View {
     let doc: FfiMdDocument
+    let indices: [UInt32]
+    let palette: UiPalette
+    let strikeThrough: Bool
+
+    var body: some View {
+        let flat = flattenDeepMarkdownBlocks(
+            indices: indices,
+            in: doc,
+            inheritedStrikeThrough: strikeThrough
+        )
+        ForEach(Array(flat.enumerated()), id: \.offset) { _, entry in
+            MarkdownLeafBlockView(
+                block: doc.blocks[entry.blockIndex],
+                palette: palette,
+                strikeThrough: entry.strikeThrough
+            )
+        }
+    }
+}
+
+private struct MarkdownLeafBlockView: View {
     let block: FfiMdBlock
     let palette: UiPalette
-    let depth: Int
-    let listDepth: Int
     let strikeThrough: Bool
 
     @ViewBuilder
@@ -127,6 +154,32 @@ private struct MarkdownBlockView: View {
             MarkdownParagraphView(runs: runs, palette: palette, strikeThrough: strikeThrough)
         case let .codeBlock(lang, code):
             MarkdownCodeBlockView(lang: lang, code: code, palette: palette)
+        case let .table(alignments, headers, rows):
+            MarkdownTableView(alignments: alignments, headers: headers, rows: rows, palette: palette)
+        case .thematicBreak:
+            Rectangle()
+                .fill(Color(rgb: palette.line))
+                .frame(height: 1)
+                .padding(.vertical, 4)
+        case .blockQuote, .listBlock:
+            EmptyView()
+        }
+    }
+}
+
+private struct MarkdownBlockView: View {
+    let doc: FfiMdDocument
+    let block: FfiMdBlock
+    let palette: UiPalette
+    let depth: Int
+    let listDepth: Int
+    let strikeThrough: Bool
+
+    @ViewBuilder
+    var body: some View {
+        switch block {
+        case .heading, .paragraph, .codeBlock, .table, .thematicBreak:
+            MarkdownLeafBlockView(block: block, palette: palette, strikeThrough: strikeThrough)
         case let .blockQuote(children):
             MarkdownBlockQuoteView(
                 doc: doc,
@@ -147,13 +200,6 @@ private struct MarkdownBlockView: View {
                 listDepth: listDepth,
                 strikeThrough: strikeThrough
             )
-        case let .table(alignments, headers, rows):
-            MarkdownTableView(alignments: alignments, headers: headers, rows: rows, palette: palette)
-        case .thematicBreak:
-            Rectangle()
-                .fill(Color(rgb: palette.line))
-                .frame(height: 1)
-                .padding(.vertical, 4)
         }
     }
 }
@@ -300,14 +346,13 @@ private struct MarkdownBlockQuoteView: View {
     let listDepth: Int
     let strikeThrough: Bool
 
+    @ViewBuilder
     var body: some View {
         if depth >= mdMaxDepth - 1 {
-            MarkdownBlockListView(
+            MarkdownFlattenedBlockListView(
                 doc: doc,
                 indices: children,
                 palette: palette,
-                depth: depth + 1,
-                listDepth: listDepth,
                 strikeThrough: strikeThrough
             )
         } else {
@@ -343,17 +388,16 @@ private struct MarkdownListView: View {
     let listDepth: Int
     let strikeThrough: Bool
 
+    @ViewBuilder
     var body: some View {
         if depth >= mdMaxDepth - 1 {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                    MarkdownBlockListView(
+                    MarkdownFlattenedBlockListView(
                         doc: doc,
                         indices: item.children,
                         palette: palette,
-                        depth: depth + 1,
-                        listDepth: listDepth,
-                        strikeThrough: strikeThrough
+                        strikeThrough: strikeThrough || (item.checked == true)
                     )
                 }
             }

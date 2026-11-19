@@ -106,15 +106,20 @@ test("每个内置主题派生出的强调色都达到 UI 最低对比度", asyn
       const ratio = cr(vars[key], vars["--bg"]);
       assert.ok(ratio >= 3, `${name} 的 ${key} (${vars[key]}) 对比度只有 ${ratio.toFixed(2)}`);
     }
+    const codePanel2Ratio = cr(vars["--md-code"], vars["--panel-2"]);
+    assert.ok(
+      codePanel2Ratio >= 3,
+      `${name} 的 --md-code (${vars["--md-code"]}) 相对 --panel-2 (${vars["--panel-2"]}) 对比度只有 ${codePanel2Ratio.toFixed(2)}`,
+    );
   }
 });
 
 test("Markdown 标题色与行内代码色在低对比度主题上会回退到可读颜色", () => {
-  // 亮色背景上常规黄/青对比度不足时，应升级到高对比度候选或 --accent
+  // 亮色背景上常规黄/青对比度不足时，高对比度 --accent 应被用于 --md-heading 与 --md-code
   const pale = {
     background: "#fdf6e3",
     foreground: "#586e75",
-    blue: "#268bd2",
+    blue: "#1d6fa5",
     red: "#dc322f",
     cyan: "#93a1a1",
     brightCyan: "#eee8d5",
@@ -126,6 +131,16 @@ test("Markdown 标题色与行内代码色在低对比度主题上会回退到�
   const { vars } = deriveUiColors(pale);
   assert.equal(vars["--md-heading"], vars["--accent"]);
   assert.equal(vars["--md-code"], vars["--accent"]);
+
+  // 当 --accent 本身相对 --bg 也不足 3.0 时，两者都回退到 --text
+  const lowAccent = deriveUiColors({ ...pale, blue: "#eee8d5", brightBlue: "#fdf6e3" });
+  assert.equal(lowAccent.vars["--md-heading"], lowAccent.vars["--text"]);
+  assert.equal(lowAccent.vars["--md-code"], lowAccent.vars["--text"]);
+
+  // 当 --accent 仅满足 --bg (>= 3.0) 但不满足 --panel-2 (< 3.0) 时，--md-code 回退到 --text
+  const bgOnlyAccent = deriveUiColors({ ...pale, blue: "#268bd2", brightBlue: "#268bd2" });
+  assert.equal(bgOnlyAccent.vars["--md-heading"], bgOnlyAccent.vars["--accent"]);
+  assert.equal(bgOnlyAccent.vars["--md-code"], bgOnlyAccent.vars["--text"]);
 });
 
 test("缺前景或背景时返回 null(维持 style.css 原样)", () => {

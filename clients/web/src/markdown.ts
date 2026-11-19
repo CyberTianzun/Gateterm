@@ -157,8 +157,9 @@ function collectInlineRuns(tokens: Token[], style: InlineStyle, out: MdRun[], de
       case "image": {
         const img = tok as Tokens.Image;
         const alt = extractPlainText(img.tokens, img.text);
-        const label = alt || img.href || "image";
-        const link = style.link ?? sanitizeLinkUrl(img.href);
+        const safeHref = sanitizeLinkUrl(img.href);
+        const label = alt || safeHref || "image";
+        const link = style.link ?? safeHref;
         pushRun(out, { text: `[${label}]`, ...style, code: false, link });
         break;
       }

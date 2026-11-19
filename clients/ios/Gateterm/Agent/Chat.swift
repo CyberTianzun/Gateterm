@@ -138,3 +138,35 @@ func markdownHeadingFontSize(_ level: Int) -> Double {
     default: 13.5
     }
 }
+
+/// Iteratively flattens nested blockquotes and lists into leaf blocks (propagating task
+/// strikethrough) so deep markdown nesting never overflows the view stack or drops content.
+func flattenDeepMarkdownBlocks(
+    indices: [UInt32],
+    in doc: FfiMdDocument,
+    inheritedStrikeThrough: Bool = false
+) -> [(blockIndex: Int, strikeThrough: Bool)] {
+    var result: [(blockIndex: Int, strikeThrough: Bool)] = []
+    var stack: [(blockIndex: Int, strikeThrough: Bool)] = indices.reversed().map {
+        (Int($0), inheritedStrikeThrough)
+    }
+    while let (blockIndex, strikeThrough) = stack.popLast() {
+        guard doc.blocks.indices.contains(blockIndex) else { continue }
+        switch doc.blocks[blockIndex] {
+        case let .blockQuote(children):
+            for child in children.reversed() {
+                stack.append((Int(child), strikeThrough))
+            }
+        case let .listBlock(_, _, items):
+            for item in items.reversed() {
+                let childStrike = strikeThrough || (item.checked == true)
+                for child in item.children.reversed() {
+                    stack.append((Int(child), childStrike))
+                }
+            }
+        case .heading, .paragraph, .codeBlock, .table, .thematicBreak:
+            result.append((blockIndex: blockIndex, strikeThrough: strikeThrough))
+        }
+    }
+    return result
+}

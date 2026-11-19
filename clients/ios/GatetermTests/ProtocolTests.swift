@@ -208,10 +208,26 @@ final class ProtocolTests: XCTestCase {
         for theme in AppearanceCodec.builtins {
             let palette = theme.palette
             let headingContrast = contrast(palette.mdHeading, palette.background)
-            let codeContrast = contrast(palette.mdCode, palette.background)
+            let codeBgContrast = contrast(palette.mdCode, palette.background)
+            let codePanel2Contrast = contrast(palette.mdCode, palette.panel2)
             XCTAssertGreaterThanOrEqual(headingContrast, 3.0, "\(theme.name) mdHeading contrast \(headingContrast)")
-            XCTAssertGreaterThanOrEqual(codeContrast, 3.0, "\(theme.name) mdCode contrast \(codeContrast)")
+            XCTAssertGreaterThanOrEqual(codeBgContrast, 3.0, "\(theme.name) mdCode vs bg contrast \(codeBgContrast)")
+            XCTAssertGreaterThanOrEqual(codePanel2Contrast, 3.0, "\(theme.name) mdCode vs panel2 contrast \(codePanel2Contrast)")
         }
+
+        var oneHalfLight = AppearanceCodec.light2026
+        oneHalfLight.name = "One Half Light"
+        oneHalfLight.background = 0xFAFAFA
+        oneHalfLight.foreground = 0x383A42
+        oneHalfLight.ansi = [
+            0x383A42, 0xE45649, 0x50A14F, 0xC18401,
+            0x0184BC, 0xA626A4, 0x0997B3, 0xBABABA,
+            0x4F525E, 0xE06C75, 0x98C379, 0xD8B36E,
+            0x61AFEF, 0xC678DD, 0x56B6C2, 0xFFFFFF,
+        ]
+        let oneHalfPalette = oneHalfLight.palette
+        XCTAssertGreaterThanOrEqual(contrast(oneHalfPalette.mdCode, oneHalfPalette.background), 3.0)
+        XCTAssertGreaterThanOrEqual(contrast(oneHalfPalette.mdCode, oneHalfPalette.panel2), 3.0)
 
         var pale = AppearanceCodec.light2026
         pale.name = "Pale Solarized"
@@ -219,7 +235,7 @@ final class ProtocolTests: XCTestCase {
         pale.foreground = 0x586E75
         pale.ansi = [
             0x073642, 0xDC322F, 0x93A1A1, 0xEEE8D5,
-            0x268BD2, 0xD33682, 0x93A1A1, 0xEEE8D5,
+            0x1D6FA5, 0xD33682, 0x93A1A1, 0xEEE8D5,
             0x002B36, 0xCB4B16, 0xEEE8D5, 0xFDF6E3,
             0x839496, 0x6C71C4, 0xEEE8D5, 0xFDF6E3,
         ]
@@ -228,6 +244,7 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(palePalette.mdCode, palePalette.accent)
         XCTAssertGreaterThanOrEqual(contrast(palePalette.mdHeading, palePalette.background), 3.0)
         XCTAssertGreaterThanOrEqual(contrast(palePalette.mdCode, palePalette.background), 3.0)
+        XCTAssertGreaterThanOrEqual(contrast(palePalette.mdCode, palePalette.panel2), 3.0)
 
         var extreme = pale
         extreme.ansi[4] = 0xEEE8D5
@@ -237,6 +254,21 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(extremePalette.mdCode, extremePalette.foreground)
         XCTAssertGreaterThanOrEqual(contrast(extremePalette.mdHeading, extremePalette.background), 3.0)
         XCTAssertGreaterThanOrEqual(contrast(extremePalette.mdCode, extremePalette.background), 3.0)
+        XCTAssertGreaterThanOrEqual(contrast(extremePalette.mdCode, extremePalette.panel2), 3.0)
+
+        var bgOnlyAccent = oneHalfLight
+        bgOnlyAccent.ansi[2] = 0xD8B36E
+        bgOnlyAccent.ansi[3] = 0xD8B36E
+        bgOnlyAccent.ansi[6] = 0xD8B36E
+        bgOnlyAccent.ansi[10] = 0xD8B36E
+        bgOnlyAccent.ansi[11] = 0xD8B36E
+        bgOnlyAccent.ansi[14] = 0xD8B36E
+        bgOnlyAccent.ansi[4] = 0xC18401
+        bgOnlyAccent.ansi[12] = 0xC18401
+        let bgOnlyPalette = bgOnlyAccent.palette
+        XCTAssertEqual(bgOnlyPalette.mdHeading, bgOnlyPalette.accent)
+        XCTAssertEqual(bgOnlyPalette.mdCode, bgOnlyPalette.foreground)
+        XCTAssertGreaterThanOrEqual(contrast(bgOnlyPalette.mdCode, bgOnlyPalette.panel2), 3.0)
 
         var shortAnsi = AppearanceCodec.dark2026
         shortAnsi.ansi = []
@@ -327,6 +359,43 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(markdownHeadingFontSize(1), 15.5)
         XCTAssertEqual(markdownHeadingFontSize(2), 14.5)
         XCTAssertEqual(markdownHeadingFontSize(3), 13.5)
+    }
+
+    func testFlattenDeepMarkdownBlocksPreservesLeafAndTaskStrikeThrough() {
+        let deepQuoteDoc = parseMarkdown(text: String(repeating: "> ", count: 64) + "leaf")
+        let flatQuote = flattenDeepMarkdownBlocks(indices: deepQuoteDoc.root, in: deepQuoteDoc)
+        XCTAssertEqual(flatQuote.count, 1)
+        XCTAssertFalse(flatQuote[0].strikeThrough)
+        if case let .paragraph(runs) = deepQuoteDoc.blocks[flatQuote[0].blockIndex] {
+            XCTAssertEqual(runs.map(\.text).joined(), "leaf")
+        } else {
+            XCTFail("Expected leaf paragraph from flattened deep blockquote")
+        }
+
+        let deepTaskMd = String(repeating: "> ", count: 20) + "- [x] done\n" +
+            String(repeating: "> ", count: 20) + "- [ ] todo"
+        let deepTaskDoc = parseMarkdown(text: deepTaskMd)
+        let flatTasks = flattenDeepMarkdownBlocks(indices: deepTaskDoc.root, in: deepTaskDoc)
+        XCTAssertEqual(flatTasks.count, 2)
+        XCTAssertTrue(flatTasks[0].strikeThrough)
+        XCTAssertFalse(flatTasks[1].strikeThrough)
+        if case let .paragraph(firstRuns) = deepTaskDoc.blocks[flatTasks[0].blockIndex],
+           case let .paragraph(secondRuns) = deepTaskDoc.blocks[flatTasks[1].blockIndex] {
+            XCTAssertEqual(firstRuns.map(\.text).joined(), "done")
+            XCTAssertEqual(secondRuns.map(\.text).joined(), "todo")
+        } else {
+            XCTFail("Expected paragraph leaves from flattened task list")
+        }
+
+        let deepListMd = (0..<40).map { String(repeating: "  ", count: $0) + "- item \($0)" }.joined(separator: "\n")
+        let deepListDoc = parseMarkdown(text: deepListMd)
+        let flatList = flattenDeepMarkdownBlocks(indices: deepListDoc.root, in: deepListDoc)
+        XCTAssertEqual(flatList.count, 40)
+        if case let .paragraph(lastRuns) = deepListDoc.blocks[flatList[39].blockIndex] {
+            XCTAssertEqual(lastRuns.map(\.text).joined(), "item 39")
+        } else {
+            XCTFail("Expected last item paragraph in flattened 40-level list")
+        }
     }
 
     #if canImport(UIKit)

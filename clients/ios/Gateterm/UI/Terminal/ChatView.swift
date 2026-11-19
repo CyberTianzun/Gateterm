@@ -167,6 +167,7 @@ struct ChatView: View {
                     jumpTask = nil
                     highlightClearTask?.cancel()
                     highlightClearTask = nil
+                    jumping = false
                 }
             }
         }
@@ -199,7 +200,10 @@ struct ChatView: View {
                 }
             }
             try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                jumping = false
+                return
+            }
             jumping = false
         }
     }

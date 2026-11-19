@@ -291,11 +291,11 @@ private fun HistoryConversationScreen(
                 },
                 navigationIcon = { HistoryBackButton(onBack) },
                 actions = {
-                    IconButton(onClick = { userOnly = !userOnly }) {
+                    IconButton(onClick = { userOnly = !userOnly }, enabled = error == null) {
                         Icon(
                             painterResource(R.drawable.ic_filter),
                             contentDescription = stringResource(R.string.chat_filter_user),
-                            tint = if (userOnly) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                            tint = if (userOnly && error == null) MaterialTheme.colorScheme.primary else LocalContentColor.current,
                         )
                     }
                     IconToggleButton(checked = detailsOpen, onCheckedChange = { detailsOpen = it }) {

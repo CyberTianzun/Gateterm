@@ -194,8 +194,10 @@ private fun Messages(
         val targetId = pendingJumpId ?: return@LaunchedEffect
         if (userOnly) return@LaunchedEffect
         val index = messages.indexOfFirst { it.id == targetId }
-        pendingJumpId = null
-        if (index < 0) return@LaunchedEffect
+        if (index < 0) {
+            pendingJumpId = null
+            return@LaunchedEffect
+        }
         follow = false
         scrollingToBottom = true
         try {
@@ -204,6 +206,7 @@ private fun Messages(
             scrollingToBottom = false
         }
         highlightedId = targetId
+        pendingJumpId = null
     }
     LaunchedEffect(highlightedId) {
         if (highlightedId != null) {

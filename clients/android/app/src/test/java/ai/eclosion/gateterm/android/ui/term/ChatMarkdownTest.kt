@@ -174,4 +174,32 @@ class ChatMarkdownTest {
         assertEquals(1f, c.alpha)
         assertEquals(Color(0xFF191A1B), c)
     }
+
+    @Test
+    fun flattenDeepBlocksIterativelyCollectsLeavesAndTaskStrikeThrough() {
+        val quoteDoc = parseMarkdown("> ".repeat(64) + "leaf")
+        val flatQuote = flattenDeepBlocks(quoteDoc.root, quoteDoc, inheritedStrikeThrough = false)
+        assertEquals(1, flatQuote.size)
+        assertEquals(false, flatQuote[0].second)
+        val leafParagraph = quoteDoc.blocks[flatQuote[0].first] as FfiMdBlock.Paragraph
+        assertEquals("leaf", leafParagraph.runs.joinToString("") { it.text })
+
+        val extremeDoc = parseMarkdown("> ".repeat(200) + "deepest")
+        val flatExtreme = flattenDeepBlocks(extremeDoc.root, extremeDoc, inheritedStrikeThrough = false)
+        assertEquals(1, flatExtreme.size)
+        assertEquals("deepest", (extremeDoc.blocks[flatExtreme[0].first] as FfiMdBlock.Paragraph).runs.joinToString("") { it.text })
+
+        val taskDoc = parseMarkdown("> ".repeat(20) + "- [x] done\n" + "> ".repeat(20) + "- [ ] todo")
+        val flatTasks = flattenDeepBlocks(taskDoc.root, taskDoc, inheritedStrikeThrough = false)
+        assertEquals(2, flatTasks.size)
+        assertEquals(true, flatTasks[0].second)
+        assertEquals(false, flatTasks[1].second)
+        assertEquals("done", (taskDoc.blocks[flatTasks[0].first] as FfiMdBlock.Paragraph).runs.joinToString("") { it.text })
+        assertEquals("todo", (taskDoc.blocks[flatTasks[1].first] as FfiMdBlock.Paragraph).runs.joinToString("") { it.text })
+
+        val listDoc = parseMarkdown((0 until 40).joinToString("\n") { i -> "${"  ".repeat(i)}- item $i" })
+        val flatList = flattenDeepBlocks(listDoc.root, listDoc, inheritedStrikeThrough = false)
+        assertEquals(40, flatList.size)
+        assertEquals("item 39", (listDoc.blocks[flatList[39].first] as FfiMdBlock.Paragraph).runs.joinToString("") { it.text })
+    }
 }

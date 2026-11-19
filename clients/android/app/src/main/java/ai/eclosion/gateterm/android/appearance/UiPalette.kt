@@ -22,8 +22,15 @@ data class UiPalette(
 
 fun TermAppearance.uiPalette(): UiPalette {
     val light = isLightTheme()
+    val panel = mixRgb(foreground, background, if (light) 0.05 else 0.07)
+    val panel2 = mixRgb(foreground, background, if (light) 0.11 else 0.14)
     val accent = readableAccent(ansi[4], ansi[12], background)
-    val readableFallback = if (contrast(accent, background) >= 3.0) accent else foreground
+    val headingFallback = if (contrast(accent, background) >= 3.0) accent else foreground
+    val codeFallback = if (contrast(accent, background) >= 3.0 && contrast(accent, panel2) >= 3.0) {
+        accent
+    } else {
+        foreground
+    }
     val headingCandidates = listOfNotNull(
         ansi.getOrNull(6),
         ansi.getOrNull(14),
@@ -42,14 +49,14 @@ fun TermAppearance.uiPalette(): UiPalette {
         light = light,
         background = background,
         foreground = foreground,
-        panel = mixRgb(foreground, background, if (light) 0.05 else 0.07),
-        panel2 = mixRgb(foreground, background, if (light) 0.11 else 0.14),
+        panel = panel,
+        panel2 = panel2,
         line = mixRgb(foreground, background, if (light) 0.2 else 0.22),
         dim = mixRgb(foreground, background, 0.55),
         accent = accent,
         danger = readableAccent(ansi[1], ansi[9], background),
-        mdHeading = pickReadableColor(headingCandidates, background, readableFallback),
-        mdCode = pickReadableColor(codeCandidates, background, readableFallback),
+        mdHeading = pickReadableColor(headingCandidates, listOf(background), headingFallback),
+        mdCode = pickReadableColor(codeCandidates, listOf(background, panel2), codeFallback),
     )
 }
 
@@ -75,8 +82,8 @@ private fun readableAccent(normal: Int, bright: Int, background: Int): Int = whe
     else -> normal
 }
 
-internal fun pickReadableColor(candidates: List<Int>, background: Int, fallback: Int): Int =
-    candidates.firstOrNull { contrast(it, background) >= 3.0 } ?: fallback
+internal fun pickReadableColor(candidates: List<Int>, backgrounds: List<Int>, fallback: Int): Int =
+    candidates.firstOrNull { candidate -> backgrounds.all { bg -> contrast(candidate, bg) >= 3.0 } } ?: fallback
 
 private fun luminance(rgb: Int): Double {
     fun linear(shift: Int): Double {

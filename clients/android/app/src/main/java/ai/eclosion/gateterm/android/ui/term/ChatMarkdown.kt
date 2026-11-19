@@ -191,6 +191,10 @@ private fun MarkdownBlockList(
     listDepth: Int,
     strikeThrough: Boolean,
 ) {
+    if (depth >= MAX_DEPTH - 1) {
+        MarkdownFlattenedBlocks(doc = doc, indices = indices, palette = palette, strikeThrough = strikeThrough)
+        return
+    }
     indices.forEach { idx ->
         val block = doc.blocks.getOrNull(idx.toInt()) ?: return@forEach
         MarkdownBlock(
@@ -204,6 +208,80 @@ private fun MarkdownBlockList(
     }
 }
 
+internal fun flattenDeepBlocks(
+    indices: List<UInt>,
+    doc: FfiMdDocument,
+    inheritedStrikeThrough: Boolean,
+): List<Pair<Int, Boolean>> {
+    val result = mutableListOf<Pair<Int, Boolean>>()
+    val stack = ArrayDeque<Pair<Int, Boolean>>(indices.size)
+    for (i in indices.indices.reversed()) {
+        stack.addLast(indices[i].toInt() to inheritedStrikeThrough)
+    }
+    while (stack.isNotEmpty()) {
+        val (blockIndex, strikeThrough) = stack.removeLast()
+        val block = doc.blocks.getOrNull(blockIndex) ?: continue
+        when (block) {
+            is FfiMdBlock.BlockQuote -> {
+                for (i in block.children.indices.reversed()) {
+                    stack.addLast(block.children[i].toInt() to strikeThrough)
+                }
+            }
+            is FfiMdBlock.ListBlock -> {
+                for (i in block.items.indices.reversed()) {
+                    val item = block.items[i]
+                    val childStrike = strikeThrough || (item.checked == true)
+                    for (j in item.children.indices.reversed()) {
+                        stack.addLast(item.children[j].toInt() to childStrike)
+                    }
+                }
+            }
+            is FfiMdBlock.Heading,
+            is FfiMdBlock.Paragraph,
+            is FfiMdBlock.CodeBlock,
+            is FfiMdBlock.Table,
+            FfiMdBlock.ThematicBreak -> result.add(blockIndex to strikeThrough)
+        }
+    }
+    return result
+}
+
+@Composable
+private fun MarkdownFlattenedBlocks(
+    doc: FfiMdDocument,
+    indices: List<UInt>,
+    palette: UiPalette,
+    strikeThrough: Boolean,
+) {
+    val flattened = remember(doc, indices, strikeThrough) {
+        flattenDeepBlocks(indices, doc, strikeThrough)
+    }
+    flattened.forEach { (blockIndex, leafStrike) ->
+        val block = doc.blocks.getOrNull(blockIndex) ?: return@forEach
+        MarkdownLeafBlock(block = block, palette = palette, strikeThrough = leafStrike)
+    }
+}
+
+@Composable
+private fun MarkdownLeafBlock(
+    block: FfiMdBlock,
+    palette: UiPalette,
+    strikeThrough: Boolean,
+) {
+    when (block) {
+        is FfiMdBlock.Heading -> MarkdownHeading(block, palette, strikeThrough)
+        is FfiMdBlock.Paragraph -> MarkdownParagraph(block.runs, palette, strikeThrough)
+        is FfiMdBlock.CodeBlock -> MarkdownCodeBlock(block, palette)
+        is FfiMdBlock.Table -> MarkdownTable(block, palette)
+        FfiMdBlock.ThematicBreak -> HorizontalDivider(
+            thickness = 1.dp,
+            color = palette.line.toOpaqueColor(),
+            modifier = Modifier.padding(vertical = 4.dp),
+        )
+        is FfiMdBlock.BlockQuote, is FfiMdBlock.ListBlock -> Unit
+    }
+}
+
 @Composable
 private fun MarkdownBlock(
     doc: FfiMdDocument,
@@ -214,17 +292,13 @@ private fun MarkdownBlock(
     strikeThrough: Boolean,
 ) {
     when (block) {
-        is FfiMdBlock.Heading -> MarkdownHeading(block, palette, strikeThrough)
-        is FfiMdBlock.Paragraph -> MarkdownParagraph(block.runs, palette, strikeThrough)
-        is FfiMdBlock.CodeBlock -> MarkdownCodeBlock(block, palette)
+        is FfiMdBlock.Heading,
+        is FfiMdBlock.Paragraph,
+        is FfiMdBlock.CodeBlock,
+        is FfiMdBlock.Table,
+        FfiMdBlock.ThematicBreak -> MarkdownLeafBlock(block, palette, strikeThrough)
         is FfiMdBlock.BlockQuote -> MarkdownBlockQuote(doc, block, palette, depth, listDepth, strikeThrough)
         is FfiMdBlock.ListBlock -> MarkdownList(doc, block, palette, depth, listDepth, strikeThrough)
-        is FfiMdBlock.Table -> MarkdownTable(block, palette)
-        FfiMdBlock.ThematicBreak -> HorizontalDivider(
-            thickness = 1.dp,
-            color = palette.line.toOpaqueColor(),
-            modifier = Modifier.padding(vertical = 4.dp),
-        )
     }
 }
 
@@ -388,7 +462,7 @@ private fun MarkdownBlockQuote(
     strikeThrough: Boolean,
 ) {
     if (depth >= MAX_DEPTH - 1) {
-        MarkdownBlockList(doc, block.children, palette, depth, listDepth, strikeThrough)
+        MarkdownFlattenedBlocks(doc, block.children, palette, strikeThrough)
         return
     }
     val barColor = palette.accent.toOpaqueColor()
@@ -424,7 +498,7 @@ private fun MarkdownList(
     if (depth >= MAX_DEPTH - 1) {
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             block.items.forEach { item ->
-                MarkdownBlockList(doc, item.children, palette, depth, listDepth, strikeThrough)
+                MarkdownFlattenedBlocks(doc, item.children, palette, strikeThrough || (item.checked == true))
             }
         }
         return

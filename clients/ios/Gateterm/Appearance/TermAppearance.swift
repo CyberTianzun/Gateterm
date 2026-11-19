@@ -241,25 +241,28 @@ extension TermAppearance {
 
     var palette: UiPalette {
         let light = isLight
+        let panel = mixRGB(foreground, background, light ? 0.05 : 0.07)
+        let panel2 = mixRGB(foreground, background, light ? 0.11 : 0.14)
         let accentNormal = ansi.indices.contains(4) ? ansi[4] : foreground
         let accentBright = ansi.indices.contains(12) ? ansi[12] : accentNormal
         let dangerNormal = ansi.indices.contains(1) ? ansi[1] : foreground
         let dangerBright = ansi.indices.contains(9) ? ansi[9] : dangerNormal
         let accent = readableAccent(accentNormal, accentBright, background)
         let danger = readableAccent(dangerNormal, dangerBright, background)
-        let readableFallback = contrast(accent, background) >= 3.0 ? accent : foreground
+        let headingFallback = contrast(accent, background) >= 3.0 ? accent : foreground
+        let codeFallback = (contrast(accent, background) >= 3.0 && contrast(accent, panel2) >= 3.0) ? accent : foreground
         let headingCandidates = [6, 14, 4, 12].compactMap { ansi.indices.contains($0) ? ansi[$0] : nil }
         let codeCandidates = [3, 11, 2, 10, 6, 14].compactMap { ansi.indices.contains($0) ? ansi[$0] : nil }
         return UiPalette(
             light: light, background: background, foreground: foreground,
-            panel: mixRGB(foreground, background, light ? 0.05 : 0.07),
-            panel2: mixRGB(foreground, background, light ? 0.11 : 0.14),
+            panel: panel,
+            panel2: panel2,
             line: mixRGB(foreground, background, light ? 0.2 : 0.22),
             dim: mixRGB(foreground, background, 0.55),
             accent: accent,
             danger: danger,
-            mdHeading: pickReadableColor(candidates: headingCandidates, background: background, fallback: readableFallback),
-            mdCode: pickReadableColor(candidates: codeCandidates, background: background, fallback: readableFallback))
+            mdHeading: pickReadableColor(candidates: headingCandidates, backgrounds: [background], fallback: headingFallback),
+            mdCode: pickReadableColor(candidates: codeCandidates, backgrounds: [background, panel2], fallback: codeFallback))
     }
 }
 
@@ -284,8 +287,10 @@ func contrast(_ a: Int, _ b: Int) -> Double {
     return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
 }
 
-func pickReadableColor(candidates: [Int], background: Int, fallback: Int) -> Int {
-    candidates.first { contrast($0, background) >= 3.0 } ?? fallback
+func pickReadableColor(candidates: [Int], backgrounds: [Int], fallback: Int) -> Int {
+    candidates.first { candidate in
+        backgrounds.allSatisfy { contrast(candidate, $0) >= 3.0 }
+    } ?? fallback
 }
 
 private func readableAccent(_ normal: Int, _ bright: Int, _ background: Int) -> Int {

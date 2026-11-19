@@ -92,11 +92,11 @@ function readableAccent(normal: string | undefined, bright: string | undefined, 
   return candidates.reduce((best, c) => (contrast(c.rgb, bg) > contrast(best.rgb, bg) ? c : best)).hex;
 }
 
-/** Pick the first candidate color meeting MIN_UI_CONTRAST against bg, else fallback. */
-function pickReadableColor(candidates: (string | undefined)[], bg: Rgb, fallback: string): string {
+/** Pick the first candidate color meeting MIN_UI_CONTRAST against all backgrounds, else fallback. */
+function pickReadableColor(candidates: (string | undefined)[], backgrounds: Rgb[], fallback: string): string {
   for (const hex of candidates) {
     const rgb = parseHex(hex);
-    if (rgb && contrast(rgb, bg) >= MIN_UI_CONTRAST) return toHex(rgb);
+    if (rgb && backgrounds.every((bg) => contrast(rgb, bg) >= MIN_UI_CONTRAST)) return toHex(rgb);
   }
   return fallback;
 }
@@ -123,7 +123,18 @@ export function deriveUiColors(theme: ITheme): UiColors | null {
   if (!bg || !fg) return null;
 
   const light = luminance(bg) > 0.5;
+  const fgHex = toHex(fg);
+  const panel2Hex = toHex(mix(fg, bg, light ? 0.11 : 0.14));
+  const panel2 = parseHex(panel2Hex)!;
   const accent = readableAccent(theme.blue, theme.brightBlue, bg, fg);
+  const accentRgb = parseHex(accent);
+  const headingFallback = accentRgb && contrast(accentRgb, bg) >= MIN_UI_CONTRAST ? accent : fgHex;
+  const codeFallback =
+    accentRgb &&
+    contrast(accentRgb, bg) >= MIN_UI_CONTRAST &&
+    contrast(accentRgb, panel2) >= MIN_UI_CONTRAST
+      ? accent
+      : fgHex;
   return {
     colorScheme: light ? "light" : "dark",
     vars: {
@@ -131,21 +142,21 @@ export function deriveUiColors(theme: ITheme): UiColors | null {
       // 侧边栏要能跟终端区分开:往背景里掺一点前景色。亮色主题掺得少一些,
       // 因为同样的比例在浅底上看起来更脏。
       "--panel": toHex(mix(fg, bg, light ? 0.05 : 0.07)),
-      "--panel-2": toHex(mix(fg, bg, light ? 0.11 : 0.14)),
+      "--panel-2": panel2Hex,
       "--line": toHex(mix(fg, bg, light ? 0.2 : 0.22)),
-      "--text": toHex(fg),
+      "--text": fgHex,
       "--dim": toHex(mix(fg, bg, 0.55)),
       "--accent": accent,
       "--danger": readableAccent(theme.red, theme.brightRed, bg, fg),
       "--md-heading": pickReadableColor(
         [theme.cyan, theme.brightCyan, theme.blue, theme.brightBlue],
-        bg,
-        accent,
+        [bg],
+        headingFallback,
       ),
       "--md-code": pickReadableColor(
         [theme.yellow, theme.brightYellow, theme.green, theme.brightGreen, theme.cyan, theme.brightCyan],
-        bg,
-        accent,
+        [bg, panel2],
+        codeFallback,
       ),
     },
   };

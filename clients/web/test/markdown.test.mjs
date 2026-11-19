@@ -182,11 +182,22 @@ test("parseMarkdown 安全性: 拦截危险协议、保留原始 HTML 为纯文�
   assert.equal(inlineHtml[0].kind, "paragraph");
   assert.equal(collectText(inlineHtml[0].runs), "before <img src=x onerror=alert(1)> after");
 
-  const img = parseMarkdown("![alt](https://example.com/x.png) ![bad](javascript:alert(1))");
+  const img = parseMarkdown(
+    "![alt](https://example.com/x.png) ![bad](javascript:alert(1)) ![](https://example.com/y.png) ![](javascript:alert(1))",
+  );
   assert.equal(img[0].kind, "paragraph");
   assert.deepEqual(img[0].runs, [
     { text: "[alt]", bold: false, italic: false, strikethrough: false, code: false, link: "https://example.com/x.png" },
-    { text: " [bad]", bold: false, italic: false, strikethrough: false, code: false, link: null },
+    { text: " [bad] ", bold: false, italic: false, strikethrough: false, code: false, link: null },
+    {
+      text: "[https://example.com/y.png]",
+      bold: false,
+      italic: false,
+      strikethrough: false,
+      code: false,
+      link: "https://example.com/y.png",
+    },
+    { text: " [image]", bold: false, italic: false, strikethrough: false, code: false, link: null },
   ]);
 
   const linkedImg = parseMarkdown("[![alt](https://img.example/a.png)](https://target.example)");
@@ -222,8 +233,9 @@ test("parseMarkdown 安全性: 拦截危险协议、保留原始 HTML 为纯文�
   assert.ok(maxBlockDepth(deepQuote) <= 16, `嵌套深度超限: ${maxBlockDepth(deepQuote)}`);
   assert.ok(JSON.stringify(deepQuote).includes("leaf"));
 
-  const deepList = parseMarkdown(`${"  ".repeat(40)}- leaf`);
-  assert.ok(maxBlockDepth(deepList) <= 16);
+  const deepList = parseMarkdown(Array.from({ length: 40 }, (_, i) => `${"  ".repeat(i)}- item ${i}`).join("\n"));
+  assert.ok(maxBlockDepth(deepList) <= 16, `列表嵌套深度超限: ${maxBlockDepth(deepList)}`);
+  assert.ok(JSON.stringify(deepList).includes("item 39"));
 });
 
 test("renderMarkdown 仅使用安全 DOM API（零 innerHTML）并正确处理复制按钮与安全性", async () => {

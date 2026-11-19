@@ -692,6 +692,10 @@ narrowSidebar.addEventListener("change", () => {
 function toggleView() {
   if (viewMode === "terminal" && !chatAvailable(agents, attachedId, transcriptEnabled)) return;
   viewMode = viewMode === "chat" ? "terminal" : "chat";
+  if (viewMode === "terminal") {
+    chatUserOnly = false;
+    chatJumpToId = null;
+  }
   setDrawer(false);
   showView();
   // 进聊天视图才去拉 —— 不看的时候不该白读别人的文件
