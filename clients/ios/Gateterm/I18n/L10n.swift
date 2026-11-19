@@ -110,6 +110,7 @@ enum L {
             "ios_view_history": "历史会话",
             "ios_chat_view": "聊天",
             "ios_terminal_view": "终端",
+            "launcher_filter": "筛选",
         ],
         en: [
             "editor_warning_loopback": "This address points to this device itself. Use the computer's LAN or Tailscale address instead of 127.0.0.1.",
@@ -156,6 +157,7 @@ enum L {
             "ios_view_history": "History",
             "ios_chat_view": "Chat",
             "ios_terminal_view": "Terminal",
+            "launcher_filter": "Filter",
         ]
     )
 }

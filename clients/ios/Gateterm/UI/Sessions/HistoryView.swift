@@ -171,6 +171,7 @@ private struct HistoryConversationView: View {
     @State private var loading = true
     @State private var error: String?
     @State private var detailsOpen = false
+    @State private var userOnly = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -189,7 +190,12 @@ private struct HistoryConversationView: View {
             if let error {
                 ContentUnavailableView(historyErrorText(error), systemImage: "exclamationmark.triangle")
             } else {
-                ChatView(chat: ChatUiState(messages: messages, loading: loading), onOpenTerminal: { dismiss() })
+                ChatView(
+                    chat: ChatUiState(messages: messages, loading: loading),
+                    appearance: model.appearance,
+                    userOnly: $userOnly,
+                    onOpenTerminal: { dismiss() }
+                )
             }
         }
         .navigationTitle(historyTitle(entry))
@@ -201,13 +207,30 @@ private struct HistoryConversationView: View {
                     Text(historyTitle(entry)).font(.headline).lineLimit(1)
                 }
             }
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    userOnly.toggle()
+                } label: {
+                    Label(
+                        L.t("chat_filter_user"),
+                        systemImage: userOnly
+                            ? "line.3.horizontal.decrease.circle.fill"
+                            : "line.3.horizontal.decrease.circle"
+                    )
+                }
+                .disabled(error != nil)
+                .accessibilityLabel(L.t("chat_filter_user"))
+                .accessibilityAddTraits(userOnly ? .isSelected : [])
                 Button { withAnimation { detailsOpen.toggle() } } label: {
                     Label(L.t("history_details"), systemImage: detailsOpen ? "info.circle.fill" : "info.circle")
                 }
             }
         }
+        .onChange(of: entry.id) { _, _ in
+            userOnly = false
+        }
         .task(id: entry.id) {
+            userOnly = false
             do { messages = try await model.previewHistory(entry) } catch {
                 self.error = (error as? HistoryFailure)?.reason ?? "unreadable"
             }

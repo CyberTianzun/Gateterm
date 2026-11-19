@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 @testable import Gateterm
 
@@ -142,5 +143,212 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(resolveLocale(.auto, systemTags: ["fr-FR", "de-DE", "zh-Hans"]), .zhCN)
         XCTAssertEqual(resolveLocale(.auto, systemTags: ["fr-FR", "de-DE"]), .en)
         XCTAssertEqual(resolveLocale(.auto, systemTags: []), .en)
+    }
+
+    func testUserPromptsFilterIdentifiesRealPromptsAndStripsNonPromptBlocks() {
+        let pureUser = ChatMessage(id: "u1", role: .user, ts: nil, blocks: [.text("Fix bug")])
+        XCTAssertTrue(pureUser.isUserPrompt)
+        XCTAssertEqual(pureUser.userPromptTextBlocks, ["Fix bug"])
+
+        let mixedUser = ChatMessage(
+            id: "u2",
+            role: .user,
+            ts: nil,
+            blocks: [
+                .toolResult(ok: true, text: "output"),
+                .text("   "),
+                .text("Now add tests"),
+                .toolUse(name: "Read", input: "a.swift"),
+                .text("Second line"),
+            ]
+        )
+        XCTAssertTrue(mixedUser.isUserPrompt)
+        XCTAssertEqual(mixedUser.userPromptTextBlocks, ["Now add tests", "Second line"])
+
+        let pureToolResult = ChatMessage(id: "tr1", role: .user, ts: nil, blocks: [.toolResult(ok: true, text: "ok")])
+        XCTAssertFalse(pureToolResult.isUserPrompt)
+        XCTAssertEqual(pureToolResult.userPromptTextBlocks, [])
+
+        let piToolTurn = ChatMessage(
+            id: "pi1",
+            role: .user,
+            ts: nil,
+            blocks: [.toolUse(name: "bash", input: "ls"), .toolResult(ok: true, text: "file.txt")]
+        )
+        XCTAssertFalse(piToolTurn.isUserPrompt)
+        XCTAssertEqual(piToolTurn.userPromptTextBlocks, [])
+
+        let blankUser = ChatMessage(id: "u-blank", role: .user, ts: nil, blocks: [.text("  \n\t ")])
+        XCTAssertFalse(blankUser.isUserPrompt)
+        XCTAssertEqual(blankUser.userPromptTextBlocks, [])
+
+        let assistant = ChatMessage(id: "a1", role: .assistant, ts: nil, blocks: [.text("Sure")])
+        XCTAssertFalse(assistant.isUserPrompt)
+        XCTAssertEqual(assistant.userPromptTextBlocks, [])
+
+        let system = ChatMessage(id: "s1", role: .system, ts: nil, blocks: [.text("System notice")])
+        XCTAssertFalse(system.isUserPrompt)
+        XCTAssertEqual(system.userPromptTextBlocks, [])
+
+        let messages = [
+            pureUser,
+            assistant,
+            pureToolResult,
+            piToolTurn,
+            system,
+            mixedUser,
+            blankUser,
+        ]
+        XCTAssertEqual(Chat.userPrompts(messages).map(\.id), ["u1", "u2"])
+    }
+
+    func testUiPaletteMarkdownColorsMeetContrastAcrossBuiltinsAndFallbacks() {
+        for theme in AppearanceCodec.builtins {
+            let palette = theme.palette
+            let headingContrast = contrast(palette.mdHeading, palette.background)
+            let codeContrast = contrast(palette.mdCode, palette.background)
+            XCTAssertGreaterThanOrEqual(headingContrast, 3.0, "\(theme.name) mdHeading contrast \(headingContrast)")
+            XCTAssertGreaterThanOrEqual(codeContrast, 3.0, "\(theme.name) mdCode contrast \(codeContrast)")
+        }
+
+        var pale = AppearanceCodec.light2026
+        pale.name = "Pale Solarized"
+        pale.background = 0xFDF6E3
+        pale.foreground = 0x586E75
+        pale.ansi = [
+            0x073642, 0xDC322F, 0x93A1A1, 0xEEE8D5,
+            0x268BD2, 0xD33682, 0x93A1A1, 0xEEE8D5,
+            0x002B36, 0xCB4B16, 0xEEE8D5, 0xFDF6E3,
+            0x839496, 0x6C71C4, 0xEEE8D5, 0xFDF6E3,
+        ]
+        let palePalette = pale.palette
+        XCTAssertEqual(palePalette.mdHeading, palePalette.accent)
+        XCTAssertEqual(palePalette.mdCode, palePalette.accent)
+        XCTAssertGreaterThanOrEqual(contrast(palePalette.mdHeading, palePalette.background), 3.0)
+        XCTAssertGreaterThanOrEqual(contrast(palePalette.mdCode, palePalette.background), 3.0)
+
+        var extreme = pale
+        extreme.ansi[4] = 0xEEE8D5
+        extreme.ansi[12] = 0xFDF6E3
+        let extremePalette = extreme.palette
+        XCTAssertEqual(extremePalette.mdHeading, extremePalette.foreground)
+        XCTAssertEqual(extremePalette.mdCode, extremePalette.foreground)
+        XCTAssertGreaterThanOrEqual(contrast(extremePalette.mdHeading, extremePalette.background), 3.0)
+        XCTAssertGreaterThanOrEqual(contrast(extremePalette.mdCode, extremePalette.background), 3.0)
+
+        var shortAnsi = AppearanceCodec.dark2026
+        shortAnsi.ansi = []
+        let fallbackPalette = shortAnsi.palette
+        XCTAssertEqual(fallbackPalette.mdHeading, shortAnsi.foreground)
+        XCTAssertEqual(fallbackPalette.mdCode, shortAnsi.foreground)
+    }
+
+    func testMarkdownFfiParsingLinkSanitizationAndAttributedRuns() {
+        let md = """
+        # H1 Title
+        ### H3 Title
+
+        ```rust
+        fn main() {}
+        ```
+
+        - [x] done
+        - [ ] todo
+          - nested
+
+        | Left | Center | Right |
+        |:-----|:------:|------:|
+        | **a** | `b` | c |
+
+        [ok](https://example.com) [xss](javascript:alert(1))
+        """
+        let doc = parseMarkdown(text: md)
+        let rootBlocks = doc.root.compactMap { idx -> FfiMdBlock? in
+            let i = Int(idx)
+            return doc.blocks.indices.contains(i) ? doc.blocks[i] : nil
+        }
+
+        let headings = rootBlocks.compactMap { block -> (UInt8, [FfiMdRun])? in
+            if case let .heading(level, runs) = block { return (level, runs) }
+            return nil
+        }
+        XCTAssertEqual(headings.count, 2)
+        XCTAssertEqual(headings[0].0, 1)
+        XCTAssertEqual(headings[0].1.map(\.text).joined(), "H1 Title")
+        XCTAssertEqual(headings[1].0, 3)
+
+        let codeBlocks = rootBlocks.compactMap { block -> (String?, String)? in
+            if case let .codeBlock(lang, code) = block { return (lang, code) }
+            return nil
+        }
+        XCTAssertEqual(codeBlocks.count, 1)
+        XCTAssertEqual(codeBlocks[0].0, "rust")
+        XCTAssertEqual(codeBlocks[0].1, "fn main() {}")
+
+        let lists = rootBlocks.compactMap { block -> (Bool, UInt64, [FfiMdListItem])? in
+            if case let .listBlock(ordered, start, items) = block { return (ordered, start, items) }
+            return nil
+        }
+        XCTAssertEqual(lists.count, 1)
+        XCTAssertFalse(lists[0].0)
+        XCTAssertEqual(lists[0].2.count, 2)
+        XCTAssertEqual(lists[0].2[0].checked, true)
+        XCTAssertEqual(lists[0].2[1].checked, false)
+        XCTAssertTrue(lists[0].2[1].children.contains { idx in
+            let i = Int(idx)
+            guard doc.blocks.indices.contains(i) else { return false }
+            if case .listBlock = doc.blocks[i] { return true }
+            return false
+        })
+
+        let tables = rootBlocks.compactMap { block -> ([FfiMdAlign], [FfiMdTableCell], [[FfiMdTableCell]])? in
+            if case let .table(alignments, headers, rows) = block { return (alignments, headers, rows) }
+            return nil
+        }
+        XCTAssertEqual(tables.count, 1)
+        XCTAssertEqual(tables[0].0, [.left, .center, .right])
+        XCTAssertEqual(tables[0].1.count, 3)
+        XCTAssertEqual(tables[0].2.count, 1)
+        XCTAssertTrue(tables[0].2[0][0].runs.first?.bold == true)
+        XCTAssertTrue(tables[0].2[0][1].runs.first?.code == true)
+
+        XCTAssertEqual(sanitizeMarkdownLinkUrl("  https://example.com/a  ")?.absoluteString, "https://example.com/a")
+        XCTAssertEqual(sanitizeMarkdownLinkUrl("mailto:test@example.com")?.absoluteString, "mailto:test@example.com")
+        XCTAssertNil(sanitizeMarkdownLinkUrl(nil))
+        XCTAssertNil(sanitizeMarkdownLinkUrl(""))
+        XCTAssertNil(sanitizeMarkdownLinkUrl("https://"))
+        XCTAssertNil(sanitizeMarkdownLinkUrl("javascript:alert(1)"))
+        XCTAssertNil(sanitizeMarkdownLinkUrl("data:text/html,x"))
+        XCTAssertNil(sanitizeMarkdownLinkUrl("file:///etc/passwd"))
+        XCTAssertNil(sanitizeMarkdownLinkUrl("https://example.com/\nbad"))
+
+        XCTAssertEqual(markdownHeadingFontSize(1), 15.5)
+        XCTAssertEqual(markdownHeadingFontSize(2), 14.5)
+        XCTAssertEqual(markdownHeadingFontSize(3), 13.5)
+
+        let palette = AppearanceCodec.dark2026.palette
+        let runs = [
+            FfiMdRun(text: "both", bold: true, italic: true, strikethrough: true, code: false, link: nil),
+            FfiMdRun(text: " ", bold: false, italic: false, strikethrough: false, code: false, link: nil),
+            FfiMdRun(text: "code()", bold: false, italic: false, strikethrough: false, code: true, link: nil),
+            FfiMdRun(text: " ", bold: false, italic: false, strikethrough: false, code: false, link: nil),
+            FfiMdRun(text: "safe", bold: false, italic: false, strikethrough: false, code: false, link: "https://example.com"),
+            FfiMdRun(text: " ", bold: false, italic: false, strikethrough: false, code: false, link: nil),
+            FfiMdRun(text: "evil", bold: false, italic: false, strikethrough: false, code: false, link: "javascript:alert(1)"),
+        ]
+        let attr = buildMarkdownAttributedString(runs: runs, palette: palette, baseSize: 13.5)
+        XCTAssertEqual(String(attr.characters), "both code() safe evil")
+        let bothRun = attr.runs.first { String(attr[$0.range].characters) == "both" }
+        XCTAssertNotNil(bothRun?.attributes[AttributeScopes.SwiftUIAttributes.FontAttribute.self])
+        XCTAssertEqual(bothRun?.attributes[AttributeScopes.SwiftUIAttributes.StrikethroughStyleAttribute.self], Text.LineStyle.single)
+        let safeRun = attr.runs.first { String(attr[$0.range].characters) == "safe" }
+        XCTAssertEqual(safeRun?.attributes[AttributeScopes.FoundationAttributes.LinkAttribute.self]?.absoluteString, "https://example.com")
+        XCTAssertEqual(safeRun?.attributes[AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute.self], Color(rgb: palette.accent))
+        XCTAssertEqual(safeRun?.attributes[AttributeScopes.SwiftUIAttributes.UnderlineStyleAttribute.self], Text.LineStyle.single)
+        let evilRun = attr.runs.first { String(attr[$0.range].characters) == "evil" }
+        XCTAssertNil(evilRun?.attributes[AttributeScopes.FoundationAttributes.LinkAttribute.self])
+        let codeRun = attr.runs.first { String(attr[$0.range].characters) == "code()" }
+        XCTAssertEqual(codeRun?.attributes[AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute.self], Color(rgb: palette.mdCode))
+        XCTAssertEqual(codeRun?.attributes[AttributeScopes.SwiftUIAttributes.BackgroundColorAttribute.self], Color(rgb: palette.panel2))
     }
 }

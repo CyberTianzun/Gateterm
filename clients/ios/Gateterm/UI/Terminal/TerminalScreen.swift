@@ -16,6 +16,7 @@ struct TerminalScreen: View {
     @State private var keyboard = TerminalKeyboard(serverOS: "")
     @State private var topBarVisible = true
     @State private var topBarRevealTick = 0
+    @State private var chatUserOnly = false
 
     private var softModifiers: KeyModifiers { KeyModifiers(shift: shift, ctrl: ctrl, alt: alt) }
     private var agentId: String? { AgentKeyboardLayouts.agentForTerminal(model.agents, sessionId) }
@@ -41,7 +42,13 @@ struct TerminalScreen: View {
             if sizeClass == .regular && model.openSessionIds.count > 1 && (topBarVisible || model.chatOpen) { tabs }
             if model.reconnecting { ReconnectingBanner() }
             if model.chatOpen {
-                ChatView(chat: model.chat, onOpenTerminal: model.toggleChat, onLoadOlder: model.loadOlderChat)
+                ChatView(
+                    chat: model.chat,
+                    appearance: model.appearance,
+                    userOnly: $chatUserOnly,
+                    onOpenTerminal: model.toggleChat,
+                    onLoadOlder: model.loadOlderChat
+                )
             } else {
                 TerminalSurface(
                     handle: handle,
@@ -81,6 +88,10 @@ struct TerminalScreen: View {
             clearModifiers()
             topBarVisible = true
             topBarRevealTick &+= 1
+            chatUserOnly = false
+        }
+        .onChange(of: model.chatOpen) { _, open in
+            if !open { chatUserOnly = false }
         }
         .onDisappear {
             // Releases go to the session that owned the pressed keys, never to the next one.
@@ -115,6 +126,20 @@ struct TerminalScreen: View {
             }
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
+            if model.chatOpen {
+                Button {
+                    chatUserOnly.toggle()
+                } label: {
+                    Label(
+                        L.t("chat_filter_user"),
+                        systemImage: chatUserOnly
+                            ? "line.3.horizontal.decrease.circle.fill"
+                            : "line.3.horizontal.decrease.circle"
+                    )
+                }
+                .accessibilityLabel(L.t("chat_filter_user"))
+                .accessibilityAddTraits(chatUserOnly ? .isSelected : [])
+            }
             // 只有本会话里有读得了记录的 agent 才给入口;已经在聊天里时回终端永远可以
             if model.chatOpen || model.chatAvailable {
                 Button {

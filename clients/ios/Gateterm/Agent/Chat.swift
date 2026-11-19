@@ -19,6 +19,22 @@ struct ChatMessage: Identifiable, Equatable {
     let blocks: [ChatBlock]
 }
 
+extension ChatMessage {
+    /// 仅提取用户主动发出的非空正文块，剔除同条里的 tool-result 或空白块。
+    var userPromptTextBlocks: [String] {
+        guard role == .user else { return [] }
+        return blocks.compactMap { block in
+            guard case let .text(text) = block,
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return text
+        }
+    }
+
+    /// 判断一条消息是否为用户真正输入的一轮提示（而非工具回传/空白占位的 user turn）。
+    /// 不少 agent 的记录会把 tool-result 甚至 Pi 的 [tool-use, tool-result] 记成 role="user"。
+    var isUserPrompt: Bool { !userPromptTextBlocks.isEmpty }
+}
+
 /// 读不到对话记录时的原因。服务端给的是机器可读的键,文案在 UI 层按语言渲染。
 enum ChatFallback: String {
     case disabled
@@ -88,5 +104,10 @@ enum Chat {
             return .terminal(.unreadable)
         }
         return parseWindow(body)
+    }
+
+    /// 筛出所有用户输入的消息并保持原始时间顺序。
+    static func userPrompts(_ messages: [ChatMessage]) -> [ChatMessage] {
+        messages.filter(\.isUserPrompt)
     }
 }
