@@ -101,11 +101,31 @@ test("每个内置主题派生出的强调色都达到 UI 最低对比度", asyn
   };
   for (const [name, theme] of Object.entries(BUILTIN_THEMES)) {
     const { vars } = deriveUiColors(theme);
-    for (const key of ["--accent", "--danger", "--text"]) {
+    for (const key of ["--accent", "--danger", "--text", "--md-heading", "--md-code"]) {
+      assert.ok(vars[key], `${name} 缺少 ${key}`);
       const ratio = cr(vars[key], vars["--bg"]);
       assert.ok(ratio >= 3, `${name} 的 ${key} (${vars[key]}) 对比度只有 ${ratio.toFixed(2)}`);
     }
   }
+});
+
+test("Markdown 标题色与行内代码色在低对比度主题上会回退到可读颜色", () => {
+  // 亮色背景上常规黄/青对比度不足时，应升级到高对比度候选或 --accent
+  const pale = {
+    background: "#fdf6e3",
+    foreground: "#586e75",
+    blue: "#268bd2",
+    red: "#dc322f",
+    cyan: "#93a1a1",
+    brightCyan: "#eee8d5",
+    yellow: "#eee8d5",
+    brightYellow: "#fdf6e3",
+    green: "#93a1a1",
+    brightGreen: "#eee8d5",
+  };
+  const { vars } = deriveUiColors(pale);
+  assert.equal(vars["--md-heading"], vars["--accent"]);
+  assert.equal(vars["--md-code"], vars["--accent"]);
 });
 
 test("缺前景或背景时返回 null(维持 style.css 原样)", () => {

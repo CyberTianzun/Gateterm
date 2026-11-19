@@ -12,7 +12,19 @@ import type { ITheme } from "@xterm/xterm";
 import type { GateConfig } from "./config";
 
 /** 这些变量由主题接管;关掉「界面跟随主题」时全部移除,让 style.css 的默认值生效。 */
-const VARS = ["--bg", "--panel", "--panel-2", "--line", "--text", "--dim", "--accent", "--danger"];
+const VARS = [
+  "--bg",
+  "--panel",
+  "--panel-2",
+  "--line",
+  "--text",
+  "--dim",
+  "--accent",
+  "--danger",
+  "--md-heading",
+  "--md-code",
+  "--term-font",
+];
 
 interface Rgb {
   r: number;
@@ -80,6 +92,15 @@ function readableAccent(normal: string | undefined, bright: string | undefined, 
   return candidates.reduce((best, c) => (contrast(c.rgb, bg) > contrast(best.rgb, bg) ? c : best)).hex;
 }
 
+/** Pick the first candidate color meeting MIN_UI_CONTRAST against bg, else fallback. */
+function pickReadableColor(candidates: (string | undefined)[], bg: Rgb, fallback: string): string {
+  for (const hex of candidates) {
+    const rgb = parseHex(hex);
+    if (rgb && contrast(rgb, bg) >= MIN_UI_CONTRAST) return toHex(rgb);
+  }
+  return fallback;
+}
+
 export function isLightTheme(theme: ITheme): boolean {
   const bg = parseHex(theme.background);
   return bg !== null && luminance(bg) > 0.5;
@@ -102,6 +123,7 @@ export function deriveUiColors(theme: ITheme): UiColors | null {
   if (!bg || !fg) return null;
 
   const light = luminance(bg) > 0.5;
+  const accent = readableAccent(theme.blue, theme.brightBlue, bg, fg);
   return {
     colorScheme: light ? "light" : "dark",
     vars: {
@@ -113,8 +135,18 @@ export function deriveUiColors(theme: ITheme): UiColors | null {
       "--line": toHex(mix(fg, bg, light ? 0.2 : 0.22)),
       "--text": toHex(fg),
       "--dim": toHex(mix(fg, bg, 0.55)),
-      "--accent": readableAccent(theme.blue, theme.brightBlue, bg, fg),
+      "--accent": accent,
       "--danger": readableAccent(theme.red, theme.brightRed, bg, fg),
+      "--md-heading": pickReadableColor(
+        [theme.cyan, theme.brightCyan, theme.blue, theme.brightBlue],
+        bg,
+        accent,
+      ),
+      "--md-code": pickReadableColor(
+        [theme.yellow, theme.brightYellow, theme.green, theme.brightGreen, theme.cyan, theme.brightCyan],
+        bg,
+        accent,
+      ),
     },
   };
 }
@@ -134,6 +166,7 @@ export function applyUiColors(cfg: GateConfig): void {
     return;
   }
   for (const [k, v] of Object.entries(derived.vars)) root.setProperty(k, v);
+  root.setProperty("--term-font", cfg.font.family);
   // 让原生滚动条 / 表单控件跟着走,否则亮色主题下会出现深色滚动条
   root.setProperty("color-scheme", derived.colorScheme);
 }

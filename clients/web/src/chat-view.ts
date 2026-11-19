@@ -1,16 +1,29 @@
-import { type Block, type Message } from "./chat";
+import { type Block, type Message, type Role } from "./chat";
+import { writeClipboard } from "./clipboard";
 import { t } from "./i18n";
+import { renderMarkdown } from "./markdown";
 
 function excerpt(text: string): string {
   return text.split(/\r?\n/).find((line) => line.trim())?.trim().slice(0, 160) ?? "";
 }
 
-function blockNode(block: Block): HTMLElement {
+function blockNode(block: Block, role: Role): HTMLElement {
   if (block.kind === "text") {
-    const text = document.createElement("div");
-    text.className = "cb-text";
-    text.textContent = block.text;
-    return text;
+    const node = document.createElement("div");
+    if (role === "assistant") {
+      node.className = "cb-md";
+      node.appendChild(
+        renderMarkdown(block.text, {
+          copyLabel: t("chat.copyCode"),
+          copiedLabel: t("chat.copiedCode"),
+          onCopy: writeClipboard,
+        }),
+      );
+    } else {
+      node.className = "cb-text";
+      node.textContent = block.text;
+    }
+    return node;
   }
 
   const details = document.createElement("details");
@@ -80,7 +93,7 @@ export function renderMessages(box: HTMLElement, messages: Message[], scope: str
     row.className = `cmsg c-${message.role}`;
     row.dataset.messageId = message.id;
     message.blocks.forEach((block, index) => {
-      const node = blockNode(block);
+      const node = blockNode(block, message.role);
       if (node instanceof HTMLDetailsElement) {
         const key = JSON.stringify([message.id, index, block.kind]);
         node.dataset.blockKey = key;

@@ -21,6 +21,7 @@ clients/web/test/.chat.build.mjs
 clients/web/test/.history.build.mjs
 clients/web/test/.keys.build.mjs
 clients/web/test/.queries.build.mjs
+clients/web/test/.markdown.build.mjs
 
 .DS_Store
 
