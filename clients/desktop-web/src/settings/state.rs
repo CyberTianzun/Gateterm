@@ -13,6 +13,8 @@ pub struct Form {
     pub port: String,
     /// 空白表示「不固定」。
     pub token: String,
+    /// 自定义 Web 页面标题前缀,留空表示使用默认 `gateterm`。
+    pub web_title: String,
     pub autostart: bool,
     pub language: LanguagePref,
 }
@@ -48,6 +50,7 @@ impl Form {
             // token 不在这里回填:这一层不认识 Supervisor,拿不到当前生效值,
             // 所以留空由调用方在构造后显式赋值 —— 见 app.rs 的 `App::build_view`。
             token: String::new(),
+            web_title: String::new(),
             autostart,
             language: LanguagePref::Auto,
         }
@@ -69,9 +72,11 @@ impl Form {
             return Err(FieldError::Port(locale.text("端口不能是 0", "Port cannot be 0").into()));
         }
         let token = self.token.trim();
+        let web_title = gateterm_server::config::normalize_web_title(Some(self.web_title.clone()));
         Ok(Editable {
             listen: SocketAddr::new(ip, port),
             token: (!token.is_empty()).then(|| token.to_string()),
+            web_title,
             language: self.language,
         })
     }

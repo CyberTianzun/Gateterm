@@ -41,6 +41,7 @@ pub struct LocalServerSupervisor {
     agents: AgentsConfig,
     agent_sessions: Arc<gateterm_server::agent::store::AgentSessionStore>,
     cloud: gateterm_server::cloud::creds::SharedCreds,
+    web_title: gateterm_server::config::SharedWebTitle,
     running: Option<RunningListener>,
 }
 
@@ -67,6 +68,7 @@ impl LocalServerSupervisor {
             agents: cfg.agents,
             agent_sessions,
             cloud,
+            web_title: gateterm_server::config::SharedWebTitle::new(cfg.web_title),
             running: None,
         }
     }
@@ -154,6 +156,7 @@ impl LocalServerSupervisor {
             agents: self.agents,
             agent_sessions: self.agent_sessions.clone(),
             cloud: self.cloud.clone(),
+            web_title: self.web_title.clone(),
         };
         gateterm_server::agent::history::start_index(&state, false);
         let join = tokio::spawn(async move {

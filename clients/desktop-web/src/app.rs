@@ -153,6 +153,7 @@ impl App {
         let autostart = crate::autostart::is_enabled().unwrap_or(false);
         let mut form = Form::from_current(listen, autostart);
         form.language = self.startup.language;
+        form.web_title = self.sup.web_title().unwrap_or_default();
         // token 回填当前生效值:用户多半是来看它、复制它的,展示为空反而费解。
         // 没在监听时压根没有「当前生效的 token」,框里就是空的(= 不固定)——
         // 保存时 save.rs 会现场生成一个,不会拿空串去跑。
@@ -259,11 +260,15 @@ impl App {
         if matches!(&applied.message, crate::settings::ui::Message::Ok(_)) {
             self.startup.language = form.language;
             self.locale = locale;
+            self.sup.set_web_title(Some(form.web_title.clone()));
             if let Some(tray) = self.tray.as_mut() { tray.set_language(locale); }
             if let Some(window) = &self.settings_window {
                 window.set_title(locale.text("gateterm 设置", "gateterm Settings"));
             }
-            if let Some(view) = self.view.as_mut() { view.cloud_message = None; }
+            if let Some(view) = self.view.as_mut() {
+                view.cloud_message = None;
+                view.form.web_title = self.sup.web_title().unwrap_or_default();
+            }
         }
 
         // 重新监听成功了,启动时那条「未监听」就此作废。不清掉的话托盘状态行和

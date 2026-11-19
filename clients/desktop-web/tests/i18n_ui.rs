@@ -70,6 +70,12 @@ fn settings_switch_language_in_place_and_fit_the_window() {
                 .any(|text| text == locale.text("监听地址", "Listen address")),
             "{texts:?}"
         );
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == locale.text("网页标题", "Web title")),
+            "{texts:?}"
+        );
         if locale == Locale::En {
             assert!(
                 !texts

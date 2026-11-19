@@ -50,6 +50,7 @@ pub async fn start_test_server_with_agents(
         agents,
         agent_sessions: std::sync::Arc::new(gateterm_server::agent::store::AgentSessionStore::new()),
         cloud: Default::default(),
+        web_title: Default::default(),
     };
     tokio::spawn(async move { serve(listener, state).await.unwrap() });
     addr
@@ -70,6 +71,27 @@ pub async fn spawn_server_with_cloud(
         agents: Default::default(),
         agent_sessions: std::sync::Arc::new(gateterm_server::agent::store::AgentSessionStore::new()),
         cloud,
+        web_title: Default::default(),
+    };
+    tokio::spawn(async move { serve(listener, state).await.unwrap() });
+    addr
+}
+
+/// 带自定义 `SharedWebTitle` 的 server,用于测试页面标题注入与热更新。
+pub async fn start_test_server_with_web_title(
+    web_title: gateterm_server::config::SharedWebTitle,
+) -> std::net::SocketAddr {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let state = AppState {
+        manager: SessionManager::new(1 << 20, WindowSize::default()),
+        token: "t".into(),
+        launchers: std::sync::Arc::new(gateterm_server::launcher::providers(&Vec::new())),
+        listen_port: addr.port(),
+        agents: Default::default(),
+        agent_sessions: std::sync::Arc::new(gateterm_server::agent::store::AgentSessionStore::new()),
+        cloud: Default::default(),
+        web_title,
     };
     tokio::spawn(async move { serve(listener, state).await.unwrap() });
     addr

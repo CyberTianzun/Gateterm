@@ -153,6 +153,7 @@ async fn claude_codex_and_antigravity_hooks_notify_completion_each_turn() {
         agents: Default::default(),
         agent_sessions: rig.store.clone(),
         cloud: Default::default(),
+        web_title: Default::default(),
     };
     let server = tokio::spawn(async move { serve(listener, state).await.unwrap() });
     let client = reqwest::Client::new();

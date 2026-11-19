@@ -17,6 +17,7 @@ pub struct Editable {
     pub listen: SocketAddr,
     /// `None` 表示不固定 token —— 移除该键,server 下次启动随机生成。
     pub token: Option<String>,
+    pub web_title: Option<String>,
     pub language: LanguagePref,
 }
 
@@ -60,6 +61,12 @@ pub fn save(path: &Path, edit: &Editable) -> Result<()> {
         Some(t) => doc["token"] = value(t.as_str()),
         None => {
             doc.remove("token");
+        }
+    }
+    match &edit.web_title {
+        Some(t) => doc["web_title"] = value(t.as_str()),
+        None => {
+            doc.remove("web_title");
         }
     }
 

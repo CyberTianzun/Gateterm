@@ -38,6 +38,8 @@ pub struct Supervisor {
     /// Cloud 登录态。重建 HTTP 层不重新读取 —— `SharedCreds` 自己按 (mtime, 长度)
     /// 缓存并在每次 `get()` 时探测文件变化,不需要跟着 restart 的节奏走。
     cloud: gateterm_server::cloud::creds::SharedCreds,
+    /// 自定义 Web 页面标题前缀。改了不用重建 HTTP 层,通过内部锁实时生效。
+    web_title: gateterm_server::config::SharedWebTitle,
     running: Option<Running>,
 }
 
@@ -47,6 +49,7 @@ impl Supervisor {
         window_size: WindowSize,
         specs: &[LauncherSpec],
         agents: gateterm_server::config::AgentsConfig,
+        web_title: Option<String>,
     ) -> Self {
         Self {
             manager: SessionManager::new(buffer_cap, window_size),
@@ -56,8 +59,17 @@ impl Supervisor {
             cloud: gateterm_server::cloud::creds::SharedCreds::new(
                 gateterm_cloud_client::credentials::default_path(),
             ),
+            web_title: gateterm_server::config::SharedWebTitle::new(web_title),
             running: None,
         }
+    }
+
+    pub fn web_title(&self) -> Option<String> {
+        self.web_title.get()
+    }
+
+    pub fn set_web_title(&self, title: Option<String>) {
+        self.web_title.set(title);
     }
 
     pub fn manager(&self) -> &Arc<SessionManager> {
@@ -140,6 +152,7 @@ impl Supervisor {
             agents: self.agents,
             agent_sessions: self.agent_sessions.clone(),
             cloud: self.cloud.clone(),
+            web_title: self.web_title.clone(),
         };
         gateterm_server::agent::history::start_index(&state, false);
         let join = tokio::spawn(async move {

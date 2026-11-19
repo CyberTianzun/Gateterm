@@ -255,6 +255,7 @@ async fn stale_daemon_session_header_does_not_overwrite_live_terminal_session() 
         agents: Default::default(),
         agent_sessions: store.clone(),
         cloud: Default::default(),
+        web_title: Default::default(),
     };
     let server = tokio::spawn(async move { serve(listener, state).await.unwrap() });
     let client = reqwest::Client::new();

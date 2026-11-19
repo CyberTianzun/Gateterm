@@ -3,7 +3,7 @@ use gateterm_desktop_web::configfile::Editable;
 use gateterm_desktop_web::settings::state::{needs_rebind, FieldError, Form};
 
 fn form(host: &str, port: &str, token: &str) -> Form {
-    Form { host: host.into(), port: port.into(), token: token.into(), autostart: false, language: Default::default() }
+    Form { host: host.into(), port: port.into(), token: token.into(), web_title: String::new(), autostart: false, language: Default::default() }
 }
 
 #[test]
@@ -50,13 +50,13 @@ fn from_current_round_trips() {
 #[test]
 fn rebind_only_when_listen_or_token_actually_changes() {
     let current = "127.0.0.1:7683".parse().unwrap();
-    let same = Editable { listen: current, token: Some("live".into()), language: Default::default() };
+    let same = Editable { listen: current, token: Some("live".into()), web_title: None, language: Default::default() };
     assert!(!needs_rebind(current, "live", &same));
 
-    let new_port = Editable { listen: "127.0.0.1:9000".parse().unwrap(), token: Some("live".into()), language: Default::default() };
+    let new_port = Editable { listen: "127.0.0.1:9000".parse().unwrap(), token: Some("live".into()), web_title: None, language: Default::default() };
     assert!(needs_rebind(current, "live", &new_port));
 
-    let new_token = Editable { listen: current, token: Some("other".into()), language: Default::default() };
+    let new_token = Editable { listen: current, token: Some("other".into()), web_title: None, language: Default::default() };
     assert!(needs_rebind(current, "live", &new_token));
 }
 
@@ -65,6 +65,19 @@ fn unpinning_the_token_does_not_rebind() {
     // 清空 token 只是把键从 config.toml 里拿掉,本次运行仍用现有 token —— 否则
     // 用户会毫无预兆地被踢下线。
     let current = "127.0.0.1:7683".parse().unwrap();
-    let unpinned = Editable { listen: current, token: None, language: Default::default() };
+    let unpinned = Editable { listen: current, token: None, web_title: None, language: Default::default() };
     assert!(!needs_rebind(current, "live", &unpinned));
+}
+
+#[test]
+fn web_title_is_normalized_and_never_forces_rebind() {
+    let mut f = form("127.0.0.1", "7683", "live");
+    f.web_title = "  prod\r\n01  ".into();
+    let editable = f.validate(Locale::ZhCn).unwrap();
+    assert_eq!(editable.web_title.as_deref(), Some("prod  01"));
+    assert!(!needs_rebind("127.0.0.1:7683".parse().unwrap(), "live", &editable));
+
+    f.web_title = " \t\n ".into();
+    let blank = f.validate(Locale::ZhCn).unwrap();
+    assert_eq!(blank.web_title, None);
 }

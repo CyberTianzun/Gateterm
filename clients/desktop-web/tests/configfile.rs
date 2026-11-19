@@ -3,7 +3,7 @@ use gateterm_desktop_web::configfile::load_language;
 use gateterm_desktop_web::i18n::LanguagePref;
 
 fn edit(listen: &str, token: Option<&str>) -> Editable {
-    Editable { listen: listen.parse().unwrap(), token: token.map(String::from), language: Default::default() }
+    Editable { listen: listen.parse().unwrap(), token: token.map(String::from), web_title: None, language: Default::default() }
 }
 
 #[test]
@@ -150,4 +150,32 @@ fn no_temp_file_is_left_behind() {
         .filter(|n| n.ends_with(".tmp"))
         .collect();
     assert!(leftovers.is_empty(), "残留临时文件:{leftovers:?}");
+}
+
+#[test]
+fn web_title_round_trips_and_can_be_cleared_without_losing_comments() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        "# header comment\nlisten = \"127.0.0.1:7683\"\n\n[desktop]\nlanguage = \"en\"\n\n[[launcher]]\nname = \"shell\"\ncommand = [\"bash\"]\n",
+    )
+    .unwrap();
+
+    let mut next = edit("127.0.0.1:7683", Some("tok"));
+    next.web_title = Some("prod-01".into());
+    save(&path, &next).unwrap();
+
+    let out = std::fs::read_to_string(&path).unwrap();
+    assert!(out.contains("# header comment"), "{out}");
+    assert!(out.contains(r#"web_title = "prod-01""#), "{out}");
+    let cfg = gateterm_server::config::Config::load(Some(path.clone())).unwrap();
+    assert_eq!(cfg.web_title.as_deref(), Some("prod-01"));
+
+    next.web_title = None;
+    save(&path, &next).unwrap();
+    let cleared = std::fs::read_to_string(&path).unwrap();
+    assert!(!cleared.contains("web_title"), "{cleared}");
+    let cfg = gateterm_server::config::Config::load(Some(path)).unwrap();
+    assert_eq!(cfg.web_title, None);
 }

@@ -31,6 +31,8 @@ pub struct AppState {
     pub agent_sessions: Arc<crate::agent::store::AgentSessionStore>,
     /// Cloud 登录态(只读)。握手时回带 `cloud_server_id`;未登录时为空。
     pub cloud: crate::cloud::creds::SharedCreds,
+    /// 自定义 Web 页面标题前缀(为空时网页标题保持默认 `gateterm`)。
+    pub web_title: crate::config::SharedWebTitle,
 }
 
 pub fn router(state: AppState) -> Router {

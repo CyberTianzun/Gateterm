@@ -46,6 +46,9 @@ struct Args {
     /// 多端同时 attach 一个会话时 pty 用谁的尺寸(缺省 smallest)
     #[arg(long, value_enum)]
     window_size: Option<WindowSize>,
+    /// 自定义 Web 页面标题前缀(非空时网页标题显示为 `<标题> - gateterm`)
+    #[arg(long)]
+    web_title: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -113,7 +116,10 @@ async fn run_server() -> anyhow::Result<()> {
     let agents = config.agents;
     let agent_sessions = std::sync::Arc::new(gateterm_server::agent::store::AgentSessionStore::new());
     let cloud = gateterm_server::cloud::creds::SharedCreds::new(gateterm_cloud_client::credentials::default_path());
-    let state = AppState { manager, token, launchers, listen_port, agents, agent_sessions, cloud };
+    let web_title = gateterm_server::config::SharedWebTitle::new(
+        gateterm_server::config::resolve_web_title(args.web_title, config.web_title),
+    );
+    let state = AppState { manager, token, launchers, listen_port, agents, agent_sessions, cloud, web_title };
     gateterm_server::cloud::notifier::spawn(state.manager.clone(), state.agent_sessions.clone(), state.cloud.clone());
     gateterm_server::agent::history::start_index(&state, false);
     gateterm_server::update::start_daily_checks(env!("CARGO_PKG_VERSION"), |result| {

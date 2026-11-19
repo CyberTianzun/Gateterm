@@ -56,6 +56,9 @@ To pin a fixed token (so open pages survive server restarts), pass `--token <val
 ```toml
 listen = "127.0.0.1:7683"
 token = "my-fixed-token"
+# Optional prefix for the Web UI page <title>: renders as "<web_title> - gateterm"
+# instead of "gateterm" when non-empty.
+web_title = "prod-01"
 # When several clients attach the same session, one pty has one size, so their
 # requested sizes are merged: "smallest" (default, nobody sees a truncated
 # screen), "largest", or "latest" (follow the most recent client).

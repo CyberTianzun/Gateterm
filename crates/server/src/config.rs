@@ -167,6 +167,10 @@ pub struct Config {
     pub cloud: CloudConfig,
     #[serde(default)]
     pub clipboard: ClipboardConfig,
+    /// 自定义 Web 页面标题前缀。非空时页面 `<title>` 渲染为 `{web_title} - gateterm`;
+    /// 未设置或纯空白时保持默认 `gateterm`。
+    #[serde(default)]
+    pub web_title: Option<String>,
 }
 
 
@@ -218,6 +222,48 @@ pub fn resolve_token(cli: Option<String>, config: Option<String>) -> (String, bo
     match pick(cli).or_else(|| pick(config)) {
         Some(t) => (t, false),
         None => (uuid::Uuid::new_v4().simple().to_string(), true),
+    }
+}
+
+/// 规范化自定义 Web 标题前缀:将 `\r`/`\n` 替换为空格并 trim,纯空白视为未设置(`None`)。
+pub fn normalize_web_title(raw: Option<String>) -> Option<String> {
+    raw.map(|s| s.replace(['\r', '\n'], " ").trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// web_title 优先级:--web-title > 配置文件 > None(默认只显示 `gateterm`)。
+pub fn resolve_web_title(cli: Option<String>, config: Option<String>) -> Option<String> {
+    normalize_web_title(cli).or_else(|| normalize_web_title(config))
+}
+
+/// 渲染给网页 `<title>` 的最终标题文本。
+pub fn format_web_title(custom: Option<&str>) -> String {
+    match normalize_web_title(custom.map(str::to_string)) {
+        Some(title) => format!("{title} - gateterm"),
+        None => "gateterm".to_string(),
+    }
+}
+
+/// 线程安全的共享 Web 标题状态,供 `AppState` 与 `Supervisor` 热更新使用。
+#[derive(Debug, Clone, Default)]
+pub struct SharedWebTitle(std::sync::Arc<std::sync::RwLock<Option<String>>>);
+
+impl SharedWebTitle {
+    pub fn new(title: Option<String>) -> Self {
+        Self(std::sync::Arc::new(std::sync::RwLock::new(
+            normalize_web_title(title),
+        )))
+    }
+
+    pub fn get(&self) -> Option<String> {
+        self.0
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub fn set(&self, title: Option<String>) {
+        *self.0.write().unwrap_or_else(|e| e.into_inner()) = normalize_web_title(title);
     }
 }
 
@@ -392,5 +438,48 @@ mod tests {
             resolve_token(Some("\tcli\n".into()), Some("cfg".into())),
             ("cli".into(), false)
         );
+    }
+
+    #[test]
+    fn web_title_is_optional_in_toml() {
+        let absent: Config = toml::from_str("").unwrap();
+        assert_eq!(absent.web_title, None);
+        let present: Config = toml::from_str(r#"web_title = "prod-01""#).unwrap();
+        assert_eq!(present.web_title.as_deref(), Some("prod-01"));
+    }
+
+    #[test]
+    fn resolve_web_title_prioritizes_cli_and_normalizes_whitespace() {
+        assert_eq!(
+            resolve_web_title(Some("cli".into()), Some("cfg".into())).as_deref(),
+            Some("cli")
+        );
+        assert_eq!(
+            resolve_web_title(Some("   ".into()), Some("  cfg\r\nbox  ".into())).as_deref(),
+            Some("cfg  box")
+        );
+        assert_eq!(resolve_web_title(Some("\r\n ".into()), Some("  ".into())), None);
+        assert_eq!(resolve_web_title(None, None), None);
+    }
+
+    #[test]
+    fn format_web_title_uses_custom_prefix_or_default() {
+        assert_eq!(format_web_title(None), "gateterm");
+        assert_eq!(format_web_title(Some("   ")), "gateterm");
+        assert_eq!(format_web_title(Some("prod-01")), "prod-01 - gateterm");
+        assert_eq!(format_web_title(Some("  prod\n01  ")), "prod 01 - gateterm");
+    }
+
+    #[test]
+    fn shared_web_title_normalizes_and_updates_across_clones() {
+        let shared = SharedWebTitle::new(Some("  node-a\n ".into()));
+        let cloned = shared.clone();
+        assert_eq!(cloned.get().as_deref(), Some("node-a"));
+
+        shared.set(Some("  node-b\r\n2  ".into()));
+        assert_eq!(cloned.get().as_deref(), Some("node-b  2"));
+
+        shared.set(Some("   ".into()));
+        assert_eq!(cloned.get(), None);
     }
 }

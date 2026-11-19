@@ -135,6 +135,23 @@ pub fn draw(ui: &mut egui::Ui, view: &mut View, locale: Locale) -> Outcome {
                     ));
                     ui.end_row();
 
+                    ui.label(locale.text("网页标题", "Web title"));
+                    edited |= ui
+                        .add(
+                            egui::TextEdit::singleline(&mut view.form.web_title)
+                                .desired_width(220.0)
+                                .hint_text(locale.text("留空使用默认 gateterm", "Leave blank for gateterm")),
+                        )
+                        .changed();
+                    ui.end_row();
+
+                    ui.label("");
+                    ui.small(locale.text(
+                        "设置后浏览器标签页显示为「<标题> - gateterm」，刷新网页生效。",
+                        "Shown in the browser tab as \"<title> - gateterm\" after reloading.",
+                    ));
+                    ui.end_row();
+
                     ui.label(locale.text("会话尺寸策略", "Session sizing"));
                     ui.horizontal(|ui| {
                         ui.label(view.window_size.as_str());
