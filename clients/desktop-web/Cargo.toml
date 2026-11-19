@@ -41,7 +41,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros",
 toml_edit = "0.25"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-tray-icon = "0.24"
 # 版本与 crates/server/Cargo.toml 保持一致:「重新生成 token」要和 server 的
 # resolve_token 产出同一种格式。
 uuid = { version = "1", features = ["v4"] }
@@ -55,8 +54,20 @@ tempfile = "3"
 tokio = { version = "1", features = ["full", "test-util"] }
 tokio-tungstenite = "0.26"
 
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+tray-icon = "0.24"
+
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
+
+# Linux:托盘走 freedesktop StatusNotifierItem(D-Bus),不依赖 GTK 主循环;
+# 弹框走 GTK3(rfd 的 xdg-portal 后端弹消息框要靠 zenity,很多发行版默认没装)。
+# 剪贴板在 Wayland 下走 data-control 协议,X11 / XWayland 下 arboard 默认就支持。
+[target.'cfg(target_os = "linux")'.dependencies]
+arboard = { version = "3", features = ["wayland-data-control"] }
+egui-winit = { version = "0.36", default-features = false, features = ["clipboard", "wayland", "x11"] }
+ksni = { version = "0.3", features = ["blocking"] }
+rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
 
 [build-dependencies]
 embed-manifest = "1.5"

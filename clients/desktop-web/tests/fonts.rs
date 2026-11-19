@@ -1,9 +1,12 @@
 //! 中文字体确实被挂上去了。这一条纯 CPU:egui::Context 不需要窗口也不需要 GPU,
 //! 所以「界面上的中文会不会变成豆腐块」这件事不用靠肉眼看。
 
+// Linux 上中文字体不是必装项(CI 的 Ubuntu 镜像就没有),那几条只在 Windows / macOS 上断言。
+#[cfg(any(target_os = "macos", windows))]
 use gateterm_desktop_web::fonts;
 
 /// 设置界面里出现过的字,挑几个常用的。
+#[cfg(any(target_os = "macos", windows))]
 const SAMPLE: &str = "监听地址访问令牌开机自启保存并应用取消已生效个会话未受影响";
 
 /// 跑一帧,把字体真正建出来(`ctx.fonts_mut` 在第一帧之前用不了)。

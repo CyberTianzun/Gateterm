@@ -4,6 +4,10 @@ on:
     branches: [dev, master]
   pull_request:
 
+env:
+  # Linux desktop(desktop-web / desktop-native)编译期需要的系统库,release.yml 里有同一份
+  LINUX_DESKTOP_DEPS: libgtk-3-dev libxkbcommon-x11-dev libwayland-dev libfontconfig-dev libx11-xcb-dev libvulkan-dev
+
 jobs:
   test:
     strategy:
@@ -17,6 +21,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Install desktop dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ env.LINUX_DESKTOP_DEPS }}
       - name: Build web client
         working-directory: clients/web
         run: |
@@ -24,22 +33,14 @@ jobs:
           npm test
           npm run typecheck
           npm run build
+      # desktop-web / desktop-native 在三个平台上都构建:Linux 的托盘走 StatusNotifierItem
       - name: Rust tests
         shell: bash
         run: |
-          # gateterm-desktop-web / gateterm-desktop-native 依赖系统托盘与平台自启,仅支持 Windows/macOS
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            cargo test --workspace --exclude gateterm-desktop-web
-          else
-            cargo test --workspace
-            cargo test --manifest-path clients/desktop-native/Cargo.toml -p gateterm-desktop-native
-          fi
+          cargo test --workspace
+          cargo test --manifest-path clients/desktop-native/Cargo.toml -p gateterm-desktop-native
       - name: Clippy
         shell: bash
         run: |
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            cargo clippy --workspace --exclude gateterm-desktop-web -- -D warnings
-          else
-            cargo clippy --workspace -- -D warnings
-            cargo clippy --manifest-path clients/desktop-native/Cargo.toml -p gateterm-desktop-native --no-deps -- -D warnings
-          fi
+          cargo clippy --workspace -- -D warnings
+          cargo clippy --manifest-path clients/desktop-native/Cargo.toml -p gateterm-desktop-native --no-deps -- -D warnings

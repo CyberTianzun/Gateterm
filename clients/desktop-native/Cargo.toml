@@ -110,7 +110,13 @@ qrcode = { version = "0.14.1", default-features = false }
 raw-window-handle = "0.6"
 sha2 = "0.10"
 toml_edit = "0.25"
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 tray-icon = "0.24"
+
+# Linux tray: freedesktop StatusNotifierItem over D-Bus (no GTK main loop needed).
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "0.3", features = ["blocking"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"

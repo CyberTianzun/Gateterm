@@ -1,13 +1,12 @@
 //! 开机自启。这一项不进 config.toml —— 它是 desktop 自己的行为,不是 server 的配置。
 //!
 //! macOS 用 LaunchAgent plist(放进 ~/Library/LaunchAgents 就会在下次登录时生效,
-//! 不需要 launchctl),Windows 用 HKCU 的 Run 键。
+//! 不需要 launchctl),Windows 用 HKCU 的 Run 键,Linux 用 XDG Autostart 的 .desktop 文件。
 
 use anyhow::{Context, Result};
 
 pub const LABEL: &str = "com.gateterm.desktop";
 
-#[cfg(any(target_os = "macos", windows))]
 fn exe_path() -> Result<String> {
     Ok(std::env::current_exe()
         .context("无法取得自身路径")?
@@ -230,12 +229,159 @@ mod imp {
     }
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
-compile_error!("gateterm-desktop-web 只支持 Windows 与 macOS");
+/// Linux 用 XDG Autostart:`$XDG_CONFIG_HOME/autostart/<name>.desktop`。GNOME、KDE、
+/// 以及 Omarchy / Hyprland 这类用 `uwsm` / `dex` / systemd-xdg-autostart-generator
+/// 的会话都认这个目录。
+#[cfg(target_os = "linux")]
+mod imp {
+    use super::*;
+    use std::path::{Path, PathBuf};
 
-/// `is_enabled` 的语义见其定义处(`imp` 模块内,macOS / Windows 各一份,内容相同)。
-#[cfg(any(target_os = "macos", windows))]
+    const FILE_NAME: &str = "gateterm-desktop-web.desktop";
+
+    /// desktop entry 规范里 Exec 的引号规则:整段用双引号包住,里面的 `"` `` ` `` `$` `\`
+    /// 各自用反斜杠转义;`%` 是字段码前缀,要写成 `%%`。
+    fn exec_quote(exe: &str) -> String {
+        let mut out = String::with_capacity(exe.len() + 2);
+        out.push('"');
+        for c in exe.chars() {
+            match c {
+                '"' | '`' | '$' | '\\' => {
+                    out.push('\\');
+                    out.push(c);
+                }
+                '%' => out.push_str("%%"),
+                _ => out.push(c),
+            }
+        }
+        out.push('"');
+        out
+    }
+
+    /// `exec_quote` 的逆运算,只认我们自己写出去的那种格式;不带引号时取第一个空白前的部分。
+    fn exec_unquote(exec: &str) -> String {
+        let exec = exec.trim();
+        let Some(rest) = exec.strip_prefix('"') else {
+            return exec.split_whitespace().next().unwrap_or_default().replace("%%", "%");
+        };
+        let mut out = String::new();
+        let mut chars = rest.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' => out.extend(chars.next()),
+                '"' => break,
+                _ => out.push(c),
+            }
+        }
+        out.replace("%%", "%")
+    }
+
+    pub fn desktop_entry(exe: &str) -> String {
+        format!(
+            "[Desktop Entry]\n\
+             Type=Application\n\
+             Name=Gateterm Desktop Web\n\
+             Comment=gateterm tray service\n\
+             Exec={exec}\n\
+             Icon=gateterm\n\
+             Terminal=false\n\
+             NoDisplay=true\n\
+             X-GNOME-Autostart-enabled=true\n\
+             X-Gateterm-Label={label}\n",
+            exec = exec_quote(exe),
+            label = LABEL,
+        )
+    }
+
+    fn entry_path() -> Result<PathBuf> {
+        let base = directories::BaseDirs::new().context("无法确定 HOME")?;
+        Ok(base.config_dir().join("autostart").join(FILE_NAME))
+    }
+
+    /// 解析 desktop 文件里 `Exec=` 指向的可执行文件。文件不存在是 `Ok(None)`。
+    fn registered_target_at(path: &Path) -> Result<Option<String>> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("无法读取 {}", path.display()))?;
+        // `Hidden=true` 是规范里「用户在会话设置里关掉了它」的写法,等同于没注册。
+        if text.lines().any(|l| l.trim() == "Hidden=true") {
+            return Ok(None);
+        }
+        Ok(text
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("Exec="))
+            .map(exec_unquote)
+            .filter(|s| !s.is_empty()))
+    }
+
+    /// 语义同 macOS / Windows:注册项存在**且**指向的文件还在,才算开。
+    pub fn is_enabled() -> Result<bool> {
+        let Some(target) = registered_target_at(&entry_path()?)? else {
+            return Ok(false);
+        };
+        Ok(Path::new(&target).exists())
+    }
+
+    pub fn set(enabled: bool) -> Result<()> {
+        let path = entry_path()?;
+        if enabled {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            std::fs::write(&path, desktop_entry(&exe_path()?))
+                .with_context(|| format!("无法写入 {}", path.display()))?;
+        } else if path.exists() {
+            std::fs::remove_file(&path)
+                .with_context(|| format!("无法删除 {}", path.display()))?;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn round_trips_a_plain_path() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(FILE_NAME);
+            std::fs::write(&path, desktop_entry("/home/me/.local/bin/gateterm-desktop-web")).unwrap();
+            assert_eq!(
+                registered_target_at(&path).unwrap().as_deref(),
+                Some("/home/me/.local/bin/gateterm-desktop-web")
+            );
+        }
+
+        #[test]
+        fn round_trips_a_path_with_special_characters() {
+            let exe = r#"/opt/my apps/50% "gt"/$x\gateterm"#;
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(FILE_NAME);
+            std::fs::write(&path, desktop_entry(exe)).unwrap();
+            assert_eq!(registered_target_at(&path).unwrap().as_deref(), Some(exe));
+        }
+
+        #[test]
+        fn a_missing_or_hidden_entry_is_not_registered() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(FILE_NAME);
+            assert_eq!(registered_target_at(&path).unwrap(), None);
+            std::fs::write(&path, desktop_entry("/usr/bin/gateterm-desktop-web") + "Hidden=true\n").unwrap();
+            assert_eq!(registered_target_at(&path).unwrap(), None);
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
+compile_error!("gateterm-desktop-web 只支持 Windows、macOS 与 Linux");
+
+/// `is_enabled` 的语义见其定义处(`imp` 模块内,各平台一份,内容相同)。
 pub use imp::{is_enabled, set};
+
+#[cfg(target_os = "linux")]
+pub use imp::desktop_entry;
 
 #[cfg(target_os = "macos")]
 pub use imp::plist_xml;

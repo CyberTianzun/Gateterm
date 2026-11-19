@@ -11,6 +11,7 @@ on:
     paths:
       - ".github/workflows/release.yml"
       - "scripts/bundle-macos.sh"
+      - "scripts/bundle-linux.sh"
       - "scripts/bundle-windows.bat"
     tags: ["release-v[0-9]+.[0-9]+.[0-9]+*"]
   # 手动触发只构建、上传 Actions 产物,不发 Release:用来在打 tag 前试跑一遍
@@ -23,6 +24,10 @@ concurrency:
 
 permissions:
   contents: read
+
+env:
+  # Linux desktop(desktop-web / desktop-native)编译期需要的系统库,ci.yml 里有同一份
+  LINUX_DESKTOP_DEPS: libgtk-3-dev libxkbcommon-x11-dev libwayland-dev libfontconfig-dev libx11-xcb-dev libvulkan-dev
 
 jobs:
   prepare:
@@ -69,8 +74,11 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             desktop: true
+          # Linux desktop 托盘走 StatusNotifierItem(D-Bus),面向 Omarchy / Arch 等带
+          # SNI 状态栏(Waybar、KDE 等)的桌面;只出 x86_64,arm64 交叉编译 GTK 不划算
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+            desktop: true
           # arm64 交叉编译,不依赖 ARM runner 的可用性
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
@@ -114,7 +122,13 @@ jobs:
       - name: Build server
         run: cargo build --release --target ${{ matrix.target }} -p gateterm-server
 
-      # desktop 只支持 Windows/macOS
+      # desktop 的系统依赖:rfd 弹框用 GTK3;desktop-native(GPUI)要 xkbcommon / fontconfig / wayland 等
+      - name: Install desktop dependencies (Linux)
+        if: matrix.desktop && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ env.LINUX_DESKTOP_DEPS }}
+
       - name: Build desktop
         if: matrix.desktop
         run: |
@@ -124,6 +138,10 @@ jobs:
       - name: Bundle desktop (macOS)
         if: matrix.desktop && runner.os == 'macOS'
         run: ./scripts/bundle-macos.sh ${{ matrix.target }}
+
+      - name: Bundle desktop (Linux)
+        if: matrix.desktop && runner.os == 'Linux'
+        run: bash ./scripts/bundle-linux.sh ${{ matrix.target }}
 
       - name: Bundle desktop (Windows)
         if: matrix.desktop && runner.os == 'Windows'
@@ -139,10 +157,13 @@ jobs:
           server="gateterm-server-${VERSION}-${{ matrix.target }}.tar.gz"
           tar -czf "dist/$server" -C "target/${{ matrix.target }}/release" gateterm-server
           if [ "${{ matrix.desktop }}" = "true" ]; then
-            desktop_web="gateterm-desktop-web-${VERSION}-${{ matrix.target }}.dmg"
-            desktop_native="gateterm-desktop-native-${VERSION}-${{ matrix.target }}.dmg"
-            cp target/bundle/gateterm-desktop-web.dmg "dist/$desktop_web"
-            cp target/bundle/gateterm-desktop-native.dmg "dist/$desktop_native"
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              cp target/bundle/gateterm-desktop-web.dmg "dist/gateterm-desktop-web-${VERSION}-${{ matrix.target }}.dmg"
+              cp target/bundle/gateterm-desktop-native.dmg "dist/gateterm-desktop-native-${VERSION}-${{ matrix.target }}.dmg"
+            else
+              cp target/bundle/gateterm-desktop-web-linux.tar.gz "dist/gateterm-desktop-web-${VERSION}-${{ matrix.target }}.tar.gz"
+              cp target/bundle/gateterm-desktop-native-linux.tar.gz "dist/gateterm-desktop-native-${VERSION}-${{ matrix.target }}.tar.gz"
+            fi
           fi
           cd dist && for f in *; do shasum -a 256 "$f" > "$f.sha256"; done
 
