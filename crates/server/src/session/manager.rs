@@ -119,6 +119,11 @@ impl SessionManager {
         self.sessions.lock().unwrap().get(&id).cloned()
     }
 
+    /// 当前所有会话(无序)。
+    pub fn sessions(&self) -> Vec<Arc<Session>> {
+        self.sessions.lock().unwrap().values().cloned().collect()
+    }
+
     pub fn list(&self) -> Vec<SessionInfo> {
         let mut v: Vec<_> = self.sessions.lock().unwrap().values().map(|s| s.info()).collect();
         v.sort_by_key(|s| s.id);

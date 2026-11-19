@@ -130,6 +130,24 @@ pub struct CloudConfig {
     pub url: Option<String>,
 }
 
+/// `[clipboard]` —— 会话内程序的「复制」同步到远端客户端。
+///
+/// OSC 52 那条路始终开着(它只把会话自己发出的序列定向转给操作的那一端)。这里的
+/// 开关管的是另一条:监听服务端机器的**系统剪贴板**,把会话里的进程写进去的内容
+/// 转给远端(目前只有 Windows,见 `crate::clipboard`)。默认开;不希望服务端剪贴板
+/// 的任何内容离开这台机器时可以关掉。
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct ClipboardConfig {
+    #[serde(default = "default_true")]
+    pub host_watch: bool,
+}
+
+impl Default for ClipboardConfig {
+    fn default() -> Self {
+        Self { host_watch: true }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Config {
     /// 配置文件里没写就是 `None` —— **「没指定」是个真实存在的状态**,不能在这一层
@@ -147,6 +165,8 @@ pub struct Config {
     pub agents: AgentsConfig,
     #[serde(default)]
     pub cloud: CloudConfig,
+    #[serde(default)]
+    pub clipboard: ClipboardConfig,
 }
 
 

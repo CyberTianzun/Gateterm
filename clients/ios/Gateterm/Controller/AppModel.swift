@@ -691,6 +691,9 @@ final class AppModel {
         case let .agentEvent(session):
             closeChatIfUnavailable()
             if uiForeground && chatOpen && session.session == chat.sessionId { refreshChat(incremental: true) }
+        case let .clipboard(channel, text):
+            guard openSession(onChannel: channel) != nil else { return }
+            UIPasteboard.general.string = text
         case let .error(message, channel):
             post(.authFailed(message))
             if let channel, let open = openSession(onChannel: channel) { closeOpenSession(open.id) }

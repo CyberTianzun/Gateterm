@@ -61,5 +61,7 @@ sealed class ServerMsg {
     data class SessionExited(val channel: Int, val id: Long) : ServerMsg()
     /** 托管会话里的 coding agent 状态变了。不带 `supports_transcript`,见 `AgentSessions.applyEvent` */
     data class AgentEvent(val session: AgentSession) : ServerMsg()
+    /** 会话里的程序要求复制。服务端只发给最近一次输入的那一端,收到就写系统剪贴板。 */
+    data class Clipboard(val channel: Int, val text: String) : ServerMsg()
     data class Unknown(val type: String) : ServerMsg()
 }

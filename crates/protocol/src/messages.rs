@@ -168,6 +168,13 @@ pub enum ServerMsg {
         #[serde(default)]
         detail: Option<String>,
     },
+    /// 会话里的程序要求「复制到剪贴板」(OSC 52,或服务端在 Windows 上观察到会话内
+    /// 进程写了系统剪贴板)。**只发给一个 attach**:最近一次向该会话输入过按键/鼠标
+    /// 的那一端 —— 拖选复制、`/copy` 都是那一端的操作触发的。其他 attach 收不到,
+    /// 断线重连的 replay 里也不会再出现(OSC 52 已从字节流里剥掉)。
+    ///
+    /// server→client 新类型,按 X2 旧客户端忽略,不 bump proto。
+    Clipboard { channel: u32, text: String },
 }
 
 #[derive(Deserialize)]
@@ -230,6 +237,10 @@ enum RawServerMsg {
         #[serde(default)]
         detail: Option<String>,
     },
+    Clipboard {
+        channel: u32,
+        text: String,
+    },
 }
 
 impl From<RawServerMsg> for ServerMsg {
@@ -286,6 +297,7 @@ impl From<RawServerMsg> for ServerMsg {
                 pending,
                 detail,
             },
+            RawServerMsg::Clipboard { channel, text } => Self::Clipboard { channel, text },
         }
     }
 }

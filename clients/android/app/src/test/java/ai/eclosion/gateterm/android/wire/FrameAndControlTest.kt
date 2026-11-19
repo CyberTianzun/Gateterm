@@ -91,4 +91,12 @@ class FrameAndControlTest {
         val without = ControlJson.parse("""{"type":"hello-ok","proto":1}""".toByteArray())
         assertEquals(ServerMsg.HelloOk(1, "", null), without)
     }
+
+    @Test
+    fun parseClipboardAndRejectMalformed() {
+        val clip = ControlJson.parse("""{"type":"clipboard","channel":3,"text":"copied 文本"}""".toByteArray())
+        assertEquals(ServerMsg.Clipboard(3, "copied 文本"), clip)
+        val missingText = ControlJson.parse("""{"type":"clipboard","channel":3}""".toByteArray())
+        assertEquals(ServerMsg.Unknown("clipboard"), missingText)
+    }
 }

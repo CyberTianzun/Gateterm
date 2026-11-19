@@ -24,7 +24,7 @@ async fn collect_until_exit(session: &Session) -> Vec<u8> {
     loop {
         match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
             Ok(Ok(SessionOutput::Data { bytes, .. })) => out.extend_from_slice(&bytes),
-            Ok(Ok(SessionOutput::Resized { .. })) => continue,
+            Ok(Ok(SessionOutput::Resized { .. } | SessionOutput::Clipboard { .. })) => continue,
             Ok(Ok(SessionOutput::Exited)) => break,
             Ok(Err(_)) | Err(_) => break,
         }

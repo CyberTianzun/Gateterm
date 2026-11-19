@@ -1133,6 +1133,12 @@ class ConnectionController(
                 client?.send(ClientMsg.ListSessions)
             }
             is ServerMsg.AgentEvent -> onAgentEvent(msg.session)
+            is ServerMsg.Clipboard -> {
+                if (opens.values.any { it.channel == msg.channel }) {
+                    val clipboard = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("gateterm", msg.text))
+                }
+            }
             is ServerMsg.Error -> {
                 _messages.trySend(UserMessage.AuthFailed(msg.message))
                 val channel = msg.channel

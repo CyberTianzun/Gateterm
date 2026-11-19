@@ -8,6 +8,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { GateClient } from "./client";
+import { writeClipboard } from "./clipboard";
 import { readToken } from "./auth";
 import { mountCloudStatus } from "./cloud";
 import { mountUpdateStatus } from "./update";
@@ -1378,6 +1379,10 @@ client.onControl = (msg) => {
       break;
     case "session-exited":
       if (msg.channel === termChannel) closeTerminal();
+      break;
+    case "clipboard":
+      // 只发给最近输入的那一端;channel 对不上说明是已经关掉的旧终端,忽略
+      if (msg.channel === termChannel && typeof msg.text === "string") void writeClipboard(msg.text);
       break;
     case "error":
       console.warn("gateterm error:", msg.message);

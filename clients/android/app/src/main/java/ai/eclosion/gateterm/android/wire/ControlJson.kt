@@ -96,6 +96,11 @@ object ControlJson {
             "session-exited" -> ServerMsg.SessionExited(obj.getInt("channel"), obj.getLong("id"))
             // 字段不全就当不认识:X2 要求客户端忽略看不懂的消息,而不是断线
             "agent-event" -> AgentSessions.parseSession(obj)?.let(ServerMsg::AgentEvent) ?: ServerMsg.Unknown(type)
+            "clipboard" -> if (obj.has("channel") && obj.has("text")) {
+                ServerMsg.Clipboard(obj.getInt("channel"), obj.getString("text"))
+            } else {
+                ServerMsg.Unknown(type)
+            }
             else -> ServerMsg.Unknown(type)
         }
     }

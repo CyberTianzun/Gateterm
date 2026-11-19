@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use alacritty_terminal::vte::ansi::Rgb;
 use anyhow::{Context, Result, bail};
@@ -16,6 +16,23 @@ use crate::config::WindowSize;
 
 use super::buffer::SeqBuffer;
 use super::grid::SessionGrid;
+use super::osc52::Osc52Filter;
+
+/// 同一段文本在这个时间内再次投递给同一个 attach 时视为重复(Claude Code 在
+/// Windows 上会同时发 OSC 52 和调 PowerShell 写系统剪贴板,PowerShell 冷启动可慢至数秒,
+/// 两条路都会到这里)。
+const CLIPBOARD_DEDUP: Duration = Duration::from_secs(5);
+
+/// 一次 `clipboard` 控制消息里文本的上限(UTF-8 字节)。超过的直接丢弃,不截断 ——
+/// 截一半的复制结果比没复制更容易坑人。
+pub const MAX_CLIPBOARD_TEXT: usize = 1024 * 1024;
+
+/// 进程内单调毫秒数(从第一次调用起算,0 留给「从未」)。
+fn monotonic_ms() -> u64 {
+    static BASE: OnceLock<Instant> = OnceLock::new();
+    let base = *BASE.get_or_init(Instant::now);
+    base.elapsed().as_millis() as u64 + 1
+}
 
 /// `#rrggbb`。
 fn parse_hex_color(s: &str) -> Result<Rgb> {
@@ -74,6 +91,12 @@ pub enum SessionOutput {
         revision: u64,
     },
     Exited,
+    /// 待复制的文本,**只有** attach 席位号为 `target` 的那个泵会转发它(见
+    /// `Session::deliver_clipboard`)。借用同一条广播只是为了少一套通道,语义上是点对点。
+    Clipboard {
+        target: u64,
+        text: Arc<str>,
+    },
 }
 
 pub struct Snapshot {
@@ -111,6 +134,8 @@ struct Shared {
     next_ord: u64,
     resize_revision: u64,
     last_resize_seq: u64,
+    /// OSC 52 不进环形缓冲、不广播(见 `super::osc52`)
+    osc52: Osc52Filter,
 }
 
 pub struct Session {
@@ -126,6 +151,12 @@ pub struct Session {
     tx: broadcast::Sender<SessionOutput>,
     exited: AtomicBool,
     next_viewport: AtomicU64,
+    /// 最近一次向本会话写入输入的 attach 席位号(0 = 没有)。剪贴板只投给它。
+    input_owner: AtomicU64,
+    /// 那次输入的时刻(`monotonic_ms`,0 = 从未)。
+    last_input_ms: AtomicU64,
+    /// 上一次投递的 (席位, 文本, 时刻),用于去重。
+    last_clipboard: Mutex<Option<(u64, Arc<str>, Instant)>>,
 }
 
 /// 按策略把所有 attach 的尺寸诉求归并成 pty 的权威尺寸。
@@ -162,10 +193,22 @@ impl Viewport {
     pub fn set(&self, cols: u16, rows: u16) -> Result<()> {
         self.session.set_viewport(self.id, cols, rows)
     }
+
+    /// 本 attach 在会话里的席位号,同时也是剪贴板投递的目标标识。
+    pub fn id(&self) -> u64 {
+        self.id
+    }
 }
 
 impl Drop for Viewport {
     fn drop(&mut self) {
+        // 走掉的 attach 不再是剪贴板目标;没有新输入之前,复制事件宁可丢掉也不乱投。
+        let _ = self.session.input_owner.compare_exchange(
+            self.id,
+            0,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
         self.session
             .shared
             .lock()
@@ -321,6 +364,7 @@ impl Session {
                 next_ord: 0,
                 resize_revision: 0,
                 last_resize_seq: 0,
+                osc52: Osc52Filter::new(),
             }),
             writer: Mutex::new(Some(writer)),
             master: Mutex::new(Some(pty.master)),
@@ -328,6 +372,9 @@ impl Session {
             tx: tx.clone(),
             exited: AtomicBool::new(false),
             next_viewport: AtomicU64::new(1),
+            input_owner: AtomicU64::new(0),
+            last_input_ms: AtomicU64::new(0),
+            last_clipboard: Mutex::new(None),
         });
 
         let (chunk_tx, chunk_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(BROADCAST_CAP);
@@ -406,18 +453,24 @@ impl Session {
     }
 
     fn process_output_batch(&self, batch: Vec<u8>) {
-        let replies = {
+        let (replies, copies) = {
             let mut shared = self.shared.lock().unwrap();
-            shared.grid.advance(&batch);
-            shared.buffer.append(&batch);
-            // Publication shares the model lock with resize and snapshot so
-            // every subscriber observes the same output/geometry ordering.
-            let _ = self.tx.send(SessionOutput::Data {
-                end_seq: shared.buffer.end_seq(),
-                bytes: Bytes::from(batch),
-            });
-            shared.grid.take_pty_replies()
+            let (batch, copies) = shared.osc52.filter(&batch);
+            if !batch.is_empty() {
+                shared.grid.advance(&batch);
+                shared.buffer.append(&batch);
+                // Publication shares the model lock with resize and snapshot so
+                // every subscriber observes the same output/geometry ordering.
+                let _ = self.tx.send(SessionOutput::Data {
+                    end_seq: shared.buffer.end_seq(),
+                    bytes: Bytes::from(batch),
+                });
+            }
+            (shared.grid.take_pty_replies(), copies)
         };
+        for text in copies {
+            self.deliver_clipboard(text);
+        }
         // 必须在释放 grid 锁之后回写,避免和 write_input 锁顺序缠死
         if !replies.is_empty() {
             if let Err(e) = self.write_input(&replies) {
@@ -466,6 +519,50 @@ impl Session {
         w.write_all(bytes).context("write pty input")?;
         w.flush().context("flush pty input")?;
         Ok(())
+    }
+
+    /// 记下「这次输入来自哪个 attach」。拖选复制、`/copy`、复制快捷键都是某一端的
+    /// 操作直接触发的,所以紧随其后的复制事件就该回到这一端 —— 而不是广播。
+    pub fn note_input(&self, attach: u64) {
+        self.input_owner.store(attach, Ordering::SeqCst);
+        self.last_input_ms.store(monotonic_ms(), Ordering::SeqCst);
+    }
+
+    /// 距离最近一次(任一 attach 的)输入过去了多久。从未有过输入时为 `None`。
+    pub fn since_last_input(&self) -> Option<Duration> {
+        let at = self.last_input_ms.load(Ordering::SeqCst);
+        (at != 0).then(|| Duration::from_millis(monotonic_ms().saturating_sub(at)))
+    }
+
+    /// 把一段待复制文本投给剪贴板目标(最近一次输入的 attach)。没有目标就丢弃 ——
+    /// 宁可这次没复制上,也不能改掉别人的剪贴板。返回是否真的投递了。
+    pub fn deliver_clipboard(&self, text: String) -> bool {
+        let target = self.input_owner.load(Ordering::SeqCst);
+        if target == 0 {
+            tracing::debug!(session = self.id, "clipboard: no input owner, dropping");
+            return false;
+        }
+        if text.is_empty() {
+            return false;
+        }
+        if text.len() > MAX_CLIPBOARD_TEXT {
+            tracing::debug!(session = self.id, bytes = text.len(), "clipboard: text too large, dropping");
+            return false;
+        }
+        let text: Arc<str> = Arc::from(text);
+        {
+            let mut last = self.last_clipboard.lock().unwrap();
+            if let Some((t, prev, at)) = last.as_ref()
+                && *t == target
+                && **prev == *text
+                && at.elapsed() < CLIPBOARD_DEDUP
+            {
+                return false;
+            }
+            *last = Some((target, text.clone(), Instant::now()));
+        }
+        tracing::debug!(session = self.id, target, bytes = text.len(), "clipboard: deliver");
+        self.tx.send(SessionOutput::Clipboard { target, text }).is_ok()
     }
 
     /// 记下客户端渲染用的默认前景/背景色,用来应答 OSC 10/11。多个 attach 报的
@@ -666,6 +763,7 @@ pub(crate) mod test_support {
                 next_ord: 0,
                 resize_revision: 0,
                 last_resize_seq: 0,
+                osc52: Osc52Filter::new(),
             }),
             writer: Mutex::new(Some(Box::new(std::io::sink()))),
             master: Mutex::new(Some(Box::new(Master(Mutex::new(PtySize::default()))))),
@@ -673,6 +771,9 @@ pub(crate) mod test_support {
             tx,
             exited: AtomicBool::new(false),
             next_viewport: AtomicU64::new(1),
+            input_owner: AtomicU64::new(0),
+            last_input_ms: AtomicU64::new(0),
+            last_clipboard: Mutex::new(None),
         })
     }
 
@@ -792,6 +893,44 @@ mod tests {
             "byte progress cannot identify which resize revisions the client applied"
         );
         drop(viewport);
+    }
+
+    #[test]
+    fn osc52_is_stripped_from_replay_and_sent_only_to_the_input_owner() {
+        let session = test_support::session();
+        let a = session.viewport(80, 24);
+        let b = session.viewport(80, 24);
+        let mut rx = session.subscribe();
+
+        // 还没有任何人输入:不投递,也不进字节流
+        session.process_output(b"x\x1b]52;c;aGk=\x07y");
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionOutput::Data { ref bytes, .. } if &bytes[..] == b"xy"
+        ));
+        assert!(rx.try_recv().is_err(), "no owner → no clipboard event");
+
+        session.note_input(b.id());
+        session.process_output(b"\x1b]52;c;aGVsbG8=\x1b\\");
+        match rx.try_recv().unwrap() {
+            SessionOutput::Clipboard { target, text } => {
+                assert_eq!(target, b.id());
+                assert_eq!(&*text, "hello");
+            }
+            other => panic!("expected clipboard, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "a pure OSC 52 batch must not publish empty data");
+        assert_eq!(session.replay_from(0).unwrap().1, b"xy".to_vec());
+
+        // 同一文本紧接着再来一次(OSC 52 + 系统剪贴板双路):去重
+        assert!(!session.deliver_clipboard("hello".into()));
+
+        // 目标走掉之后不再投递,不会退而求其次发给 a
+        drop(b);
+        assert!(!session.deliver_clipboard("again".into()));
+        session.note_input(a.id());
+        assert!(session.deliver_clipboard("again".into()));
+        drop(a);
     }
 
     #[test]

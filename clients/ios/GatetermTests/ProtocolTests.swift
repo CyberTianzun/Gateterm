@@ -55,6 +55,10 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(list, [SessionInfo(id: 2, name: "zsh", cols: 80, rows: 24, createdAt: 1, cwd: "/Users/alice/work")])
         guard case let .resized(ch, cols, rows) = parse(#"{"type":"resized","channel":1,"cols":100,"rows":30}"#) else { return XCTFail() }
         XCTAssertEqual([Int(ch), cols, rows], [1, 100, 30])
+        guard case let .clipboard(clipCh, clipText) = parse(#"{"type":"clipboard","channel":3,"text":"copied 文本"}"#) else { return XCTFail() }
+        XCTAssertEqual(clipCh, 3)
+        XCTAssertEqual(clipText, "copied 文本")
+        guard case .unknown("clipboard") = parse(#"{"type":"clipboard","channel":3}"#) else { return XCTFail() }
         guard case .unknown("agent-event") = parse(#"{"type":"agent-event","agent_id":"codex"}"#) else { return XCTFail() }
     }
 

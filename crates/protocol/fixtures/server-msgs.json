@@ -86,5 +86,10 @@
     "state": "waiting",
     "pending": "pnd_01H9",
     "detail": "等待授权:Bash"
+  },
+  {
+    "type": "clipboard",
+    "channel": 1,
+    "text": "copied 文本"
   }
 ]

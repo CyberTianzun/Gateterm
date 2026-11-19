@@ -110,11 +110,13 @@ test("detached channels cannot deliver stale output or channel controls", async 
   socket.emit({ type: "resized", channel: 1, cols: 1, rows: 1 });
   socket.emit({ type: "resync-begin", channel: 1 });
   socket.emit({ type: "session-exited", channel: 1, id: 10 });
+  socket.emit({ type: "clipboard", channel: 1, text: "stale" });
   socket.emit({ type: "error", channel: 1, message: "old attach failed" });
   socket.emit({ type: "attached", channel: 2, mode: "resync", seq: 0 });
+  socket.emit({ type: "clipboard", channel: 2, text: "fresh" });
   socket.emit("new", 2);
   await tick();
-  assert.deepEqual(events, ["attached", "data"]);
+  assert.deepEqual(events, ["attached", "clipboard", "data"]);
 });
 
 test("reconnect drains applied output but ignores an obsolete queued handshake", async context => {

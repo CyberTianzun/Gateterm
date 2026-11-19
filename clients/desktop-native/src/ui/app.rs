@@ -909,6 +909,13 @@ impl GatetermWorkbench {
                 }
             }
             ServerMsg::ResyncEnd { .. } | ServerMsg::PreviewData { .. } => {}
+            // 服务端只把剪贴板发给最近一次输入的那个 attach(即本端),这里只需确认
+            // channel 确实是我们开着的视图,防止过期 channel 改剪贴板。
+            ServerMsg::Clipboard { channel, text } => {
+                if self.channel_views.contains_key(&(server_id.clone(), channel)) {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
+            }
             ServerMsg::SessionExited { id, channel, .. } => {
                 if let Some(conn) = self.servers.get_mut(&server_id) {
                     conn.sessions.retain(|s| s.id != id);

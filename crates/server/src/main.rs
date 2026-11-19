@@ -86,6 +86,9 @@ async fn run_server() -> anyhow::Result<()> {
         gateterm_server::agent::store::default_hook_token_path().as_deref(),
     );
     let manager = SessionManager::new(1 << 20, args.window_size.unwrap_or(config.window_size));
+    if config.clipboard.host_watch {
+        gateterm_server::clipboard::start_host_watch(manager.clone());
+    }
     let launchers = std::sync::Arc::new(gateterm_server::launcher::providers(&config.launchers));
     let listener = tokio::net::TcpListener::bind(listen).await?;
     let listen = listener.local_addr()?;

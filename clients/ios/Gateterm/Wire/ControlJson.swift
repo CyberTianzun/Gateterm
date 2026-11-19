@@ -112,6 +112,9 @@ enum ControlJson {
         case "agent-event":
             // 字段不全就当不认识:X2 要求客户端忽略看不懂的消息,而不是断线
             return AgentSessions.parseSession(obj).map(ServerMsg.agentEvent) ?? .unknown(type)
+        case "clipboard":
+            guard let ch = channel(), let text = obj.nullableString("text") else { return .unknown(type) }
+            return .clipboard(channel: ch, text: text)
         default:
             return .unknown(type)
         }

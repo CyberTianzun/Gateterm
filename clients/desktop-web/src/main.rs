@@ -98,6 +98,10 @@ fn main() -> Result<()> {
         gateterm_server::agent::store::default_hook_token_path().as_deref(),
     );
     let mut sup = Supervisor::new(1 << 20, config.window_size, &config.launchers, config.agents);
+    // 系统剪贴板监听跟 SessionManager 同寿命(见 gateterm_server::clipboard)
+    if config.clipboard.host_watch {
+        gateterm_server::clipboard::start_host_watch(sup.manager().clone());
+    }
     // Cloud 推送通知器跟 SessionManager 同寿命,不随 HTTP 层重建;没登录时它什么也不发。
     {
         let _rt = rt.enter();

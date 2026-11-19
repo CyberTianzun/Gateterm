@@ -263,6 +263,7 @@ async fn read_loop(
                         send_err_ch(out, &format!("session input failed: {e:#}"), frame.channel)
                             .await;
                     } else {
+                        a.session.note_input(a.viewport.id());
                         for updated in state
                             .agent_sessions
                             .on_terminal_input(a.session.info().id, &frame.payload)
@@ -402,6 +403,7 @@ async fn handle_control(
             let pump = tokio::spawn(pump_output(
                 channel,
                 id,
+                viewport.id(),
                 session.clone(),
                 rx,
                 out.clone(),
@@ -448,9 +450,20 @@ fn set_default_colors(session: &Session, colors: &TermColors, channel: u32) {
     }
 }
 
+async fn send_clipboard(out: &mpsc::Sender<Message>, channel: u32, text: &str) -> bool {
+    out.send(control_frame(&ServerMsg::Clipboard {
+        channel,
+        text: text.to_string(),
+    }))
+    .await
+    .is_ok()
+}
+
+/// `attach` 是本 attach 的席位号(`Viewport::id`):剪贴板事件只转发 target 等于它的那条。
 async fn pump_output(
     channel: u32,
     session_id: u64,
+    attach: u64,
     session: Arc<Session>,
     mut rx: tokio::sync::broadcast::Receiver<SessionOutput>,
     out: mpsc::Sender<Message>,
@@ -468,8 +481,15 @@ async fn pump_output(
                 // 直接跳到间隙之后的数据,若不在这里显式 resync 就会静默丢字节。
                 let mut lagged = false;
                 let mut resized = None;
+                // 合帧期间遇到的剪贴板事件:等本帧发出去之后再发
+                let mut clips: Vec<Arc<str>> = Vec::new();
                 loop {
                     match rx.try_recv() {
+                        Ok(SessionOutput::Clipboard { target, text }) => {
+                            if target == attach {
+                                clips.push(text);
+                            }
+                        }
                         Ok(SessionOutput::Data { end_seq, bytes }) => {
                             let Some(trimmed) =
                                 trim_by_watermark(&mut watermark.seq, end_seq, &bytes)
@@ -523,6 +543,11 @@ async fn pump_output(
                 {
                     return;
                 }
+                for text in clips {
+                    if !send_clipboard(&out, channel, &text).await {
+                        return;
+                    }
+                }
                 if let Some((cols, rows, revision)) = resized {
                     if !send_resized(&out, channel, (cols, rows)).await {
                         return;
@@ -553,8 +578,11 @@ async fn pump_output(
                                 return;
                             }
                             // 丢弃的字节和途中的尺寸变化都由紧接着的 resync 兜底:
-                            // 它带着当前的权威尺寸和整屏重绘(G6)。
-                            Ok(SessionOutput::Data { .. }) | Ok(SessionOutput::Resized { .. }) => {
+                            // 它带着当前的权威尺寸和整屏重绘(G6)。剪贴板事件
+                            // 丢了就丢了:迟到的复制比没复制更让人困惑。
+                            Ok(SessionOutput::Data { .. })
+                            | Ok(SessionOutput::Resized { .. })
+                            | Ok(SessionOutput::Clipboard { .. }) => {
                                 continue;
                             }
                             Err(TryRecvError::Lagged(_)) => continue,
@@ -578,6 +606,11 @@ async fn pump_output(
                     return;
                 }
                 watermark.resize_revision = revision;
+            }
+            Ok(SessionOutput::Clipboard { target, text }) => {
+                if target == attach && !send_clipboard(&out, channel, &text).await {
+                    return;
+                }
             }
             Ok(SessionOutput::Exited) => {
                 let _ = out
@@ -604,7 +637,11 @@ async fn pump_output(
                         }
                         // 丢弃的字节和途中的尺寸变化都由紧接着的 resync 兜底:
                         // 它带着当前的权威尺寸和整屏重绘(G6)。
-                        Ok(SessionOutput::Data { .. } | SessionOutput::Resized { .. }) => continue,
+                        Ok(
+                            SessionOutput::Data { .. }
+                            | SessionOutput::Resized { .. }
+                            | SessionOutput::Clipboard { .. },
+                        ) => continue,
                         Err(TryRecvError::Lagged(_)) => continue,
                         Err(TryRecvError::Empty) | Err(TryRecvError::Closed) => break,
                     }
@@ -650,7 +687,7 @@ mod tests {
             }
         );
 
-        let pump = pump_output(1, session.id, session.clone(), rx, out, watermark);
+        let pump = pump_output(1, session.id, 0, session.clone(), rx, out, watermark);
         tokio::pin!(pump);
         assert!(futures_util::poll!(&mut pump).is_pending());
         assert!(
@@ -673,7 +710,7 @@ mod tests {
         drain_frames(&mut messages);
         test_support::output(&session, b"c");
 
-        let pump = pump_output(1, session.id, session.clone(), rx, out, watermark);
+        let pump = pump_output(1, session.id, 0, session.clone(), rx, out, watermark);
         tokio::pin!(pump);
         assert!(futures_util::poll!(&mut pump).is_pending());
         assert_eq!(drain_frames(&mut messages), [Frame::new(1, b"c".to_vec())]);
@@ -690,7 +727,7 @@ mod tests {
         drain_frames(&mut messages);
         viewport.set(120, 40).unwrap();
 
-        let pump = pump_output(1, session.id, session.clone(), rx, out, watermark);
+        let pump = pump_output(1, session.id, 0, session.clone(), rx, out, watermark);
         tokio::pin!(pump);
         assert!(futures_util::poll!(&mut pump).is_pending());
         let frames = drain_frames(&mut messages);
@@ -740,7 +777,7 @@ mod tests {
         );
 
         let (out, mut messages) = mpsc::channel(16);
-        let pump = pump_output(1, session.id, session.clone(), rx, out, watermark);
+        let pump = pump_output(1, session.id, 0, session.clone(), rx, out, watermark);
         tokio::pin!(pump);
         assert!(futures_util::poll!(&mut pump).is_pending());
         let frames = drain_frames(&mut messages);
@@ -753,6 +790,45 @@ mod tests {
                 rows: 40
             }
         );
+    }
+
+    #[tokio::test]
+    async fn clipboard_events_reach_only_the_targeted_attach() {
+        let session = test_support::session();
+        let (out_a, mut msgs_a) = mpsc::channel(16);
+        let (out_b, mut msgs_b) = mpsc::channel(16);
+        let pump_a = tokio::spawn(pump_output(
+            1, session.id, 7, session.clone(), session.subscribe(), out_a, OutputWatermark::default(),
+        ));
+        let pump_b = tokio::spawn(pump_output(
+            2, session.id, 8, session.clone(), session.subscribe(), out_b, OutputWatermark::default(),
+        ));
+        session.note_input(8);
+        test_support::output(&session, b"\x1b]52;c;c2VjcmV0\x07");
+        test_support::output(&session, b"z");
+
+        let recv = |rx: &mut mpsc::Receiver<Message>| {
+            let msg = rx.try_recv().ok()?;
+            let Message::Binary(bytes) = msg else { return None };
+            Some(Frame::decode(&bytes).unwrap())
+        };
+        for _ in 0..200 {
+            if !msgs_b.is_empty() && !msgs_a.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let first_b = recv(&mut msgs_b).expect("b gets the clipboard");
+        assert_eq!(first_b.channel, CONTROL_CHANNEL);
+        assert_eq!(
+            serde_json::from_slice::<ServerMsg>(&first_b.payload).unwrap(),
+            ServerMsg::Clipboard { channel: 2, text: "secret".into() }
+        );
+        // a 的第一条就是后面的普通输出:剪贴板既没发给它,也没混进字节流
+        let first_a = recv(&mut msgs_a).expect("a gets output");
+        assert_eq!(first_a, Frame::new(1, b"z".to_vec()));
+        pump_a.abort();
+        pump_b.abort();
     }
 
     #[test]

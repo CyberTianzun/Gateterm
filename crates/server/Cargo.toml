@@ -39,6 +39,20 @@ sysinfo = { version = "0.39.6", default-features = false, features = ["system"] 
 # Windows 默认会隐藏 169.254.x.x;全网卡监听时这些 IPv4 地址同样可以访问。
 if-addrs = { version = "0.15", features = ["link-local"] }
 
+[target.'cfg(windows)'.dependencies]
+# 系统剪贴板监听(见 src/clipboard.rs)
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_SystemInformation",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 tokio-tungstenite = "0.26"

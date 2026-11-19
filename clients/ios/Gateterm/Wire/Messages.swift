@@ -47,5 +47,7 @@ enum ServerMsg {
     case sessionExited(channel: UInt32, id: Int64)
     /// 托管会话里的 coding agent 状态变了。不带 `supports_transcript`,见 `AgentSessions.applyEvent`
     case agentEvent(AgentSession)
+    /// 会话里的程序要求复制。服务端只发给最近一次输入的那一端,收到就写系统剪贴板。
+    case clipboard(channel: UInt32, text: String)
     case unknown(String)
 }
