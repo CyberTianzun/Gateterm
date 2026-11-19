@@ -1,6 +1,7 @@
 pub mod clipboard;
 pub mod graphics;
 pub mod keyboard;
+pub mod markdown;
 pub mod term;
 
 use std::time::Duration;
