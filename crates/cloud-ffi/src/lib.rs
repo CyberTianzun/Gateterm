@@ -493,7 +493,7 @@ pub enum FfiMdBlock {
     BlockQuote {
         children: Vec<u32>,
     },
-    List {
+    ListBlock {
         ordered: bool,
         start: u64,
         items: Vec<FfiMdListItem>,
@@ -522,7 +522,7 @@ impl From<MdBlock> for FfiMdBlock {
                 ordered,
                 start,
                 items,
-            } => Self::List {
+            } => Self::ListBlock {
                 ordered,
                 start,
                 items: items.into_iter().map(Into::into).collect(),
@@ -584,7 +584,7 @@ mod markdown_tests {
         }
 
         match &doc.blocks[doc.root[1] as usize] {
-            FfiMdBlock::List {
+            FfiMdBlock::ListBlock {
                 ordered,
                 start,
                 items,
@@ -603,7 +603,7 @@ mod markdown_tests {
                     other => panic!("expected Paragraph in list item, got {other:?}"),
                 }
             }
-            other => panic!("expected List, got {other:?}"),
+            other => panic!("expected ListBlock, got {other:?}"),
         }
     }
 
