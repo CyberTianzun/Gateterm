@@ -109,6 +109,8 @@ let chatEpoch = 0;
 let chatTimeline = 0;
 let chatBusy = false;
 let chatAgain = false;
+let chatUserOnly = false;
+let chatJumpToId: string | null = null;
 
 function resetChatPages() {
   chatEpoch++;
@@ -122,6 +124,8 @@ function resetChatPages() {
   chatScope = null;
   chatBusy = false;
   chatAgain = false;
+  chatUserOnly = false;
+  chatJumpToId = null;
 }
 /** 读不到对话记录时的原因(已经翻成人话)。有值就说明这次该显示回落。 */
 let chatFallback: string | null = null;
@@ -211,6 +215,7 @@ subscribe(() => {
   renderSidebar();
   setConn(connKey);
   setBanner(banner);
+  if (viewMode === "chat") renderChat();
 });
 
 /* ---------- 外观配置 ---------- */
@@ -878,6 +883,8 @@ async function loadOlderChat() {
 function renderChat(prepend = false) {
   const box = $("chat-view");
   if (chatFallback) {
+    delete box.dataset.chatScope;
+    delete box.dataset.chatUserOnly;
     const wrap = document.createElement("div");
     wrap.className = "chat-fallback";
     const why = document.createElement("div");
@@ -903,10 +910,29 @@ function renderChat(prepend = false) {
     } else header.textContent = t("chat.beginning");
   }
   if (chatMessages.length === 0 && !chatOlderCursor) {
+    delete box.dataset.chatScope;
+    delete box.dataset.chatUserOnly;
     box.innerHTML = `<div class="empty">${t("chat.empty")}</div>`;
     return;
   }
-  renderMessages(box, chatMessages, JSON.stringify([chatScope, chatEpoch]), box, { prepend, header });
+  const jumpToId = chatJumpToId;
+  chatJumpToId = null;
+  renderMessages(box, chatMessages, JSON.stringify([chatScope, chatEpoch]), box, {
+    prepend,
+    header,
+    userOnly: chatUserOnly,
+    jumpToId,
+    onToggleUserOnly: () => {
+      chatUserOnly = !chatUserOnly;
+      chatJumpToId = null;
+      renderChat();
+    },
+    onPickUserMessage: (id) => {
+      chatUserOnly = false;
+      chatJumpToId = id;
+      renderChat();
+    },
+  });
 }
 
 /** 状态图标徽章。列表页和侧边栏共用同一个,排在会话标题左边,悬停提示完整状态。 */

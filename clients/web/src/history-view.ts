@@ -114,12 +114,34 @@ export function mountHistory(trigger: HTMLElement, token: () => string, onOpen: 
       const body = el("div", "history-transcript", t("history.loading"));
       preview.replaceChildren(summary, body);
       back.focus();
+      let previewUserOnly = false;
+      let previewJumpToId: string | null = null;
+      const scope = `${entry.agent_id}:${entry.agent_session_id}`;
       try {
         const window = await fetchHistoryMessages(token(), entry);
         if (!dialog.open || requestId !== previewRevision) return;
         body.replaceChildren();
         if (window.source === "transcript" && window.messages.length) {
-          renderMessages(body, window.messages, `${entry.agent_id}:${entry.agent_session_id}`, preview);
+          const paint = () => {
+            if (!dialog.open || requestId !== previewRevision) return;
+            const jumpToId = previewJumpToId;
+            previewJumpToId = null;
+            renderMessages(body, window.messages, scope, preview, {
+              userOnly: previewUserOnly,
+              jumpToId,
+              onToggleUserOnly: () => {
+                previewUserOnly = !previewUserOnly;
+                previewJumpToId = null;
+                paint();
+              },
+              onPickUserMessage: (id) => {
+                previewUserOnly = false;
+                previewJumpToId = id;
+                paint();
+              },
+            });
+          };
+          paint();
         } else body.textContent = t("history.noMessages");
       } catch (error) {
         if (dialog.open && requestId === previewRevision) body.textContent = failureText(error);

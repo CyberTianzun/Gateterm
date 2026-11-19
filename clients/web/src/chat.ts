@@ -105,3 +105,24 @@ export function preview(m: Message): string {
   }
   return "";
 }
+
+/** 仅提取用户主动发出的非空正文块，剔除同条里的 tool-result 或空白块。 */
+export function userPromptTextBlocks(m: Message): Extract<Block, { kind: "text" }>[] {
+  if (m.role !== "user") return [];
+  return m.blocks.filter(
+    (b): b is Extract<Block, { kind: "text" }> => b.kind === "text" && b.text.trim().length > 0,
+  );
+}
+
+/**
+ * 判断一条消息是否为用户真正输入的一轮提示（而非工具回传/空白占位的 user turn）。
+ * 不少 agent 的记录会把 tool-result 甚至 Pi 的 [tool-use, tool-result] 记成 role="user"。
+ */
+export function isUserPromptMessage(m: Message): boolean {
+  return userPromptTextBlocks(m).length > 0;
+}
+
+/** 筛出所有用户输入的消息并保持原始时间顺序。 */
+export function filterUserPromptMessages(messages: Message[]): Message[] {
+  return messages.filter(isUserPromptMessage);
+}
