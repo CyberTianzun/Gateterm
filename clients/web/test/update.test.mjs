@@ -5,9 +5,9 @@ import { fileURLToPath } from "node:url";
 
 const result = await build({ entryPoints: [fileURLToPath(new URL("../src/update.ts", import.meta.url))],
   bundle: true, format: "esm", write: false });
-const { fetchUpdateStatus } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`);
+const { fetchUpdateStatus, fetchVersionStatus } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`);
 const release = { version: "0.3.0", url: "https://github.com/CyberTianzun/Gateterm/releases/tag/release-v0.3.0" };
-const ok = (update) => ({ ok: true, status: 200, json: async () => ({ current_version: "0.2.3", update }) });
+const ok = (update, checked_at = 1700000000) => ({ ok: true, status: 200, json: async () => ({ current_version: "0.2.3", update, checked_at }) });
 
 test("version status reads the authenticated local cache, never GitHub directly", async (t) => {
   const original = globalThis.fetch;
@@ -44,4 +44,21 @@ test("only this repository's HTTPS Release pages are accepted", async (t) => {
   }
   globalThis.fetch = async () => ok({ ...release, version: "" });
   await assert.rejects(fetchUpdateStatus("t"));
+});
+
+test("fetchVersionStatus returns currentVersion and checkedAt even when up to date", async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  globalThis.fetch = async () => ok(null, 1731980000);
+  assert.deepEqual(await fetchVersionStatus("t"), {
+    currentVersion: "0.2.3",
+    update: null,
+    checkedAt: 1731980000,
+  });
+  globalThis.fetch = async () => ({ ok: false, status: 404 });
+  assert.deepEqual(await fetchVersionStatus("t"), {
+    currentVersion: null,
+    update: null,
+    checkedAt: null,
+  });
 });

@@ -19,7 +19,9 @@ import {
 } from "./config";
 import { BUILTIN_FONTS, ensureFontLoaded, matchBuiltinFont } from "./fonts";
 import { knownThemes, loadCatalog, catalogLoaded, resolveTheme } from "./theme-catalog";
-import { LOCALES, LOCALE_NAMES, type LocalePref, type MsgKey, subscribe, t } from "./i18n";
+import { LOCALES, LOCALE_NAMES, type LocalePref, type MsgKey, localeTag, subscribe, t } from "./i18n";
+import { PROTO_VERSION } from "./protocol";
+import { WEB_VERSION, fetchVersionStatus } from "./update";
 import {
   type AgentStatus,
   type InstallOutcome,
@@ -34,11 +36,13 @@ export interface SettingsHost {
   get(): GateConfig;
   /** 应用并持久化。 */
   set(cfg: GateConfig): void;
-  /** 打 `/api/` 时用的 bearer。AI 集成页要拉清单、要装卸 hook。 */
+  /** 打 `/api/` 时用的 bearer。AI 集成页与关于页用它请求服务端接口。 */
   token(): string;
+  /** 握手拿到的服务端系统标识("windows" / "macos" / "linux" / "")。 */
+  serverOs?: () => string;
 }
 
-type Tab = "theme" | "font" | "terminal" | "ui" | "io" | "agents";
+type Tab = "theme" | "font" | "terminal" | "ui" | "io" | "agents" | "about";
 
 const el = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -61,6 +65,31 @@ function row(label: string, control: HTMLElement, hint?: string): HTMLElement {
   }
   r.append(l, control);
   return r;
+}
+
+/** 一行只读信息(不用 `<label>`,避免干扰右侧外链点击)。 */
+function infoRow(label: string, value: HTMLElement, hint?: HTMLElement): HTMLElement {
+  const r = el("div", "set-row");
+  const l = el("span", "set-label", label);
+  if (hint) l.appendChild(hint);
+  r.append(l, value);
+  return r;
+}
+
+function externalLink(href: string, text: string): HTMLAnchorElement {
+  const a = el("a", "update-link", text);
+  a.href = href;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  return a;
+}
+
+function formatServerOs(os: string): string {
+  const lower = os.trim().toLowerCase();
+  if (lower === "windows") return "Windows";
+  if (lower === "macos") return "macOS";
+  if (lower === "linux") return "Linux";
+  return os.trim();
 }
 
 function numberInput(value: number, min: number, max: number, step: number): HTMLInputElement {
@@ -145,6 +174,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     ["ui", "settings.tab.ui"],
     ["io", "settings.tab.io"],
     ["agents", "settings.tab.agents"],
+    ["about", "settings.tab.about"],
   ];
 
   /** 改一格配置:浅合并进当前配置并立即应用。 */
@@ -626,6 +656,83 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     return wrap;
   }
 
+  /* ---------- 关于 ---------- */
+  function renderAbout(): HTMLElement {
+    const wrap = el("div", "set-pane");
+
+    const hero = el("div", "about-hero");
+    const brand = el("div", "about-brand");
+    brand.append(el("span", undefined, "gateterm"));
+    const versionPill = el("span", "about-version-pill", WEB_VERSION ? `v${WEB_VERSION}` : "");
+    brand.append(versionPill);
+    hero.append(brand, el("div", "about-tagline", t("settings.about.tagline")));
+
+    const webVerVal = el("span", "about-val about-mono", WEB_VERSION ? `v${WEB_VERSION}` : "—");
+    const serverVerVal = el("span", "about-val about-mono", t("settings.about.loading"));
+    const updateHint = el("span", "set-hint");
+    updateHint.hidden = true;
+    const updateVal = el("span", "about-val", t("settings.about.loading"));
+    const protoVal = el("span", "about-val about-mono", `v${PROTO_VERSION}`);
+    const licenseVal = el("span", "about-val", "MIT");
+
+    const linksBox = el("div", "about-links");
+    linksBox.append(
+      externalLink("https://github.com/CyberTianzun/Gateterm", t("settings.about.repo")),
+      externalLink("https://github.com/CyberTianzun/Gateterm/releases", t("settings.about.releases")),
+      externalLink("https://github.com/CyberTianzun/Gateterm/issues", t("settings.about.issues")),
+    );
+
+    wrap.append(
+      hero,
+      infoRow(t("settings.about.webVersion"), webVerVal),
+      infoRow(t("settings.about.serverVersion"), serverVerVal),
+      infoRow(t("settings.about.updateStatus"), updateVal, updateHint),
+      infoRow(t("settings.about.protocol"), protoVal),
+      infoRow(t("settings.about.license"), licenseVal),
+      infoRow(t("settings.about.links"), linksBox),
+    );
+
+    void fetchVersionStatus(host.token())
+      .then((status) => {
+        const osLabel = formatServerOs(host.serverOs?.() ?? "");
+        if (status.currentVersion) {
+          serverVerVal.textContent = osLabel
+            ? `v${status.currentVersion} (${osLabel})`
+            : `v${status.currentVersion}`;
+          if (!versionPill.textContent) versionPill.textContent = `v${status.currentVersion}`;
+        } else {
+          serverVerVal.textContent = osLabel
+            ? `${t("settings.about.unknown")} (${osLabel})`
+            : t("settings.about.unknown");
+        }
+
+        if (status.update) {
+          updateVal.replaceChildren(
+            externalLink(status.update.url, t("update.available", { version: status.update.version })),
+          );
+          updateHint.hidden = true;
+        } else if (status.checkedAt !== null) {
+          updateVal.textContent = t("settings.about.upToDate");
+          const time = new Date(status.checkedAt * 1000).toLocaleString(localeTag());
+          updateHint.textContent = t("settings.about.checkedAt", { time });
+          updateHint.hidden = false;
+        } else if (status.currentVersion !== null) {
+          updateVal.textContent = t("settings.about.checkPending");
+          updateHint.hidden = true;
+        } else {
+          updateVal.textContent = "—";
+          updateHint.hidden = true;
+        }
+      })
+      .catch(() => {
+        serverVerVal.textContent = t("settings.about.unavailable");
+        updateVal.textContent = t("settings.about.unavailable");
+        updateHint.hidden = true;
+      });
+
+    return wrap;
+  }
+
   function render() {
     setLabels(t("app.settings"), t("settings.close"));
     renderTabs();
@@ -635,7 +742,8 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
       : tab === "terminal" ? renderTerminal()
       : tab === "ui" ? renderUi()
       : tab === "io" ? renderIo()
-      : renderAgents();
+      : tab === "agents" ? renderAgents()
+      : renderAbout();
     body.replaceChildren(pane);
   }
 

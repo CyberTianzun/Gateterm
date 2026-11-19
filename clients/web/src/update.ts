@@ -1,23 +1,58 @@
 import { subscribe, t } from "./i18n";
 
+declare const __WEB_VERSION__: string | undefined;
+
+/** Build-time Web UI version injected from root Cargo.toml (empty in unbundled unit tests). */
+export const WEB_VERSION: string =
+  typeof __WEB_VERSION__ === "string" ? __WEB_VERSION__.trim() : "";
+
 export interface ReleaseUpdate { version: string; url: string }
 
-/** Only the server checks GitHub; this request reads its cached daily result. */
-export async function fetchUpdateStatus(token: string, signal?: AbortSignal): Promise<ReleaseUpdate | null> {
+export interface VersionStatus {
+  currentVersion: string | null;
+  update: ReleaseUpdate | null;
+  checkedAt: number | null;
+}
+
+/** Only the server checks GitHub; this request reads its cached daily result and server version. */
+export async function fetchVersionStatus(token: string, signal?: AbortSignal): Promise<VersionStatus> {
   const response = await fetch("/api/update", {
     headers: { Authorization: `Bearer ${token}` }, cache: "no-store", signal,
   });
-  if (response.status === 404) return null; // Older servers have no update endpoint.
+  if (response.status === 404) {
+    // Older servers have no update endpoint.
+    return { currentVersion: null, update: null, checkedAt: null };
+  }
   if (!response.ok) throw new Error("Update status unavailable");
   const body = await response.json();
-  if (body?.update === null) return null;
-  const update = body?.update;
-  if (!update || typeof update.version !== "string" || !update.version.trim() || update.version.length > 80 ||
-      typeof update.url !== "string") throw new Error("Invalid update status");
-  const url = new URL(update.url);
+  const currentVersion =
+    typeof body?.current_version === "string" && body.current_version.trim() && body.current_version.length <= 80
+      ? body.current_version.trim()
+      : null;
+  const checkedAt =
+    typeof body?.checked_at === "number" && Number.isFinite(body.checked_at) && body.checked_at >= 0
+      ? body.checked_at
+      : null;
+  if (body?.update === null) {
+    return { currentVersion, update: null, checkedAt };
+  }
+  const rawUpdate = body?.update;
+  if (!rawUpdate || typeof rawUpdate.version !== "string" || !rawUpdate.version.trim() || rawUpdate.version.length > 80 ||
+      typeof rawUpdate.url !== "string") throw new Error("Invalid update status");
+  const url = new URL(rawUpdate.url);
   if (url.protocol !== "https:" || url.hostname !== "github.com" || url.port || url.username || url.password ||
       !url.pathname.startsWith("/CyberTianzun/Gateterm/releases/")) throw new Error("Invalid Release URL");
-  return { version: update.version, url: url.href };
+  return {
+    currentVersion,
+    update: { version: rawUpdate.version, url: url.href },
+    checkedAt,
+  };
+}
+
+/** Only the server checks GitHub; this request reads its cached daily result. */
+export async function fetchUpdateStatus(token: string, signal?: AbortSignal): Promise<ReleaseUpdate | null> {
+  const status = await fetchVersionStatus(token, signal);
+  return status.update;
 }
 
 export function mountUpdateStatus(element: HTMLElement, token: () => string) {

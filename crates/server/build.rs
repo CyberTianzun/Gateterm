@@ -12,6 +12,7 @@ fn main() {
     let web = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../clients/web");
 
     println!("cargo:rerun-if-env-changed=GATETERM_SKIP_WEB_BUILD");
+    println!("cargo:rerun-if-changed={}", web.join("../../Cargo.toml").display());
     for p in ["src", "scripts", "package.json", "package-lock.json", "tsconfig.json"] {
         println!("cargo:rerun-if-changed={}", web.join(p).display());
     }

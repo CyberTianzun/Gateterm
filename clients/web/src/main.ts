@@ -273,6 +273,7 @@ const settings = mountSettings({
   get: () => config,
   set: (next) => applyConfig(next),
   token,
+  serverOs: () => serverOs,
 });
 
 /* ---------- sidebar:选择/改名/结束都在这里 ---------- */

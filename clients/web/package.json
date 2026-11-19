@@ -4,7 +4,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "build": "esbuild src/main.ts --bundle --outfile=dist/app.js --format=esm --loader:.css=css && node scripts/copy-static.mjs",
+    "build": "node scripts/build.mjs && node scripts/copy-static.mjs",
     "gen:themes": "node scripts/gen-themes.mjs",
     "test": "node --test test/*.test.mjs",
     "typecheck": "tsc --noEmit"
