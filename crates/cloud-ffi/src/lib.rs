@@ -13,6 +13,9 @@ use gateterm_client_core::clipboard::{
 };
 use gateterm_client_core::graphics::ViewportImage;
 use gateterm_client_core::keyboard::{KeyEventKind, KeyInput};
+use gateterm_client_core::markdown::{
+    self, MdAlign, MdBlock, MdDocument, MdListItem, MdRun, MdTableCell,
+};
 use gateterm_client_core::term::{ClientTerm, ClientTermState};
 use gateterm_cloud_client::ops::{self, OpsError};
 use gateterm_cloud_client::{ClientKind, CloudClient, CloudError, CodePurpose};
@@ -401,5 +404,277 @@ impl TermEngine {
             .lock()
             .unwrap()
             .encode_pointer(col, row, button, pressed, moving)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum FfiMdAlign {
+    None,
+    Left,
+    Center,
+    Right,
+}
+
+impl From<MdAlign> for FfiMdAlign {
+    fn from(align: MdAlign) -> Self {
+        match align {
+            MdAlign::None => Self::None,
+            MdAlign::Left => Self::Left,
+            MdAlign::Center => Self::Center,
+            MdAlign::Right => Self::Right,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiMdRun {
+    pub text: String,
+    pub bold: bool,
+    pub italic: bool,
+    pub strikethrough: bool,
+    pub code: bool,
+    pub link: Option<String>,
+}
+
+impl From<MdRun> for FfiMdRun {
+    fn from(run: MdRun) -> Self {
+        Self {
+            text: run.text,
+            bold: run.bold,
+            italic: run.italic,
+            strikethrough: run.strikethrough,
+            code: run.code,
+            link: run.link,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiMdTableCell {
+    pub runs: Vec<FfiMdRun>,
+}
+
+impl From<MdTableCell> for FfiMdTableCell {
+    fn from(cell: MdTableCell) -> Self {
+        Self {
+            runs: cell.runs.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiMdListItem {
+    pub checked: Option<bool>,
+    pub children: Vec<u32>,
+}
+
+impl From<MdListItem> for FfiMdListItem {
+    fn from(item: MdListItem) -> Self {
+        Self {
+            checked: item.checked,
+            children: item.children,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum FfiMdBlock {
+    Heading {
+        level: u8,
+        runs: Vec<FfiMdRun>,
+    },
+    Paragraph {
+        runs: Vec<FfiMdRun>,
+    },
+    CodeBlock {
+        lang: Option<String>,
+        code: String,
+    },
+    BlockQuote {
+        children: Vec<u32>,
+    },
+    List {
+        ordered: bool,
+        start: u64,
+        items: Vec<FfiMdListItem>,
+    },
+    Table {
+        alignments: Vec<FfiMdAlign>,
+        headers: Vec<FfiMdTableCell>,
+        rows: Vec<Vec<FfiMdTableCell>>,
+    },
+    ThematicBreak,
+}
+
+impl From<MdBlock> for FfiMdBlock {
+    fn from(block: MdBlock) -> Self {
+        match block {
+            MdBlock::Heading { level, runs } => Self::Heading {
+                level,
+                runs: runs.into_iter().map(Into::into).collect(),
+            },
+            MdBlock::Paragraph { runs } => Self::Paragraph {
+                runs: runs.into_iter().map(Into::into).collect(),
+            },
+            MdBlock::CodeBlock { lang, code } => Self::CodeBlock { lang, code },
+            MdBlock::BlockQuote { children } => Self::BlockQuote { children },
+            MdBlock::List {
+                ordered,
+                start,
+                items,
+            } => Self::List {
+                ordered,
+                start,
+                items: items.into_iter().map(Into::into).collect(),
+            },
+            MdBlock::Table {
+                alignments,
+                headers,
+                rows,
+            } => Self::Table {
+                alignments: alignments.into_iter().map(Into::into).collect(),
+                headers: headers.into_iter().map(Into::into).collect(),
+                rows: rows
+                    .into_iter()
+                    .map(|row| row.into_iter().map(Into::into).collect())
+                    .collect(),
+            },
+            MdBlock::ThematicBreak => Self::ThematicBreak,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiMdDocument {
+    pub blocks: Vec<FfiMdBlock>,
+    pub root: Vec<u32>,
+}
+
+impl From<MdDocument> for FfiMdDocument {
+    fn from(doc: MdDocument) -> Self {
+        Self {
+            blocks: doc.blocks.into_iter().map(Into::into).collect(),
+            root: doc.root,
+        }
+    }
+}
+
+/// Parses CommonMark + GFM (tables, strikethrough, task lists) into an arena-indexed AST.
+#[uniffi::export]
+pub fn parse_markdown(text: String) -> FfiMdDocument {
+    markdown::parse_markdown(&text).into()
+}
+
+#[cfg(test)]
+mod markdown_tests {
+    use super::*;
+
+    #[test]
+    fn parses_heading_and_checked_task_list() {
+        let doc: FfiMdDocument = crate::parse_markdown("# Hi\n\n- [x] **ok**".into());
+        assert_eq!(doc.root.len(), 2);
+
+        match &doc.blocks[doc.root[0] as usize] {
+            FfiMdBlock::Heading { level, runs } => {
+                assert_eq!(*level, 1);
+                assert_eq!(runs.len(), 1);
+                assert_eq!(runs[0].text, "Hi");
+            }
+            other => panic!("expected Heading, got {other:?}"),
+        }
+
+        match &doc.blocks[doc.root[1] as usize] {
+            FfiMdBlock::List {
+                ordered,
+                start,
+                items,
+            } => {
+                assert!(!ordered);
+                assert_eq!(*start, 1);
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].checked, Some(true));
+                assert_eq!(items[0].children.len(), 1);
+                match &doc.blocks[items[0].children[0] as usize] {
+                    FfiMdBlock::Paragraph { runs } => {
+                        assert_eq!(runs.len(), 1);
+                        assert_eq!(runs[0].text, "ok");
+                        assert!(runs[0].bold);
+                    }
+                    other => panic!("expected Paragraph in list item, got {other:?}"),
+                }
+            }
+            other => panic!("expected List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn converts_all_block_and_inline_variants() {
+        let md = "\
+> quoted *em* ~~strike~~ `code` [link](https://example.com)
+
+```rust
+fn main() {}
+```
+
+---
+
+| L | C | R | N |
+| :--- | :---: | ---: | --- |
+| a | b | c | d |
+";
+        let doc = crate::parse_markdown(md.into());
+        assert_eq!(doc.root.len(), 4);
+
+        match &doc.blocks[doc.root[0] as usize] {
+            FfiMdBlock::BlockQuote { children } => {
+                assert_eq!(children.len(), 1);
+                match &doc.blocks[children[0] as usize] {
+                    FfiMdBlock::Paragraph { runs } => {
+                        assert!(runs.iter().any(|r| r.italic && r.text == "em"));
+                        assert!(runs.iter().any(|r| r.strikethrough && r.text == "strike"));
+                        assert!(runs.iter().any(|r| r.code && r.text == "code"));
+                        assert!(runs
+                            .iter()
+                            .any(|r| r.text == "link"
+                                && r.link.as_deref() == Some("https://example.com")));
+                    }
+                    other => panic!("expected Paragraph inside BlockQuote, got {other:?}"),
+                }
+            }
+            other => panic!("expected BlockQuote, got {other:?}"),
+        }
+
+        assert_eq!(
+            doc.blocks[doc.root[1] as usize],
+            FfiMdBlock::CodeBlock {
+                lang: Some("rust".into()),
+                code: "fn main() {}".into(),
+            }
+        );
+
+        assert_eq!(doc.blocks[doc.root[2] as usize], FfiMdBlock::ThematicBreak);
+
+        match &doc.blocks[doc.root[3] as usize] {
+            FfiMdBlock::Table {
+                alignments,
+                headers,
+                rows,
+            } => {
+                assert_eq!(
+                    alignments,
+                    &vec![
+                        FfiMdAlign::Left,
+                        FfiMdAlign::Center,
+                        FfiMdAlign::Right,
+                        FfiMdAlign::None,
+                    ]
+                );
+                assert_eq!(headers.len(), 4);
+                assert_eq!(headers[0].runs[0].text, "L");
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0][3].runs[0].text, "d");
+            }
+            other => panic!("expected Table, got {other:?}"),
+        }
     }
 }
