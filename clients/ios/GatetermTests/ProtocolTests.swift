@@ -1,4 +1,6 @@
+#if canImport(UIKit)
 import SwiftUI
+#endif
 import XCTest
 @testable import Gateterm
 
@@ -243,7 +245,7 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(fallbackPalette.mdCode, shortAnsi.foreground)
     }
 
-    func testMarkdownFfiParsingLinkSanitizationAndAttributedRuns() {
+    func testMarkdownFfiParsingAndPureHelpers() {
         let md = """
         # H1 Title
         ### H3 Title
@@ -325,7 +327,10 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(markdownHeadingFontSize(1), 15.5)
         XCTAssertEqual(markdownHeadingFontSize(2), 14.5)
         XCTAssertEqual(markdownHeadingFontSize(3), 13.5)
+    }
 
+    #if canImport(UIKit)
+    func testMarkdownAttributedRunsStyling() {
         let palette = AppearanceCodec.dark2026.palette
         let runs = [
             FfiMdRun(text: "both", bold: true, italic: true, strikethrough: true, code: false, link: nil),
@@ -351,4 +356,5 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(codeRun?.attributes[AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute.self], Color(rgb: palette.mdCode))
         XCTAssertEqual(codeRun?.attributes[AttributeScopes.SwiftUIAttributes.BackgroundColorAttribute.self], Color(rgb: palette.panel2))
     }
+    #endif
 }

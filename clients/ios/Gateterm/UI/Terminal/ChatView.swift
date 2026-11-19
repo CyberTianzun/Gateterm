@@ -64,6 +64,7 @@ struct ChatView: View {
         .background(Color(rgb: p.background))
         .foregroundStyle(Color(rgb: p.foreground))
         .tint(Color(rgb: p.accent))
+        .environment(\.colorScheme, p.light ? .light : .dark)
     }
 
     private func messagesView(palette: UiPalette) -> some View {

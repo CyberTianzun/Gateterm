@@ -111,3 +111,30 @@ enum Chat {
         messages.filter(\.isUserPrompt)
     }
 }
+
+/// Allow only http:, https:, and mailto: URLs without ASCII control characters.
+func sanitizeMarkdownLinkUrl(_ raw: String?) -> URL? {
+    guard let raw else { return nil }
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    guard !trimmed.unicodeScalars.contains(where: { $0.value <= 0x1F || $0.value == 0x7F }) else {
+        return nil
+    }
+    let lower = trimmed.lowercased()
+    guard let prefix = ["https://", "http://", "mailto:"].first(where: { lower.hasPrefix($0) }),
+          trimmed.count > prefix.count,
+          let url = URL(string: trimmed),
+          let scheme = url.scheme?.lowercased(),
+          ["http", "https", "mailto"].contains(scheme) else {
+        return nil
+    }
+    return url
+}
+
+func markdownHeadingFontSize(_ level: Int) -> Double {
+    switch level {
+    case 1: 15.5
+    case 2: 14.5
+    default: 13.5
+    }
+}
