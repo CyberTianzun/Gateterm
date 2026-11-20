@@ -458,7 +458,10 @@ test("renderMessages 工具栏筛选、点击/键盘跳转、空态保留加载�
   assert.equal(filteredRows[0].tabIndex, 0);
   assert.ok(filteredRows[0].textContent.includes("First question"));
   assert.equal(filteredRows[0].textContent.includes("ignored result"), false);
-  assert.equal(filteredRows[0].querySelectorAll(".cmsg-jump-cue")[0].textContent, "↗");
+  const jumpCue = filteredRows[0].querySelectorAll(".cmsg-jump-cue")[0];
+  assert.equal(jumpCue.textContent, "");
+  assert.equal(jumpCue.firstElementChild?.tagName, "SVG");
+  assert.equal(jumpCue.firstElementChild?.getAttribute("aria-hidden"), "true");
 
   // Keyboard Enter and Space also invoke onPickUserMessage
   assert.equal(filteredRows[1].keydown(" "), true);

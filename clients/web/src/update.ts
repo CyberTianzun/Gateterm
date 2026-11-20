@@ -1,4 +1,5 @@
 import { subscribe, t } from "./i18n";
+import { createIcon } from "./icons";
 
 declare const __WEB_VERSION__: string | undefined;
 
@@ -71,7 +72,7 @@ export function mountUpdateStatus(element: HTMLElement, token: () => string) {
     link.href = update.url;
     link.target = "_blank";
     link.rel = "noopener noreferrer";
-    link.textContent = text;
+    link.append(document.createTextNode(text), createIcon("arrow-up-right", "inline-icon"));
     element.replaceChildren(link);
   }
   async function refresh() {

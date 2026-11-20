@@ -20,6 +20,7 @@ import {
 import { BUILTIN_FONTS, ensureFontLoaded, matchBuiltinFont } from "./fonts";
 import { knownThemes, loadCatalog, catalogLoaded, resolveTheme } from "./theme-catalog";
 import { LOCALES, LOCALE_NAMES, type LocalePref, type MsgKey, localeTag, subscribe, t } from "./i18n";
+import { createIcon } from "./icons";
 import { PROTO_VERSION } from "./protocol";
 import { WEB_VERSION, fetchVersionStatus } from "./update";
 import {
@@ -77,10 +78,11 @@ function infoRow(label: string, value: HTMLElement, hint?: HTMLElement): HTMLEle
 }
 
 function externalLink(href: string, text: string): HTMLAnchorElement {
-  const a = el("a", "update-link", text);
+  const a = el("a", "update-link");
   a.href = href;
   a.target = "_blank";
   a.rel = "noopener noreferrer";
+  a.append(document.createTextNode(text), createIcon("arrow-up-right", "inline-icon"));
   return a;
 }
 
@@ -277,12 +279,19 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
         (f) => f.url && f.family.toLowerCase() === first.toLowerCase(),
       );
       if (first === "") {
-        avail.textContent = "";
+        avail.replaceChildren();
+        avail.className = "set-note";
       } else if (generic || isBuiltin || document.fonts?.check?.(`12px "${first}"`)) {
-        avail.textContent = t("settings.font.available", { name: first });
+        avail.replaceChildren(
+          createIcon("check", "inline-icon"),
+          document.createTextNode(t("settings.font.available", { name: first })),
+        );
         avail.className = "set-note ok";
       } else {
-        avail.textContent = t("settings.font.missing", { name: first });
+        avail.replaceChildren(
+          createIcon("alert-triangle", "inline-icon"),
+          document.createTextNode(t("settings.font.missing", { name: first })),
+        );
         avail.className = "set-note warn";
       }
     };

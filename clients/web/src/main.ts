@@ -21,6 +21,7 @@ import { mountSettings } from "./settings";
 import { installMouseEventPolicy, type MouseEventPolicy } from "./mouse";
 import { type Launcher, fetchLaunchers } from "./launchers";
 import { type MsgKey, localeTag, navigatorLanguages, resolveLocale, setLocale, subscribe, t } from "./i18n";
+import { iconSvg } from "./icons";
 import { mountNewSessionMenu } from "./new-session";
 import {
   browserShortcut,
@@ -185,7 +186,11 @@ function applyStaticText() {
     node.textContent = t(node.dataset.i18n as MsgKey);
   }
   for (const node of Array.from(document.querySelectorAll<HTMLElement>("[data-i18n-title]"))) {
-    node.title = t(node.dataset.i18nTitle as MsgKey);
+    const label = t(node.dataset.i18nTitle as MsgKey);
+    node.title = label;
+    if (node.tagName === "BUTTON" && node.textContent?.trim() === "") {
+      node.setAttribute("aria-label", label);
+    }
   }
 }
 
@@ -299,8 +304,8 @@ function renderSidebar() {
       <div class="sstatus" hidden></div>
       <div class="sacts">
         ${showChat ? '<button type="button" data-act="view-toggle" aria-controls="chat-view"></button>' : ""}
-        <button data-act="rename" title="${t("session.rename")}">✎</button>
-        <button data-act="kill" title="${t("session.kill")}">✕</button>
+        <button type="button" data-act="rename" title="${t("session.rename")}" aria-label="${t("session.rename")}">${iconSvg("pencil")}</button>
+        <button type="button" data-act="kill" title="${t("session.kill")}" aria-label="${t("session.kill")}">${iconSvg("close")}</button>
       </div>`;
     const snameEl = row.querySelector(".sname")!;
     const titleSpan = document.createElement("span");
@@ -364,9 +369,7 @@ function syncSidebarPosition() {
   button.title = label;
   button.setAttribute("aria-label", label);
   $("sidebar-show").setAttribute("aria-label", t("sidebar.show"));
-  button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/>${
-    position === "left" ? '<path d="M15 4v16m-8-11 3 3-3 3"/>' : '<path d="M9 4v16m5-11 3 3-3 3"/>'
-  }</svg>`;
+  button.innerHTML = iconSvg(position === "left" ? "sidebar-pin-right" : "sidebar-hide");
   setDrawer(document.body.classList.contains("sidebar-open"));
   requestAnimationFrame(refit);
 }
@@ -773,11 +776,7 @@ function syncViewToggle() {
   btn.title = label;
   btn.setAttribute("aria-label", label);
   btn.setAttribute("aria-pressed", String(chatting));
-  btn.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${
-    chatting
-      ? '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/>'
-      : '<path d="M21 14a3 3 0 0 1-3 3H8l-5 4V6a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3z"/><path d="M7 8h10M7 12h7"/>'
-  }</svg>`;
+  btn.innerHTML = iconSvg(chatting ? "terminal" : "chat");
 }
 
 /**

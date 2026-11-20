@@ -79,7 +79,8 @@ try:
             expect(link).to_have_attribute('href', release_url)
             expect(link).to_have_attribute('target', '_blank')
             expect(link).to_have_attribute('rel', 'noopener noreferrer')
-            expect(link).to_have_text('发现新版本 v0.3.0，前往 GitHub ↗' if locale == 'zh-CN' else 'New version v0.3.0 on GitHub ↗')
+            expect(link).to_have_text('发现新版本 v0.3.0，前往 GitHub' if locale == 'zh-CN' else 'New version v0.3.0 on GitHub')
+            expect(link.locator('svg')).to_have_count(1)
             assert page.evaluate('document.querySelector("#update-status").previousElementSibling.id') == 'cloud-state'
             assert offer.bounding_box()['y'] > page.locator('#cloud-state').bounding_box()['y']
             context.route(release_url, lambda route: route.fulfill(status=200, content_type='text/html', body='<title>Release</title>'))

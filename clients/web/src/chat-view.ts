@@ -7,6 +7,7 @@ import {
 } from "./chat";
 import { writeClipboard } from "./clipboard";
 import { t } from "./i18n";
+import { createIcon } from "./icons";
 import { renderMarkdown } from "./markdown";
 
 export interface RenderMessagesOptions {
@@ -19,25 +20,6 @@ export interface RenderMessagesOptions {
 }
 
 const savedExpanded = new WeakMap<HTMLElement, { scope: string; keys: Set<string> }>();
-
-function funnelIcon(): Element {
-  const ns = "http://www.w3.org/2000/svg";
-  const create = typeof document.createElementNS === "function"
-    ? (tag: string) => document.createElementNS(ns, tag)
-    : (tag: string) => document.createElement(tag);
-  const svg = create("svg");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("fill", "none");
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "1.8");
-  svg.setAttribute("stroke-linecap", "round");
-  svg.setAttribute("stroke-linejoin", "round");
-  svg.setAttribute("aria-hidden", "true");
-  const path = create("path");
-  path.setAttribute("d", "M3 5h18l-7 8v5l-4 2v-7L3 5z");
-  svg.appendChild(path);
-  return svg;
-}
 
 function clearFilterButton(onToggle: () => void): HTMLButtonElement {
   const clear = document.createElement("button");
@@ -61,7 +43,7 @@ function buildToolbar(userOnly: boolean, count: number, onToggle: () => void): {
   const badge = document.createElement("span");
   badge.className = "chat-filter-count";
   badge.textContent = `(${count})`;
-  filterBtn.append(funnelIcon(), label, badge);
+  filterBtn.append(createIcon("filter"), label, badge);
   filterBtn.addEventListener("click", onToggle);
   toolbar.appendChild(filterBtn);
 
@@ -157,7 +139,7 @@ function buildUserPromptRow(message: Message, onPick?: (messageId: string) => vo
   const cue = document.createElement("span");
   cue.className = "cmsg-jump-cue";
   cue.setAttribute("aria-hidden", "true");
-  cue.textContent = "↗";
+  cue.appendChild(createIcon("arrow-up-right"));
   row.appendChild(cue);
   const pick = () => onPick?.(message.id);
   row.addEventListener("click", pick);

@@ -1,3 +1,5 @@
+import { createIcon } from "./icons";
+
 /** 两个面板共用原生 dialog：Esc / 关闭按钮关闭，点击遮罩不关闭。 */
 export function createModal(className: string, titleText: string, closeLabel: string) {
   const dialog = document.createElement("dialog");
@@ -10,7 +12,7 @@ export function createModal(className: string, titleText: string, closeLabel: st
   const close = document.createElement("button");
   close.className = "modal-close";
   close.type = "button";
-  close.textContent = "✕";
+  close.appendChild(createIcon("close"));
   close.addEventListener("click", () => dialog.close());
   header.append(title, close);
   dialog.appendChild(header);

@@ -30,7 +30,7 @@ export const LOCALE_TAGS: Record<Locale, string> = {
 };
 
 const zh = {
-  "update.available": "发现新版本 v{version}，前往 GitHub ↗",
+  "update.available": "发现新版本 v{version}，前往 GitHub",
   /* ---------- 主界面 ---------- */
   "app.settings": "设置",
   "app.newSession": "新建会话",
@@ -214,8 +214,8 @@ const zh = {
   "settings.font.presetCustom": "自定义字体栈",
   "settings.font.family": "字体栈",
   "settings.font.familyHint": "CSS font-family,逗号分隔",
-  "settings.font.available": "✓ 首选族「{name}」可用",
-  "settings.font.missing": "⚠ 系统里找不到「{name}」,会回落到栈里的下一个",
+  "settings.font.available": "首选族「{name}」可用",
+  "settings.font.missing": "系统里找不到「{name}」,会回落到栈里的下一个",
   "settings.font.reset": "恢复默认字体栈",
   "settings.font.size": "字号",
   "settings.font.lineHeight": "行高",
@@ -268,9 +268,9 @@ const zh = {
   "settings.about.protocol": "协议版本",
   "settings.about.license": "开源协议",
   "settings.about.links": "相关链接",
-  "settings.about.repo": "GitHub 仓库 ↗",
-  "settings.about.releases": "版本发布 (Releases) ↗",
-  "settings.about.issues": "问题反馈 (Issues) ↗",
+  "settings.about.repo": "GitHub 仓库",
+  "settings.about.releases": "版本发布 (Releases)",
+  "settings.about.issues": "问题反馈 (Issues)",
 
   /* ---------- 枚举值 ---------- */
   "cursor.block": "方块",
@@ -301,7 +301,7 @@ const zh = {
 export type MsgKey = keyof typeof zh;
 
 const en: Record<MsgKey, string> = {
-  "update.available": "New version v{version} on GitHub ↗",
+  "update.available": "New version v{version} on GitHub",
   "app.settings": "Settings",
   "app.newSession": "New session",
   "app.sessionList": "Sessions",
@@ -479,8 +479,8 @@ const en: Record<MsgKey, string> = {
   "settings.font.presetCustom": "Custom font stack",
   "settings.font.family": "Font stack",
   "settings.font.familyHint": "CSS font-family, comma separated",
-  "settings.font.available": "✓ Preferred family “{name}” is available",
-  "settings.font.missing": "⚠ “{name}” isn't installed; the next family in the stack will be used",
+  "settings.font.available": "Preferred family “{name}” is available",
+  "settings.font.missing": "“{name}” isn't installed; the next family in the stack will be used",
   "settings.font.reset": "Restore the default font stack",
   "settings.font.size": "Size",
   "settings.font.lineHeight": "Line height",
@@ -533,9 +533,9 @@ const en: Record<MsgKey, string> = {
   "settings.about.protocol": "Protocol version",
   "settings.about.license": "License",
   "settings.about.links": "Links",
-  "settings.about.repo": "GitHub Repository ↗",
-  "settings.about.releases": "Releases ↗",
-  "settings.about.issues": "Issues ↗",
+  "settings.about.repo": "GitHub Repository",
+  "settings.about.releases": "Releases",
+  "settings.about.issues": "Issues",
 
   "cursor.block": "Block",
   "cursor.underline": "Underline",
