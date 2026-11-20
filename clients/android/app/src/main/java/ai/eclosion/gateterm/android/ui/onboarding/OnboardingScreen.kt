@@ -158,8 +158,8 @@ fun OnboardingScreen(
         ) {
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .widthIn(max = 480.dp),
+                    .widthIn(max = 480.dp)
+                    .fillMaxSize(),
             ) {
                 OnboardingTopBar(
                     isFirstLaunch = isFirstLaunch,

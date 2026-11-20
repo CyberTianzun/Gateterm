@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -48,7 +49,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -175,7 +175,7 @@ private fun ArchitectureStage(
 ) {
     val primary = MaterialTheme.colorScheme.primary
     val transition = rememberInfiniteTransition(label = "architecture_beam")
-    val beamProgress by transition.animateFloat(
+    val beamProgressState = transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
@@ -203,16 +203,16 @@ private fun ArchitectureStage(
                 DesktopTerminalWindow(
                     liveGreen = palette.liveGreen,
                     isLight = palette.isLight,
-                    modifier = Modifier.weight(1.48f),
+                    modifier = Modifier.weight(1.42f),
                 )
                 Box(
                     modifier = Modifier
-                        .width(66.dp)
+                        .width(62.dp)
                         .zIndex(1f),
                     contentAlignment = Alignment.Center,
                 ) {
                     ConnectionBeam(
-                        progress = beamProgress,
+                        progressProvider = { beamProgressState.value },
                         liveGreen = palette.liveGreen,
                         accent = primary,
                         modifier = Modifier
@@ -249,14 +249,14 @@ private fun ArchitectureStage(
                     accent = primary,
                     isLight = palette.isLight,
                     syncedLabel = stringResource(R.string.onboarding_step_1_phone_synced),
-                    modifier = Modifier.weight(0.86f),
+                    modifier = Modifier.weight(0.95f),
                 )
             }
 
-            Row(
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterVertically),
             ) {
                 HostChip(
                     label = "Gateterm-Desktop-Web",
@@ -347,12 +347,13 @@ private fun DesktopTerminalWindow(
 
 @Composable
 private fun ConnectionBeam(
-    progress: Float,
+    progressProvider: () -> Float,
     liveGreen: Color,
     accent: Color,
     modifier: Modifier = Modifier,
 ) {
     Canvas(modifier = modifier) {
+        val progress = progressProvider()
         val y = size.height * 0.5f
         val startX = 2.dp.toPx()
         val endX = size.width - 2.dp.toPx()
@@ -444,9 +445,11 @@ private fun MiniaturePhoneFrame(
                 Text(
                     text = "~/octoterm $",
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 8.sp,
+                    fontSize = 7.5.sp,
+                    lineHeight = 9.5.sp,
                     color = accent,
-                    maxLines = 1,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 TerminalBarLine(widthFraction = 0.85f, color = Color(0xFFD5DCE6))
                 TerminalBarLine(widthFraction = 0.65f, color = liveGreen.copy(alpha = 0.85f))
@@ -495,6 +498,7 @@ private fun HostChip(
                 fontWeight = if (highlighted) FontWeight.SemiBold else FontWeight.Medium,
                 color = if (highlighted) primary else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -622,7 +626,9 @@ private fun InstallHostStage(
                                 text = stringResource(R.string.onboarding_step_2_callout),
                                 backgroundColor = palette.warmOrangePill,
                                 contentColor = Color.White,
+                                maxLines = 2,
                                 modifier = Modifier
+                                    .widthIn(max = 152.dp)
                                     .align(Alignment.TopEnd)
                                     .offset(x = 4.dp, y = (-10).dp),
                             )
@@ -656,6 +662,7 @@ private fun InstallHostStage(
                                         fontSize = 12.sp,
                                         color = Color(0xFFDCE3EC),
                                         maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
                                     )
                                 }
                                 Text(
@@ -683,7 +690,7 @@ private fun DesktopQrStage(
     modifier: Modifier = Modifier,
 ) {
     val transition = rememberInfiniteTransition(label = "desktop_qr_rings")
-    val pulse by transition.animateFloat(
+    val pulseState = transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
@@ -749,6 +756,7 @@ private fun DesktopQrStage(
                     )
 
                     Canvas(modifier = Modifier.fillMaxSize()) {
+                        val pulse = pulseState.value
                         drawFocusRing(
                             rect = OnboardingConfig.DESKTOP_SETTINGS_LISTEN_RECT,
                             color = palette.warmOrange,
@@ -780,15 +788,15 @@ private fun DesktopQrStage(
                         )
                     }
 
-                    // Callout (2) sits in the blank bottom-right zone below the helper text, clear of the QR code.
+                    // Callout (2) sits in the blank bottom-right zone and grows upward without clipping at high fontScale.
                     Box(
                         modifier = Modifier
-                            .offset(
-                                x = stageWidth * 0.405f,
-                                y = stageHeight * 0.790f,
-                            )
-                            .width(stageWidth * 0.575f)
-                            .height(stageHeight * 0.195f),
+                            .align(Alignment.BottomStart)
+                            .padding(
+                                start = stageWidth * 0.405f,
+                                end = stageWidth * 0.02f,
+                                bottom = stageHeight * 0.045f,
+                            ),
                         contentAlignment = Alignment.CenterStart,
                     ) {
                         CalloutPill(
@@ -848,7 +856,7 @@ private fun ScanConnectStage(
 ) {
     val primary = MaterialTheme.colorScheme.primary
     val transition = rememberInfiniteTransition(label = "qr_laser")
-    val scanPosition by transition.animateFloat(
+    val scanPositionState = transition.animateFloat(
         initialValue = 0.08f,
         targetValue = 0.92f,
         animationSpec = infiniteRepeatable(
@@ -908,7 +916,7 @@ private fun ScanConnectStage(
                                 cornerLength = 15.dp.toPx(),
                                 strokeWidth = 2.5.dp.toPx(),
                             )
-                            val laserY = size.height * scanPosition
+                            val laserY = size.height * scanPositionState.value
                             val trailHeight = 20.dp.toPx()
                             drawRect(
                                 brush = Brush.verticalGradient(
@@ -942,7 +950,7 @@ private fun ScanConnectStage(
                         fontWeight = FontWeight.Medium,
                         color = Color(0xFFD2DCE8),
                         textAlign = TextAlign.Center,
-                        maxLines = 2,
+                        maxLines = 3,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -981,7 +989,7 @@ private fun ScanConnectStage(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(7.dp),
+                        .padding(6.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Box(
@@ -997,7 +1005,7 @@ private fun ScanConnectStage(
                             .fillMaxSize()
                             .clip(RoundedCornerShape(11.dp))
                             .background(Color(0xFF101318))
-                            .padding(8.dp),
+                            .padding(6.dp),
                         verticalArrangement = Arrangement.SpaceBetween,
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -1027,13 +1035,15 @@ private fun ScanConnectStage(
                                 fontSize = 8.5.sp,
                                 color = Color(0xFF8AB4F8),
                                 maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                             Text(
-                                text = "✓ Connected",
+                                text = "✓ ${stringResource(R.string.connection_connected)}",
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 8.5.sp,
                                 color = palette.liveGreen,
                                 maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                             TerminalBarLine(widthFraction = 0.78f, color = Color(0xFFB8C4D4))
                             Row(
@@ -1058,26 +1068,28 @@ private fun ScanConnectStage(
                         Spacer(Modifier.height(6.dp))
 
                         // Signature Gateterm terminal shortcut key bar
-                        Row(
+                        FlowRow(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                            horizontalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterHorizontally),
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
                         ) {
                             listOf("ESC", "TAB", "CTRL", "↑↓").forEach { key ->
                                 Box(
                                     modifier = Modifier
-                                        .weight(1f)
                                         .clip(RoundedCornerShape(4.dp))
                                         .background(Color(0xFF212630))
-                                        .padding(vertical = 3.dp),
+                                        .padding(horizontal = 3.5.dp, vertical = 2.5.dp),
                                     contentAlignment = Alignment.Center,
                                 ) {
                                     Text(
                                         text = key,
                                         fontFamily = FontFamily.Monospace,
                                         fontWeight = FontWeight.SemiBold,
-                                        fontSize = 7.sp,
+                                        fontSize = 6.5.sp,
                                         color = Color(0xFFC8D2E0),
+                                        softWrap = false,
                                         maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
                                     )
                                 }
                             }
