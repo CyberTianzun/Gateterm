@@ -24,9 +24,25 @@ object TermGeometry {
         rows: Int,
     ): Pair<Int, Int>? {
         if (cellW <= 0f || cellH <= 0f || cols <= 0 || rows <= 0) return null
-        val col = ((x - ox) / cellW).toInt()
-        val row = ((y - oy) / cellH).toInt()
+        val col = floor((x - ox) / cellW).toInt()
+        val row = floor((y - oy) / cellH).toInt()
         if (col !in 0 until cols || row !in 0 until rows) return null
+        return col to row
+    }
+
+    fun cellAtClamped(
+        x: Float,
+        y: Float,
+        ox: Float,
+        oy: Float,
+        cellW: Float,
+        cellH: Float,
+        cols: Int,
+        rows: Int,
+    ): Pair<Int, Int>? {
+        if (cellW <= 0f || cellH <= 0f || cols <= 0 || rows <= 0) return null
+        val col = floor((x - ox) / cellW).toInt().coerceIn(0, cols - 1)
+        val row = floor((y - oy) / cellH).toInt().coerceIn(0, rows - 1)
         return col to row
     }
 
@@ -47,4 +63,16 @@ data class TermSelection(
     val y0: Int,
     val x1: Int,
     val y1: Int,
-)
+) {
+    fun normalized(): TermSelection =
+        if (y0 < y1 || (y0 == y1 && x0 <= x1)) this else TermSelection(x1, y1, x0, y0)
+
+    fun contains(x: Int, y: Int): Boolean {
+        val s = normalized()
+        if (y < s.y0 || y > s.y1) return false
+        if (s.y0 == s.y1) return x in s.x0..s.x1
+        if (y == s.y0) return x >= s.x0
+        if (y == s.y1) return x <= s.x1
+        return true
+    }
+}

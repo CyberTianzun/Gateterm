@@ -41,6 +41,7 @@ import ai.eclosion.gateterm.android.appearance.TermAppearance
 import ai.eclosion.gateterm.android.appearance.TermFontKind
 import ai.eclosion.gateterm.android.i18n.LocalePref
 import ai.eclosion.gateterm.android.term.AgentKeyLayout
+import ai.eclosion.gateterm.android.term.TerminalTouchMode
 import kotlin.math.round
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -64,6 +65,8 @@ fun AppearanceScreen(
     onExtraKeyRows: (Int) -> Unit,
     agentKeyLayouts: Map<String, AgentKeyLayout>,
     onAgentKeyLayout: (String, AgentKeyLayout) -> Unit,
+    touchMode: TerminalTouchMode,
+    onTouchMode: (TerminalTouchMode) -> Unit,
     keepConnectionsInBackground: Boolean,
     onKeepConnectionsInBackground: (Boolean) -> Unit,
 ) {
@@ -114,6 +117,35 @@ fun AppearanceScreen(
                     )
                 }
             }
+            Text(stringResource(R.string.settings_touch_mode), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TerminalTouchMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = touchMode == mode,
+                        onClick = { onTouchMode(mode) },
+                        label = {
+                            Text(
+                                stringResource(
+                                    when (mode) {
+                                        TerminalTouchMode.Touch -> R.string.settings_touch_mode_touch
+                                        TerminalTouchMode.Mouse -> R.string.settings_touch_mode_mouse
+                                    },
+                                ),
+                            )
+                        },
+                    )
+                }
+            }
+            Text(
+                stringResource(
+                    when (touchMode) {
+                        TerminalTouchMode.Touch -> R.string.settings_touch_mode_touch_hint
+                        TerminalTouchMode.Mouse -> R.string.settings_touch_mode_mouse_hint
+                    },
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Text(stringResource(R.string.settings_keyboard_rows), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (rows in 1..2) {

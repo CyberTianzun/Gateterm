@@ -353,4 +353,108 @@ final class AlacrittyTermTests: XCTestCase {
         XCTAssertNotNil(TerminalBlockGlyphs.boxSegments(0x256C))
         XCTAssertNil(TerminalBlockGlyphs.boxSegments(0x41))
     }
+
+    func testAltScreenWheelAndSelectionBounds() {
+        let t = AlacrittyTerm(cols: 24, rows: 4)
+        XCTAssertFalse(t.altScreen)
+        XCTAssertNil(t.encodeWheel(col: 0, row: 0, deltaLines: 1))
+        t.write(Data("hi src/app.rs\u{1b}[?1000;1006h".utf8))
+        XCTAssertEqual(String(decoding: t.encodeWheel(col: 1, row: 2, deltaLines: 1) ?? Data(), as: UTF8.self), "\u{1b}[<64;2;3M")
+        let word = t.wordBoundsAt(col: 5, row: 0)
+        XCTAssertEqual(word?.start, 3)
+        XCTAssertEqual(word?.end, 12)
+        let line = t.lineBoundsAt(row: 0)
+        XCTAssertEqual(line?.start, 0)
+        XCTAssertEqual(line?.end, 12)
+        t.write(Data("\u{1b}[?1000l\u{1b}[?1049h".utf8))
+        XCTAssertTrue(t.altScreen)
+        XCTAssertEqual(String(decoding: t.encodeWheel(col: 0, row: 0, deltaLines: -2) ?? Data(), as: UTF8.self), "\u{1b}[B\u{1b}[B")
+    }
 }
+
+final class TerminalTouchModeTests: XCTestCase {
+    func testParseDefaultsToTouchAndRoundTrips() {
+        XCTAssertEqual(TerminalTouchMode.defaultMode, .touch)
+        XCTAssertEqual(TerminalTouchMode.parse(nil), .touch)
+        XCTAssertEqual(TerminalTouchMode.parse("unknown"), .touch)
+        for mode in TerminalTouchMode.allCases {
+            XCTAssertEqual(TerminalTouchMode.parse(mode.rawValue), mode)
+        }
+    }
+
+    func testSingleFingerDragRespectsModeAndPointerType() {
+        XCTAssertEqual(TerminalTouchPolicy.singleFingerDragAction(mode: .touch, mouseTracking: true), .scroll)
+        XCTAssertEqual(TerminalTouchPolicy.singleFingerDragAction(mode: .touch, mouseTracking: false), .scroll)
+        XCTAssertEqual(
+            TerminalTouchPolicy.singleFingerDragAction(mode: .touch, mouseTracking: true, isIndirectPointer: true),
+            .mouseDrag
+        )
+        XCTAssertEqual(TerminalTouchPolicy.singleFingerDragAction(mode: .mouse, mouseTracking: true), .mouseDrag)
+        XCTAssertEqual(TerminalTouchPolicy.singleFingerDragAction(mode: .mouse, mouseTracking: false), .scroll)
+    }
+
+    func testTapActionPrioritizesTopRevealAndSelectionDismissal() {
+        XCTAssertEqual(
+            TerminalTouchPolicy.tapAction(inTopRevealZone: true, hasSelection: true, mouseTracking: true),
+            .revealTopBar
+        )
+        XCTAssertEqual(
+            TerminalTouchPolicy.tapAction(inTopRevealZone: false, hasSelection: true, mouseTracking: true),
+            .dismissSelection
+        )
+        XCTAssertEqual(
+            TerminalTouchPolicy.tapAction(inTopRevealZone: false, hasSelection: false, mouseTracking: true),
+            .mouseClick
+        )
+        XCTAssertEqual(
+            TerminalTouchPolicy.tapAction(inTopRevealZone: false, hasSelection: false, mouseTracking: false),
+            .focusOnly
+        )
+    }
+
+    func testTwoFingerDisambiguationAndFontClamp() {
+        XCTAssertNil(TerminalTouchPolicy.decideTwoFingerGesture(scaleDelta: 1.05, panDistance: 4, touchSlop: 12))
+        XCTAssertEqual(TerminalTouchPolicy.decideTwoFingerGesture(scaleDelta: 1.15, panDistance: 2, touchSlop: 12), .pinch)
+        XCTAssertEqual(TerminalTouchPolicy.decideTwoFingerGesture(scaleDelta: 1.03, panDistance: 14, touchSlop: 12), .scroll)
+        XCTAssertEqual(TerminalTouchPolicy.clampFontSize(baseSize: 10, scale: 0.2), 6)
+        XCTAssertEqual(TerminalTouchPolicy.clampFontSize(baseSize: 30, scale: 2.5), 48)
+        XCTAssertEqual(TerminalTouchPolicy.clampFontSize(baseSize: 14, scale: 1.28), 18)
+    }
+
+    func testHandleHitTestUpdateAndWordExtension() {
+        let sel = TermSelection(x0: 2, y0: 1, x1: 5, y1: 1)
+        let origin = CGPoint(x: 10, y: 20)
+        XCTAssertEqual(
+            TerminalSelectionHandles.hitTestHandle(
+                point: CGPoint(x: 32, y: 70),
+                selection: sel,
+                origin: origin,
+                cellWidth: 10,
+                cellHeight: 20,
+                drop: 12,
+                hitRadius: 30
+            ),
+            .start
+        )
+        XCTAssertEqual(
+            TerminalSelectionHandles.hitTestHandle(
+                point: CGPoint(x: 68, y: 74),
+                selection: sel,
+                origin: origin,
+                cellWidth: 10,
+                cellHeight: 20,
+                drop: 12,
+                hitRadius: 30
+            ),
+            .end
+        )
+        let crossed = TerminalSelectionHandles.updateHandle(selection: sel, handle: .start, col: 9, row: 3)
+        XCTAssertEqual(crossed.selection, TermSelection(x0: 5, y0: 1, x1: 9, y1: 3))
+        XCTAssertEqual(crossed.handle, .end)
+
+        let word = TermSelection(x0: 4, y0: 2, x1: 8, y1: 2)
+        XCTAssertEqual(TerminalSelectionHandles.extendWordSelection(wordAnchor: word, col: 12, row: 2), TermSelection(x0: 4, y0: 2, x1: 12, y1: 2))
+        XCTAssertEqual(TerminalSelectionHandles.extendWordSelection(wordAnchor: word, col: 1, row: 2), TermSelection(x0: 1, y0: 2, x1: 8, y1: 2))
+    }
+}
+

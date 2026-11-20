@@ -802,6 +802,7 @@ mod tests {
             scroll_offset: 0,
             max_scroll_offset: 0,
             mouse_tracking: false,
+            alt_screen: false,
         }
     }
 

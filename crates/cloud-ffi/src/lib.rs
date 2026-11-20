@@ -182,6 +182,13 @@ pub struct TermState {
     pub scroll_offset: u32,
     pub max_scroll_offset: u32,
     pub mouse_tracking: bool,
+    pub alt_screen: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct FfiColRange {
+    pub start: u32,
+    pub end: u32,
 }
 
 impl From<ClientTermState> for TermState {
@@ -200,6 +207,7 @@ impl From<ClientTermState> for TermState {
             scroll_offset: s.scroll_offset,
             max_scroll_offset: s.max_scroll_offset,
             mouse_tracking: s.mouse_tracking,
+            alt_screen: s.alt_screen,
         }
     }
 }
@@ -404,6 +412,29 @@ impl TermEngine {
             .lock()
             .unwrap()
             .encode_pointer(col, row, button, pressed, moving)
+    }
+
+    pub fn encode_wheel(&self, col: i32, row: i32, delta_lines: i32) -> Option<Vec<u8>> {
+        self.inner
+            .lock()
+            .unwrap()
+            .encode_wheel(col, row, delta_lines)
+    }
+
+    pub fn word_bounds_at(&self, col: u32, row: u32) -> Option<FfiColRange> {
+        self.inner
+            .lock()
+            .unwrap()
+            .word_bounds_at(col as usize, row as usize)
+            .map(|(start, end)| FfiColRange { start, end })
+    }
+
+    pub fn line_bounds_at(&self, row: u32) -> Option<FfiColRange> {
+        self.inner
+            .lock()
+            .unwrap()
+            .line_bounds_at(row as usize)
+            .map(|(start, end)| FfiColRange { start, end })
     }
 }
 
@@ -676,5 +707,28 @@ fn main() {}
             }
             other => panic!("expected Table, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn term_engine_exports_alt_screen_wheel_and_selection_bounds() {
+        let engine = TermEngine::new(24, 5, 100);
+        assert!(!engine.state().alt_screen);
+        let st = engine.write("hi src/app.rs\x1b[?1000;1006h".as_bytes().to_vec());
+        assert!(st.mouse_tracking);
+        assert_eq!(
+            engine.encode_wheel(1, 2, 1),
+            Some(b"\x1b[<64;2;3M".to_vec())
+        );
+        assert_eq!(
+            engine.word_bounds_at(5, 0),
+            Some(FfiColRange { start: 3, end: 12 })
+        );
+        assert_eq!(
+            engine.line_bounds_at(0),
+            Some(FfiColRange { start: 0, end: 12 })
+        );
+        let st_alt = engine.write(b"\x1b[?1000l\x1b[?1049h".to_vec());
+        assert!(st_alt.alt_screen);
+        assert_eq!(engine.encode_wheel(0, 0, -2), Some(b"\x1b[B\x1b[B".to_vec()));
     }
 }

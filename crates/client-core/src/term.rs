@@ -88,6 +88,7 @@ pub struct ClientTermState {
     pub scroll_offset: u32,
     pub max_scroll_offset: u32,
     pub mouse_tracking: bool,
+    pub alt_screen: bool,
 }
 
 pub fn kitty_flags_from_mode(mode: TermMode) -> u8 {
@@ -424,6 +425,7 @@ impl ClientTerm {
             scroll_offset: self.viewport_offset() as u32,
             max_scroll_offset: self.max_scroll_offset() as u32,
             mouse_tracking: mode.intersects(TermMode::MOUSE_MODE),
+            alt_screen: mode.contains(TermMode::ALT_SCREEN),
         }
     }
 
@@ -667,6 +669,151 @@ impl ClientTerm {
         }
     }
 
+    /// 把滚轮/触屏滑动行数编码为终端输入字节。
+    ///
+    /// - `delta_lines > 0` 表示向上翻（更早内容，滚轮上 64 / 方向键上）；
+    /// - `delta_lines < 0` 表示向下翻（更新内容，滚轮下 65 / 方向键下）。
+    /// - 返回 `None` 时调用方应走本地 `scroll_by(delta_lines)`。
+    pub fn encode_wheel(&self, col: i32, row: i32, delta_lines: i32) -> Option<Vec<u8>> {
+        if delta_lines == 0 {
+            return None;
+        }
+        let mode = *self.term.mode();
+        let count = delta_lines.unsigned_abs().min(10) as usize;
+        let scroll_up = delta_lines > 0;
+
+        if mode.intersects(TermMode::MOUSE_MODE) && self.viewport_offset() == 0 {
+            let max_col = self.cols.saturating_sub(1) as i32;
+            let max_row = self.rows.saturating_sub(1) as i32;
+            let x = col.clamp(0, max_col) + 1;
+            let y = row.clamp(0, max_row) + 1;
+            let btn = if scroll_up { 64 } else { 65 };
+            if mode.contains(TermMode::SGR_MOUSE) {
+                let single = format!("\x1b[<{btn};{x};{y}M");
+                let mut out = Vec::with_capacity(single.len() * count);
+                for _ in 0..count {
+                    out.extend_from_slice(single.as_bytes());
+                }
+                return Some(out);
+            }
+            if x > 223 || y > 223 {
+                return Some(Vec::new());
+            }
+            let single = [
+                0x1b,
+                b'[',
+                b'M',
+                (btn + 32) as u8,
+                (x + 32) as u8,
+                (y + 32) as u8,
+            ];
+            let mut out = Vec::with_capacity(single.len() * count);
+            for _ in 0..count {
+                out.extend_from_slice(&single);
+            }
+            return Some(out);
+        }
+
+        if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
+            let seq: &[u8] = match (scroll_up, mode.contains(TermMode::APP_CURSOR)) {
+                (true, true) => b"\x1bOA",
+                (true, false) => b"\x1b[A",
+                (false, true) => b"\x1bOB",
+                (false, false) => b"\x1b[B",
+            };
+            let mut out = Vec::with_capacity(seq.len() * count);
+            for _ in 0..count {
+                out.extend_from_slice(seq);
+            }
+            return Some(out);
+        }
+
+        None
+    }
+
+    /// 查找视口坐标 `(col, row)` 处词语/token 的闭区间列范围 `(start_col, end_col)`。
+    /// 空白格返回 `None`；宽字符会自动对齐到首格并在右端覆盖其 spacer 列。
+    pub fn word_bounds_at(&self, col: usize, row: usize) -> Option<(u32, u32)> {
+        let cols = self.cols as usize;
+        let rows = self.rows as usize;
+        if col >= cols || row >= rows {
+            return None;
+        }
+        let grid = self.term.grid();
+        let line = &grid[Line(row as i32 - self.viewport_offset() as i32)];
+        let lead = leading_cell_col(line, col, cols)?;
+        let kind = classify_word_char(line[Column(lead)].c);
+        if kind == WordCharKind::Blank {
+            return None;
+        }
+        if kind == WordCharKind::Delimiter {
+            let end = cell_end_col(line, lead, cols);
+            return Some((lead as u32, end as u32));
+        }
+
+        let mut start = lead;
+        while start > 0 {
+            let prev = leading_cell_col(line, start - 1, cols)?;
+            if classify_word_char(line[Column(prev)].c) != WordCharKind::Word {
+                break;
+            }
+            start = prev;
+        }
+
+        let mut end = cell_end_col(line, lead, cols);
+        while end + 1 < cols {
+            let next = end + 1;
+            let cell = &line[Column(next)];
+            if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
+                || cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
+            {
+                end = next;
+                continue;
+            }
+            if classify_word_char(cell.c) != WordCharKind::Word {
+                break;
+            }
+            end = cell_end_col(line, next, cols);
+        }
+
+        Some((start as u32, end as u32))
+    }
+
+    /// 返回视口行 `row` 上非空白内容的闭区间列范围 `(start_col, end_col)`；全空行返回 `None`。
+    pub fn line_bounds_at(&self, row: usize) -> Option<(u32, u32)> {
+        let cols = self.cols as usize;
+        let rows = self.rows as usize;
+        if row >= rows || cols == 0 {
+            return None;
+        }
+        let grid = self.term.grid();
+        let line = &grid[Line(row as i32 - self.viewport_offset() as i32)];
+        let mut first: Option<usize> = None;
+        let mut last: Option<usize> = None;
+        let mut x = 0;
+        while x < cols {
+            let cell = &line[Column(x)];
+            if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
+                || cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
+            {
+                x += 1;
+                continue;
+            }
+            let end = cell_end_col(line, x, cols);
+            if classify_word_char(cell.c) != WordCharKind::Blank {
+                if first.is_none() {
+                    first = Some(x);
+                }
+                last = Some(end);
+            }
+            x = end + 1;
+        }
+        match (first, last) {
+            (Some(s), Some(e)) => Some((s as u32, e as u32)),
+            _ => None,
+        }
+    }
+
     fn is_alt_screen(&self) -> bool {
         self.term.mode().contains(TermMode::ALT_SCREEN)
     }
@@ -768,6 +915,92 @@ fn convert_cell(cell: &TermCell, colors: &alacritty_terminal::term::color::Color
         width,
         fg_index,
         bg_index,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WordCharKind {
+    Blank,
+    Delimiter,
+    Word,
+}
+
+fn classify_word_char(c: char) -> WordCharKind {
+    if c == '\0' || c.is_whitespace() {
+        return WordCharKind::Blank;
+    }
+    if matches!(
+        c,
+        '(' | ')'
+            | '['
+            | ']'
+            | '{'
+            | '}'
+            | '<'
+            | '>'
+            | '"'
+            | '\''
+            | '`'
+            | ','
+            | ';'
+            | '!'
+            | '|'
+            | '│'
+            | '\u{2500}'..='\u{257F}'
+            | '，'
+            | '。'
+            | '、'
+            | '；'
+            | '：'
+            | '！'
+            | '？'
+            | '「'
+            | '」'
+            | '『'
+            | '』'
+            | '（'
+            | '）'
+            | '【'
+            | '】'
+            | '《'
+            | '》'
+            | '“'
+            | '”'
+            | '‘'
+            | '’'
+    ) {
+        return WordCharKind::Delimiter;
+    }
+    WordCharKind::Word
+}
+
+fn leading_cell_col(
+    line: &alacritty_terminal::grid::Row<TermCell>,
+    col: usize,
+    cols: usize,
+) -> Option<usize> {
+    if col >= cols {
+        return None;
+    }
+    let cell = &line[Column(col)];
+    if (cell.flags.contains(Flags::WIDE_CHAR_SPACER)
+        || cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER))
+        && col > 0
+    {
+        return Some(col - 1);
+    }
+    Some(col)
+}
+
+fn cell_end_col(
+    line: &alacritty_terminal::grid::Row<TermCell>,
+    col: usize,
+    cols: usize,
+) -> usize {
+    if col + 1 < cols && line[Column(col)].flags.contains(Flags::WIDE_CHAR) {
+        col + 1
+    } else {
+        col
     }
 }
 
@@ -1051,5 +1284,89 @@ mod tests {
         );
         assert_ne!(t.cell(2, 0).attrs & attr::HYPERLINK, 0);
         assert_eq!(t.hyperlink_at(3, 0), None);
+    }
+
+    #[test]
+    fn tracks_alt_screen_in_state() {
+        let mut t = ClientTerm::new(20, 5, 100);
+        assert!(!t.state().alt_screen);
+        assert!(t.write(b"\x1b[?1049h").alt_screen);
+        assert!(!t.write(b"\x1b[?1049l").alt_screen);
+    }
+
+    #[test]
+    fn encode_wheel_handles_mouse_sgr_x10_and_alternate_scroll() {
+        let mut t = ClientTerm::new(20, 5, 100);
+        assert_eq!(t.encode_wheel(2, 1, 1), None);
+        assert_eq!(t.encode_wheel(2, 1, 0), None);
+
+        // SGR mouse tracking: wheel up (64) and wheel down (65), clamped to max 10 repeats
+        t.write(b"\x1b[?1000;1006h");
+        assert_eq!(
+            t.encode_wheel(2, 1, 2),
+            Some(b"\x1b[<64;3;2M\x1b[<64;3;2M".to_vec())
+        );
+        assert_eq!(
+            t.encode_wheel(0, 0, -1),
+            Some(b"\x1b[<65;1;1M".to_vec())
+        );
+        let capped = t.encode_wheel(0, 0, 25).unwrap();
+        assert_eq!(capped, b"\x1b[<64;1;1M".repeat(10));
+
+        // Legacy X10 mouse wheel (no SGR)
+        t.write(b"\x1b[?1006l");
+        assert_eq!(
+            t.encode_wheel(0, 0, 1),
+            Some(vec![0x1b, b'[', b'M', 64 + 32, 33, 33])
+        );
+        assert_eq!(
+            t.encode_wheel(0, 0, -1),
+            Some(vec![0x1b, b'[', b'M', 65 + 32, 33, 33])
+        );
+
+        // Normal screen scrolled into history defers to local scrollback first
+        t.write(b"\x1b[?1000l");
+        t.write(b"1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7");
+        t.scroll_by(2);
+        t.write(b"\x1b[?1000;1006h");
+        assert_eq!(t.encode_wheel(0, 0, -1), None);
+        t.scroll_to_bottom();
+        assert_eq!(t.encode_wheel(0, 0, -1), Some(b"\x1b[<65;1;1M".to_vec()));
+
+        // Alt screen without mouse tracking: ALTERNATE_SCROLL sends arrows
+        t.write(b"\x1b[?1000l\x1b[?1049h");
+        assert_eq!(t.encode_wheel(0, 0, 2), Some(b"\x1b[A\x1b[A".to_vec()));
+        assert_eq!(t.encode_wheel(0, 0, -1), Some(b"\x1b[B".to_vec()));
+        // With APP_CURSOR (?1h), sends SS3 arrows
+        t.write(b"\x1b[?1h");
+        assert_eq!(t.encode_wheel(0, 0, 1), Some(b"\x1bOA".to_vec()));
+        assert_eq!(t.encode_wheel(0, 0, -1), Some(b"\x1bOB".to_vec()));
+        // Disabling ALTERNATE_SCROLL (?1007l) returns None
+        t.write(b"\x1b[?1007l");
+        assert_eq!(t.encode_wheel(0, 0, 1), None);
+    }
+
+    #[test]
+    fn word_and_line_bounds_handle_ascii_delimiters_wide_chars_and_scroll() {
+        let mut t = ClientTerm::new(24, 3, 100);
+        t.write("  (src/main.rs) 你好!\r\n\r\nline3\r\nline4".as_bytes());
+        // Viewport currently shows row 0 = "", row 1 = "line3", row 2 = "line4"
+        assert_eq!(t.word_bounds_at(0, 0), None);
+        assert_eq!(t.line_bounds_at(0), None);
+        assert_eq!(t.word_bounds_at(2, 1), Some((0, 4)));
+        assert_eq!(t.line_bounds_at(1), Some((0, 4)));
+
+        // Scroll up 1 line to reveal "  (src/main.rs) 你好!" at row 0
+        t.scroll_by(1);
+        assert_eq!(t.word_bounds_at(0, 0), None); // leading space
+        assert_eq!(t.word_bounds_at(2, 0), Some((2, 2))); // '(' delimiter
+        assert_eq!(t.word_bounds_at(6, 0), Some((3, 13))); // "src/main.rs"
+        // '你' occupies cols 16..=17, '好' occupies cols 18..=19, '!' at 20
+        assert_eq!(t.word_bounds_at(16, 0), Some((16, 19)));
+        assert_eq!(t.word_bounds_at(17, 0), Some((16, 19))); // spacer of '你'
+        assert_eq!(t.word_bounds_at(19, 0), Some((16, 19))); // spacer of '好'
+        assert_eq!(t.line_bounds_at(0), Some((2, 20)));
+        assert_eq!(t.word_bounds_at(99, 0), None);
+        assert_eq!(t.line_bounds_at(99), None);
     }
 }

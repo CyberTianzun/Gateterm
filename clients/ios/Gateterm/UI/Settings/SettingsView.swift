@@ -68,6 +68,18 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Picker(L.t("settings_touch_mode"), selection: Binding(get: { model.touchMode }, set: { model.setTouchMode($0) })) {
+                        Text(L.t("settings_touch_mode_touch")).tag(TerminalTouchMode.touch)
+                        Text(L.t("settings_touch_mode_mouse")).tag(TerminalTouchMode.mouse)
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text(L.t("settings_touch_mode"))
+                } footer: {
+                    Text(L.t(model.touchMode == .touch ? "settings_touch_mode_touch_hint" : "settings_touch_mode_mouse_hint"))
+                }
+
+                Section {
                     Picker(L.t("settings_keyboard_rows"), selection: Binding(get: { model.extraKeyRows }, set: { model.setExtraKeyRows($0) })) {
                         Text(L.t("settings_keyboard_one_row")).tag(1)
                         Text(L.t("settings_keyboard_two_rows")).tag(2)

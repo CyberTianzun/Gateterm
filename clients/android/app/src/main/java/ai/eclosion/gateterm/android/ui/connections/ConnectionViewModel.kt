@@ -41,6 +41,7 @@ import ai.eclosion.gateterm.android.term.TermFrame
 import ai.eclosion.gateterm.android.term.AgentKeyLayout
 import ai.eclosion.gateterm.android.term.TermPaintGate
 import ai.eclosion.gateterm.android.term.TermSelection
+import ai.eclosion.gateterm.android.term.TerminalTouchMode
 import ai.eclosion.gateterm.android.wire.AttachMode
 import ai.eclosion.gateterm.android.wire.ClientMsg
 import ai.eclosion.gateterm.android.wire.ServerMsg
@@ -163,6 +164,7 @@ data class ConnectionUiState(
     val appearanceFollowsSystem: Boolean = true,
     val extraKeyRows: Int = 2,
     val agentKeyLayouts: Map<String, AgentKeyLayout> = emptyMap(),
+    val touchMode: TerminalTouchMode = TerminalTouchMode.Default,
     val selection: TermSelection? = null,
     val scrollOffset: Int = 0,
     val mouseTracking: Boolean = false,
@@ -216,6 +218,7 @@ interface ConnectionActions {
     fun sendInput(sessionId: Long, bytes: ByteArray)
     fun sendMouse(col: Int, row: Int, pressed: Boolean, moving: Boolean)
     fun scrollBy(delta: Int)
+    fun scrollAt(col: Int, row: Int, deltaLines: Int)
     fun jumpToBottom()
     fun setSelection(selection: TermSelection?)
     fun copySelection()
@@ -225,6 +228,7 @@ interface ConnectionActions {
     fun setLetterSpacing(value: Double)
     fun setExtraKeyRows(rows: Int)
     fun setAgentKeyLayout(agentId: String, layout: AgentKeyLayout)
+    fun setTouchMode(mode: TerminalTouchMode)
     fun setFont(kind: TermFontKind)
     fun setScrollback(lines: Int)
     fun onSystemThemeChanged(prefersDark: Boolean)
@@ -314,6 +318,7 @@ class ConnectionController(
             appearanceFollowsSystem = appearanceStore.followsSystem(),
             extraKeyRows = appearanceStore.extraKeyRows(),
             agentKeyLayouts = appearanceStore.agentKeyLayouts(),
+            touchMode = appearanceStore.touchMode(),
             keepConnectionsInBackground = connectionPreferences.keepInBackground,
         ),
     )
@@ -910,6 +915,30 @@ class ConnectionController(
         publishTerm(allowEmpty = true)
     }
 
+    override fun scrollAt(col: Int, row: Int, deltaLines: Int) {
+        if (deltaLines == 0) return
+        val open = opens[activeId] ?: return
+        if (open.term.scrollOffset > 0) {
+            open.term.scrollBy(deltaLines)
+            _state.update { it.copy(selection = null) }
+            publishTerm(allowEmpty = true)
+            return
+        }
+        val wheel = open.term.encodeWheel(col, row, deltaLines)
+        if (wheel != null) {
+            if (wheel.isNotEmpty() && !_state.value.reconnecting) {
+                client?.sendInput(open.channel, wheel)
+            }
+            if (_state.value.selection != null) {
+                _state.update { it.copy(selection = null) }
+            }
+            return
+        }
+        open.term.scrollBy(deltaLines)
+        _state.update { it.copy(selection = null) }
+        publishTerm(allowEmpty = true)
+    }
+
     override fun jumpToBottom() {
         val open = opens[activeId] ?: return
         open.term.scrollToBottom()
@@ -927,6 +956,7 @@ class ConnectionController(
         if (text.isEmpty()) return
         val clipboard = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("gateterm", text))
+        _state.update { it.copy(selection = null) }
         _messages.trySend(UserMessage.Copied)
     }
 
@@ -961,6 +991,11 @@ class ConnectionController(
         if (layout == AgentKeyLayout()) next.remove(agentId) else next[agentId] = layout
         appearanceStore.saveAgentKeyLayouts(next)
         _state.update { it.copy(agentKeyLayouts = next) }
+    }
+
+    override fun setTouchMode(mode: TerminalTouchMode) {
+        appearanceStore.saveTouchMode(mode)
+        _state.update { it.copy(touchMode = mode) }
     }
 
     override fun setFont(kind: TermFontKind) = updateAppearance(_state.value.appearance.withFont(kind))

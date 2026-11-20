@@ -47,6 +47,9 @@ class AlacrittyTerm(
     var mouseTracking: Boolean = false
         private set
 
+    var altScreen: Boolean = false
+        private set
+
     @Volatile
     var generation: Long = 0L
         private set
@@ -75,6 +78,7 @@ class AlacrittyTerm(
         kittyClipboardPasteMode = st.kittyClipboardPasteMode
         scrollOffset = st.scrollOffset.toInt()
         mouseTracking = st.mouseTracking
+        altScreen = st.altScreen
     }
 
     fun snapshot(): Array<Array<Cell>> = synchronized(lock) {
@@ -149,6 +153,23 @@ class AlacrittyTerm(
     fun encodePointer(col: Int, row: Int, button: Int, pressed: Boolean, moving: Boolean): ByteArray? =
         synchronized(lock) {
             if (!mouseTracking) null else engine.encodePointer(col, row, button, pressed, moving)
+        }
+
+    fun encodeWheel(col: Int, row: Int, deltaLines: Int): ByteArray? =
+        synchronized(lock) {
+            engine.encodeWheel(col, row, deltaLines)
+        }
+
+    fun wordBoundsAt(col: Int, row: Int): Pair<Int, Int>? =
+        synchronized(lock) {
+            if (col !in 0 until cols || row !in 0 until rows) null
+            else engine.wordBoundsAt(col.toUInt(), row.toUInt())?.let { it.start.toInt() to it.end.toInt() }
+        }
+
+    fun lineBoundsAt(row: Int): Pair<Int, Int>? =
+        synchronized(lock) {
+            if (row !in 0 until rows) null
+            else engine.lineBoundsAt(row.toUInt())?.let { it.start.toInt() to it.end.toInt() }
         }
 
     fun pasteRequiresConfirmation(text: String): Boolean = synchronized(lock) {

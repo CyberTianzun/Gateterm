@@ -153,6 +153,21 @@ struct TerminalScreen: View {
             }
             Menu {
                 if let session = model.attachedSession {
+                    Section(L.t("settings_touch_mode")) {
+                        Button { model.setTouchMode(.touch) } label: {
+                            Label(
+                                L.t("settings_touch_mode_touch"),
+                                systemImage: model.touchMode == .touch ? "checkmark" : "hand.point.up.left"
+                            )
+                        }
+                        Button { model.setTouchMode(.mouse) } label: {
+                            Label(
+                                L.t("settings_touch_mode_mouse"),
+                                systemImage: model.touchMode == .mouse ? "checkmark" : "cursorarrow.click"
+                            )
+                        }
+                    }
+                    Divider()
                     Button { model.copySelection() } label: { Label(L.t("term_copy"), systemImage: "doc.on.doc") }
                         .disabled(model.selection == nil)
                     Button { model.pasteClipboard() } label: { Label(L.t("term_paste"), systemImage: "doc.on.clipboard") }

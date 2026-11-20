@@ -219,6 +219,20 @@ class AlacrittyTermTest {
         assertEquals("😀", t.cell(0, 1).glyphText())
         assertEquals("┌──┐\n😀ok", t.copyViewport(0, 0, 19, 1))
     }
+
+    @Test
+    fun altScreenWheelEncodingAndSelectionBoundsWorkThroughFfi() {
+        val t = AlacrittyTerm(24, 4)
+        assertFalse(t.altScreen)
+        assertNull(t.encodeWheel(0, 0, 1))
+        t.write("hi src/app.rs\u001b[?1000;1006h".toByteArray())
+        assertEquals("\u001b[<64;2;3M", t.encodeWheel(1, 2, 1)!!.toString(Charsets.US_ASCII))
+        assertEquals(3 to 12, t.wordBoundsAt(5, 0))
+        assertEquals(0 to 12, t.lineBoundsAt(0))
+        t.write("\u001b[?1000l\u001b[?1049h".toByteArray())
+        assertEquals(true, t.altScreen)
+        assertEquals("\u001b[B\u001b[B", t.encodeWheel(0, 0, -2)!!.toString(Charsets.US_ASCII))
+    }
 }
 
 private fun row(t: AlacrittyTerm, y: Int): String {

@@ -88,7 +88,7 @@
     <string name="session_kill">Kill session</string>
     <string name="session_rename_title">Rename session</string>
     <string name="session_rename_label">Name</string>
-    <string name="term_keys_hint">Tap for the keyboard. Drag to scroll history, long-press to select.</string>
+    <string name="term_keys_hint">Tap for the keyboard. Swipe to scroll, pinch to zoom, long-press to select.</string>
     <string name="term_keys_previous">Scroll shortcut keys left</string>
     <string name="term_keys_next">Scroll shortcut keys right</string>
     <string name="term_key_up">Up arrow</string>
@@ -98,6 +98,9 @@
     <string name="term_keyboard">Keyboard</string>
     <string name="term_copy">Copy</string>
     <string name="term_paste">Paste</string>
+    <string name="term_select_line">Select line</string>
+    <string name="term_open_link">Open link</string>
+    <string name="term_more">More actions</string>
     <string name="term_jump_bottom">Jump to bottom</string>
     <string name="term_tab_close">Close</string>
 
@@ -121,6 +124,11 @@
 
     <string name="appearance_action">Appearance</string>
     <string name="settings_title">Settings</string>
+    <string name="settings_touch_mode">Terminal touch mode</string>
+    <string name="settings_touch_mode_touch">Touch</string>
+    <string name="settings_touch_mode_mouse">Mouse</string>
+    <string name="settings_touch_mode_touch_hint">Swipe with one finger to scroll (including agents and full-screen apps). Tap sends mouse clicks without opening the keyboard when mouse tracking is active; long-press to select text with a Copy/Paste menu.</string>
+    <string name="settings_touch_mode_mouse_hint">Forward one-finger drags as mouse drags when apps enable mouse tracking (e.g. agent drag-to-copy); swipe with two fingers to scroll, long-press to select locally.</string>
     <string name="settings_keyboard_rows">Terminal shortcut bar</string>
     <string name="settings_keyboard_one_row">One row</string>
     <string name="settings_keyboard_two_rows">Two rows</string>

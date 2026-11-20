@@ -42,6 +42,7 @@ final class AppModel {
     private(set) var appearanceFollowsSystem: Bool
     private(set) var extraKeyRows: Int
     private(set) var agentKeyLayouts: [String: AgentKeyLayout]
+    private(set) var touchMode: TerminalTouchMode
     private(set) var toast: (id: UUID, message: UserMessage)?
     var localePref: LocalePref = L.pref {
         didSet { L.pref = localePref; localeRevision &+= 1 }
@@ -88,6 +89,7 @@ final class AppModel {
         appearanceFollowsSystem = appearanceStore.followsSystem
         extraKeyRows = appearanceStore.extraKeyRows
         agentKeyLayouts = appearanceStore.agentKeyLayouts
+        touchMode = appearanceStore.touchMode
     }
 
     func connection(_ id: String) -> ServerConnection? { connections.first { $0.id == id } }
@@ -625,6 +627,26 @@ final class AppModel {
         publishTerm(allowEmpty: true)
     }
 
+    func scrollAt(col: Int, row: Int, lines delta: Int) {
+        guard delta != 0, let open = attachedId.flatMap({ opens[$0] }) else { return }
+        if open.term.scrollOffset > 0 {
+            open.term.scroll(by: delta)
+            selection = nil
+            publishTerm(allowEmpty: true)
+            return
+        }
+        if let wheel = open.term.encodeWheel(col: col, row: row, deltaLines: delta) {
+            if !wheel.isEmpty && !reconnecting {
+                client?.sendInput(channel: open.channel, bytes: wheel)
+            }
+            if selection != nil { selection = nil }
+            return
+        }
+        open.term.scroll(by: delta)
+        selection = nil
+        publishTerm(allowEmpty: true)
+    }
+
     func jumpToBottom() {
         guard let open = attachedId.flatMap({ opens[$0] }) else { return }
         open.term.scrollToBottom()
@@ -636,6 +658,7 @@ final class AppModel {
         let text = open.term.copyViewport(selection)
         guard !text.isEmpty else { return }
         UIPasteboard.general.string = text
+        self.selection = nil
         post(.copied)
     }
 
@@ -922,6 +945,11 @@ final class AppModel {
         if layout == AgentKeyLayout() { next.removeValue(forKey: agentId) } else { next[agentId] = layout }
         appearanceStore.agentKeyLayouts = next
         agentKeyLayouts = next
+    }
+
+    func setTouchMode(_ mode: TerminalTouchMode) {
+        appearanceStore.touchMode = mode
+        touchMode = mode
     }
 
     func systemThemeChanged(prefersDark: Bool) {

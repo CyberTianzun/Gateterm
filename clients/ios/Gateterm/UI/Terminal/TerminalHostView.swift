@@ -21,6 +21,7 @@ final class TerminalHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInt
     }
     var selection: TermSelection? { didSet { if selection != oldValue { setNeedsDisplay() } } }
     var mouseTracking = false
+    var touchMode: TerminalTouchMode = .defaultMode
     var inputEnabled = true
     var applicationCursor = false
     var modifyOtherKeys = 0
@@ -33,7 +34,7 @@ final class TerminalHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInt
 
     var onInput: (Data) -> Void = { _ in }
     var onProposeSize: (Int, Int) -> Void = { _, _ in }
-    var onScroll: (Int) -> Void = { _ in }
+    var onScrollAt: (Int, Int, Int) -> Void = { _, _, _ in }
     var onSelection: (TermSelection?) -> Void = { _ in }
     var onMouse: (Int, Int, Bool, Bool) -> Void = { _, _, _, _ in }
     var onCopy: () -> Void = {}
@@ -50,11 +51,23 @@ final class TerminalHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInt
     private var glyphCache: [UInt32: (CTFont, CGGlyph)] = [:]
     private var lastProposed: (Int, Int) = (0, 0)
     private var scrollAccum: CGFloat = 0
+    private var scrollAnchorCell: (Int, Int) = (0, 0)
+    private var inertiaCell: (Int, Int) = (0, 0)
     private var mouseDownCell: (Int, Int)?
     private var selectionAnchor: (Int, Int)?
+    private var wordSelectionAnchor: TermSelection?
+    private var longPressCell: (Int, Int)?
+    private var draggingHandle: SelectionHandle?
+    private var draggedBlankSelection = false
+    private var lastTouchWasIndirect = false
+    private var twoFingerMode: TwoFingerMode?
+    private var twoFingerPanTotal: CGFloat = 0
+    private var isPinching = false
     private var pinchBase: Double = 14
     private var inertia: CADisplayLink?
     private var inertiaVelocity: CGFloat = 0
+    private var twoFingerPanRecognizer: UIPanGestureRecognizer?
+    private var pinchRecognizer: UIPinchGestureRecognizer?
     private lazy var editMenu = UIEditMenuInteraction(delegate: self)
 
     override init(frame: CGRect) {
@@ -75,9 +88,11 @@ final class TerminalHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInt
         let twoFinger = UIPanGestureRecognizer(target: self, action: #selector(onTwoFingerPan(_:)))
         twoFinger.minimumNumberOfTouches = 2
         twoFinger.allowedScrollTypesMask = .all
+        twoFingerPanRecognizer = twoFinger
         let longPress = UILongPressGestureRecognizer(target: self, action: #selector(onLongPress(_:)))
         longPress.minimumPressDuration = 0.38
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(onPinch(_:)))
+        pinchRecognizer = pinch
         for recognizer in [tap, pan, twoFinger, longPress, pinch] as [UIGestureRecognizer] {
             recognizer.delegate = self
             addGestureRecognizer(recognizer)
@@ -215,30 +230,49 @@ final class TerminalHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInt
 
     // MARK: Gestures
 
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        lastTouchWasIndirect = touches.contains { $0.type == .indirectPointer }
+        super.touchesBegan(touches, with: event)
+    }
+
     private func cell(_ point: CGPoint, clamp: Bool = false) -> (Int, Int)? {
         metrics.cell(at: point, in: bounds.size, cols: frameState.cols, rows: frameState.rows, clamp: clamp).map { ($0.col, $0.row) }
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        (g is UIPinchGestureRecognizer && other is UIPanGestureRecognizer) || (other is UIPinchGestureRecognizer && g is UIPanGestureRecognizer)
+        (g === pinchRecognizer && other === twoFingerPanRecognizer) ||
+            (other === pinchRecognizer && g === twoFingerPanRecognizer)
     }
 
     @objc private func onTap(_ g: UITapGestureRecognizer) {
         stopInertia()
         let point = g.location(in: self)
-        if !topBarVisible && point.y <= Self.topBarRevealZone {
+        let inTopRevealZone = !topBarVisible && point.y <= Self.topBarRevealZone
+        switch TerminalTouchPolicy.tapAction(
+            inTopRevealZone: inTopRevealZone,
+            hasSelection: selection != nil,
+            mouseTracking: mouseTracking
+        ) {
+        case .revealTopBar:
             onRevealTopBar()
-            return
+        case .dismissSelection:
+            editMenu.dismissMenu()
+            longPressCell = nil
+            setSelectionLocal(nil)
+        case .mouseClick:
+            if topBarVisible { onHideTopBar() }
+            editMenu.dismissMenu()
+            longPressCell = nil
+            if let c = cell(point) {
+                onMouse(c.0, c.1, true, false)
+                onMouse(c.0, c.1, false, false)
+            }
+        case .focusOnly:
+            if topBarVisible { onHideTopBar() }
+            editMenu.dismissMenu()
+            longPressCell = nil
+            focus()
         }
-        if topBarVisible {
-            onHideTopBar()
-        }
-        if selection != nil { onSelection(nil) }
-        if mouseTracking, let c = cell(point) {
-            onMouse(c.0, c.1, true, false)
-            onMouse(c.0, c.1, false, false)
-        }
-        focus()
     }
 
     @objc private func onPan(_ g: UIPanGestureRecognizer) {
@@ -248,57 +282,125 @@ final class TerminalHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInt
             stopInertia()
             scrollAccum = 0
             let start = point.applying(.init(translationX: -g.translation(in: self).x, y: -g.translation(in: self).y))
+            if let sel = selection {
+                let o = metrics.origin(in: bounds.size, cols: frameState.cols, rows: frameState.rows)
+                if let handle = TerminalSelectionHandles.hitTestHandle(
+                    point: start,
+                    selection: sel,
+                    origin: o,
+                    cellWidth: metrics.cellWidth,
+                    cellHeight: metrics.cellHeight
+                ) {
+                    draggingHandle = handle
+                    editMenu.dismissMenu()
+                    return
+                }
+            }
+            editMenu.dismissMenu()
+            longPressCell = nil
             let inTopRevealZone = !topBarVisible && start.y <= Self.topBarRevealZone
             if topBarVisible {
                 onHideTopBar()
             }
-            if mouseTracking, !inTopRevealZone, let c = cell(start) {
+            scrollAnchorCell = cell(start, clamp: true) ?? (0, 0)
+            let dragAction = TerminalTouchPolicy.singleFingerDragAction(
+                mode: touchMode,
+                mouseTracking: mouseTracking,
+                isIndirectPointer: lastTouchWasIndirect
+            )
+            if dragAction == .mouseDrag, !inTopRevealZone, let c = cell(start) {
                 mouseDownCell = c
                 onMouse(c.0, c.1, true, false)
+            } else if selection != nil {
+                setSelectionLocal(nil)
             }
         case .changed:
-            if mouseDownCell != nil {
+            if let activeHandle = draggingHandle, let sel = selection {
+                let adjusted = CGPoint(x: point.x, y: point.y - metrics.cellHeight * 0.8)
+                if let c = cell(adjusted, clamp: true) {
+                    let updated = TerminalSelectionHandles.updateHandle(
+                        selection: sel,
+                        handle: activeHandle,
+                        col: c.0,
+                        row: c.1
+                    )
+                    draggingHandle = updated.handle
+                    setSelectionLocal(updated.selection)
+                }
+            } else if mouseDownCell != nil {
                 if let c = cell(point, clamp: true) { onMouse(c.0, c.1, true, true) }
             } else {
-                scrollLines(g.translation(in: self).y)
+                scrollLines(g.translation(in: self).y, at: scrollAnchorCell)
                 g.setTranslation(.zero, in: self)
             }
         default:
-            if let down = mouseDownCell {
+            if draggingHandle != nil {
+                draggingHandle = nil
+                if g.state == .ended, let sel = selection {
+                    presentEditMenu(for: sel)
+                }
+            } else if let down = mouseDownCell {
                 let c = cell(point, clamp: true) ?? down
                 onMouse(c.0, c.1, false, false)
                 mouseDownCell = nil
             } else if g.state == .ended {
-                startInertia(g.velocity(in: self).y)
+                startInertia(g.velocity(in: self).y, at: scrollAnchorCell)
             }
         }
     }
 
     @objc private func onTwoFingerPan(_ g: UIPanGestureRecognizer) {
         switch g.state {
-        case .began: stopInertia(); scrollAccum = 0
+        case .began:
+            stopInertia()
+            editMenu.dismissMenu()
+            scrollAccum = 0
+            twoFingerPanTotal = 0
+            twoFingerMode = nil
+            scrollAnchorCell = cell(g.location(in: self), clamp: true) ?? (0, 0)
         case .changed:
-            scrollLines(g.translation(in: self).y)
+            if isPinching {
+                g.setTranslation(.zero, in: self)
+                return
+            }
+            let dy = g.translation(in: self).y
+            twoFingerPanTotal += dy
+            if twoFingerMode == nil {
+                twoFingerMode = TerminalTouchPolicy.decideTwoFingerGesture(
+                    scaleDelta: 1,
+                    panDistance: abs(twoFingerPanTotal),
+                    touchSlop: 8
+                )
+            }
+            if twoFingerMode == .scroll {
+                scrollLines(dy, at: scrollAnchorCell)
+            }
             g.setTranslation(.zero, in: self)
-        case .ended: startInertia(g.velocity(in: self).y)
-        default: break
+        case .ended:
+            if !isPinching && twoFingerMode == .scroll {
+                startInertia(g.velocity(in: self).y, at: scrollAnchorCell)
+            }
+            twoFingerMode = nil
+        default:
+            twoFingerMode = nil
         }
     }
 
     /// Finger moving down (positive dy) reveals older lines, like Android/web.
-    private func scrollLines(_ dy: CGFloat) {
+    private func scrollLines(_ dy: CGFloat, at cell: (Int, Int)) {
         guard metrics.cellHeight > 0 else { return }
         scrollAccum += dy
         let lines = Int(scrollAccum / metrics.cellHeight)
         if lines != 0 {
             scrollAccum -= CGFloat(lines) * metrics.cellHeight
-            onScroll(lines)
+            onScrollAt(cell.0, cell.1, lines)
         }
     }
 
-    private func startInertia(_ velocity: CGFloat) {
+    private func startInertia(_ velocity: CGFloat, at cell: (Int, Int)) {
         guard abs(velocity) > 200 else { return }
         inertiaVelocity = velocity
+        inertiaCell = cell
         let link = CADisplayLink(target: self, selector: #selector(stepInertia(_:)))
         link.add(to: .main, forMode: .common)
         inertia = link
@@ -306,7 +408,7 @@ final class TerminalHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInt
 
     @objc private func stepInertia(_ link: CADisplayLink) {
         let dt = CGFloat(link.targetTimestamp - link.timestamp)
-        scrollLines(inertiaVelocity * dt)
+        scrollLines(inertiaVelocity * dt, at: inertiaCell)
         inertiaVelocity *= pow(0.94, dt * 60)
         if abs(inertiaVelocity) < 40 { stopInertia() }
     }
@@ -321,29 +423,73 @@ final class TerminalHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInt
         switch g.state {
         case .began:
             stopInertia()
+            editMenu.dismissMenu()
             guard let c = cell(point, clamp: true) else { return }
+            longPressCell = c
             selectionAnchor = c
-            onSelection(TermSelection(x0: c.0, y0: c.1, x1: c.0, y1: c.1))
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            draggedBlankSelection = false
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            if let wordBounds = term?.wordBoundsAt(col: c.0, row: c.1) {
+                let word = TermSelection(x0: wordBounds.start, y0: c.1, x1: wordBounds.end, y1: c.1)
+                wordSelectionAnchor = word
+                setSelectionLocal(word)
+            } else {
+                wordSelectionAnchor = nil
+                setSelectionLocal(nil)
+            }
         case .changed:
-            guard let a = selectionAnchor, let c = cell(point, clamp: true) else { return }
-            onSelection(TermSelection(x0: a.0, y0: a.1, x1: c.0, y1: c.1))
+            guard let c = cell(point, clamp: true) else { return }
+            if let word = wordSelectionAnchor {
+                setSelectionLocal(TerminalSelectionHandles.extendWordSelection(wordAnchor: word, col: c.0, row: c.1))
+            } else if let a = selectionAnchor, (c.0 != a.0 || c.1 != a.1 || draggedBlankSelection) {
+                draggedBlankSelection = true
+                setSelectionLocal(TermSelection(x0: a.0, y0: a.1, x1: c.0, y1: c.1))
+            }
         case .ended:
             selectionAnchor = nil
-            editMenu.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+            wordSelectionAnchor = nil
+            if let sel = selection {
+                presentEditMenu(for: sel)
+            } else {
+                editMenu.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+            }
         default:
             selectionAnchor = nil
+            wordSelectionAnchor = nil
         }
     }
 
     @objc private func onPinch(_ g: UIPinchGestureRecognizer) {
         switch g.state {
-        case .began: pinchBase = appearance.fontSize
+        case .began:
+            pinchBase = appearance.fontSize
+            isPinching = false
         case .changed:
-            let next = min(48, max(6, (pinchBase * Double(g.scale)).rounded()))
-            if next != appearance.fontSize { onFontSize(next) }
-        default: break
+            if !isPinching && abs(g.scale - 1) >= TerminalTouchPolicy.pinchScaleThreshold {
+                isPinching = true
+                stopInertia()
+            }
+            if isPinching {
+                let next = TerminalTouchPolicy.clampFontSize(baseSize: pinchBase, scale: Double(g.scale))
+                if next != appearance.fontSize { onFontSize(next) }
+            }
+        default:
+            isPinching = false
         }
+    }
+
+    private func setSelectionLocal(_ next: TermSelection?) {
+        selection = next
+        onSelection(next)
+    }
+
+    private func presentEditMenu(for sel: TermSelection) {
+        let s = sel.normalized
+        let o = metrics.origin(in: bounds.size, cols: frameState.cols, rows: frameState.rows)
+        let firstRowRight = s.y0 == s.y1 ? o.x + CGFloat(s.x1 + 1) * metrics.cellWidth : bounds.width - o.x
+        let x = (o.x + CGFloat(s.x0) * metrics.cellWidth + firstRowRight) * 0.5
+        let y = o.y + CGFloat(s.y0) * metrics.cellHeight
+        editMenu.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: CGPoint(x: x, y: y)))
     }
 
     func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration,
@@ -352,12 +498,32 @@ final class TerminalHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInt
         if selection != nil {
             actions.append(UIAction(title: L.t("ios_selection_copy"), image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
                 self?.onCopy()
-                self?.onSelection(nil)
+                self?.longPressCell = nil
             })
         }
         if UIPasteboard.general.hasStrings && inputEnabled {
             actions.append(UIAction(title: L.t("ios_selection_paste"), image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in
+                self?.setSelectionLocal(nil)
+                self?.longPressCell = nil
                 self?.onPaste()
+            })
+        }
+        if let row = selection?.normalized.y0 ?? longPressCell?.1,
+           let lineBounds = term?.lineBoundsAt(row: row) {
+            let fullLine = TermSelection(x0: lineBounds.start, y0: row, x1: lineBounds.end, y1: row)
+            if selection?.normalized != fullLine {
+                actions.append(UIAction(title: L.t("term_select_line"), image: UIImage(systemName: "text.line.first.and.arrowtriangle.forward")) { [weak self] _ in
+                    self?.setSelectionLocal(fullLine)
+                    DispatchQueue.main.async { self?.presentEditMenu(for: fullLine) }
+                })
+            }
+        }
+        if let linkCell = longPressCell ?? selection.map({ ($0.normalized.x0, $0.normalized.y0) }),
+           let term, term.hyperlinkAt(col: linkCell.0, row: linkCell.1) != nil {
+            actions.append(UIAction(title: L.t("term_open_link"), image: UIImage(systemName: "link")) { [weak self] _ in
+                _ = Self.openHyperlinkAt(term: term, col: linkCell.0, row: linkCell.1)
+                self?.setSelectionLocal(nil)
+                self?.longPressCell = nil
             })
         }
         return actions.isEmpty ? nil : UIMenu(children: actions)
@@ -521,6 +687,31 @@ final class TerminalHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInt
                 ctx.setStrokeColor(color.cgColor)
                 ctx.setLineWidth(1)
                 ctx.stroke(r.insetBy(dx: 0.5, dy: 0.5))
+            }
+        }
+
+        // 4. Draggable selection handles.
+        if let sel {
+            let s = sel.normalized
+            let (startCenter, endCenter) = TerminalSelectionHandles.handlePositions(
+                selection: s, origin: o, cellWidth: m.cellWidth, cellHeight: m.cellHeight
+            )
+            let handleColor = UIColor(rgb: a.cursor).cgColor
+            let strokeColor = UIColor(rgb: defaultBG).cgColor
+            let barW: CGFloat = 2
+            let radius = TerminalSelectionHandles.knobRadius
+            let startTop = o.y + CGFloat(s.y0) * m.cellHeight
+            let endTop = o.y + CGFloat(s.y1) * m.cellHeight
+            ctx.setFillColor(handleColor)
+            ctx.fill(CGRect(x: startCenter.x - barW * 0.5, y: startTop, width: barW, height: startCenter.y - startTop))
+            ctx.fill(CGRect(x: endCenter.x - barW * 0.5, y: endTop, width: barW, height: endCenter.y - endTop))
+            for center in [startCenter, endCenter] {
+                let dot = CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
+                ctx.setFillColor(handleColor)
+                ctx.fillEllipse(in: dot)
+                ctx.setStrokeColor(strokeColor)
+                ctx.setLineWidth(1.5)
+                ctx.strokeEllipse(in: dot)
             }
         }
     }

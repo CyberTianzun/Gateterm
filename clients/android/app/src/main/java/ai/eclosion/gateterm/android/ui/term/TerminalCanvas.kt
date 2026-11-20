@@ -21,7 +21,11 @@ import ai.eclosion.gateterm.android.term.TermGeometry
 import ai.eclosion.gateterm.android.term.TermSelection
 import ai.eclosion.gateterm.android.term.TerminalFontMetrics
 import ai.eclosion.gateterm.android.term.TerminalBlockGlyphs
+import ai.eclosion.gateterm.android.term.TerminalSelectionHandles
 import ai.eclosion.gateterm.android.term.TerminalView
+
+internal const val SELECTION_HANDLE_DROP_DP = 10f
+internal const val SELECTION_HANDLE_RADIUS_DP = 7f
 
 class TermPaint(
     val text: android.graphics.Paint,
@@ -221,6 +225,52 @@ fun TerminalCanvas(
                 val left = ox + shown.cursorX * cellW
                 val top = oy + shown.cursorY * cellH
                 native.drawRect(left, top, left + cellW, top + cellH, bgPaint)
+            }
+            if (sel != null) {
+                val handleColor = appearance.cursor or 0xFF000000.toInt()
+                val strokeColor = defaultBg
+                val dropPx = SELECTION_HANDLE_DROP_DP * density
+                val radiusPx = SELECTION_HANDLE_RADIUS_DP * density
+                val barW = (2f * density).coerceAtLeast(2f)
+                val (startCenter, endCenter) = TerminalSelectionHandles.handlePositions(
+                    sel, ox, oy, cellW, cellH, dropPx,
+                )
+                val startTop = oy + sel.y0 * cellH
+                val endTop = oy + sel.y1 * cellH
+                val prevStyle = bgPaint.style
+                val prevStroke = bgPaint.strokeWidth
+                val prevAA = bgPaint.isAntiAlias
+                bgPaint.isAntiAlias = true
+                // Vertical endpoint stems
+                bgPaint.style = android.graphics.Paint.Style.FILL
+                bgPaint.color = handleColor
+                native.drawRect(
+                    startCenter.first - barW * 0.5f,
+                    startTop,
+                    startCenter.first + barW * 0.5f,
+                    startCenter.second,
+                    bgPaint,
+                )
+                native.drawRect(
+                    endCenter.first - barW * 0.5f,
+                    endTop,
+                    endCenter.first + barW * 0.5f,
+                    endCenter.second,
+                    bgPaint,
+                )
+                // Grabber knobs with subtle outline for contrast on any theme
+                for (center in listOf(startCenter, endCenter)) {
+                    bgPaint.style = android.graphics.Paint.Style.FILL
+                    bgPaint.color = handleColor
+                    native.drawCircle(center.first, center.second, radiusPx, bgPaint)
+                    bgPaint.style = android.graphics.Paint.Style.STROKE
+                    bgPaint.strokeWidth = (1.5f * density).coerceAtLeast(1.5f)
+                    bgPaint.color = strokeColor
+                    native.drawCircle(center.first, center.second, radiusPx, bgPaint)
+                }
+                bgPaint.style = prevStyle
+                bgPaint.strokeWidth = prevStroke
+                bgPaint.isAntiAlias = prevAA
             }
         }
     }

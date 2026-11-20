@@ -33,6 +33,7 @@ struct TerminalSurface: UIViewRepresentable {
         view.frameState = model.painted
         view.selection = model.selection
         view.mouseTracking = model.mouseTracking
+        view.touchMode = model.touchMode
         view.inputEnabled = !model.reconnecting
         view.keyboard = keyboard
         view.applicationCursor = model.activeTerm?.applicationCursor ?? false
@@ -50,7 +51,7 @@ struct TerminalSurface: UIViewRepresentable {
             model?.sendInput(bytes)
         }
         view.onProposeSize = { [weak model] cols, rows in model?.proposeSize(cols: cols, rows: rows) }
-        view.onScroll = { [weak model] lines in model?.scroll(by: lines) }
+        view.onScrollAt = { [weak model] col, row, lines in model?.scrollAt(col: col, row: row, lines: lines) }
         view.onSelection = { [weak model] selection in model?.selection = selection }
         view.onMouse = { [weak model] col, row, pressed, moving in model?.sendMouse(col: col, row: row, pressed: pressed, moving: moving) }
         view.onCopy = { [weak model] in model?.copySelection() }

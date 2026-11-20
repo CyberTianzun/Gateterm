@@ -29,4 +29,11 @@ class TermGeometryTest {
         assertEquals(1, lines)
         assertEquals(5f, accum)
     }
+
+    @Test
+    fun cellAtClampedPinsOutOfBoundsPointersToGridEdges() {
+        val (ox, oy) = TermGeometry.origin(100f, 40f, cols = 4, rows = 2, cellW = 10f, cellH = 10f)
+        assertEquals(0 to 0, TermGeometry.cellAtClamped(0f, 0f, ox, oy, 10f, 10f, 4, 2))
+        assertEquals(3 to 1, TermGeometry.cellAtClamped(99f, 39f, ox, oy, 10f, 10f, 4, 2))
+    }
 }

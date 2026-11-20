@@ -3,6 +3,7 @@ package ai.eclosion.gateterm.android.appearance
 import android.content.Context
 import ai.eclosion.gateterm.android.term.AgentKeyLayout
 import ai.eclosion.gateterm.android.term.AgentKeyboardLayouts
+import ai.eclosion.gateterm.android.term.TerminalTouchMode
 
 class AppearanceStore(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -19,6 +20,12 @@ class AppearanceStore(context: Context) {
 
     fun saveAgentKeyLayouts(layouts: Map<String, AgentKeyLayout>) {
         prefs.edit().putString(KEY_AGENT_LAYOUTS, AgentKeyboardLayouts.encode(layouts)).apply()
+    }
+
+    fun touchMode(): TerminalTouchMode = TerminalTouchMode.parse(prefs.getString(KEY_TOUCH_MODE, null))
+
+    fun saveTouchMode(mode: TerminalTouchMode) {
+        prefs.edit().putString(KEY_TOUCH_MODE, mode.key).apply()
     }
 
     fun load(prefersDark: Boolean): TermAppearance {
@@ -40,5 +47,6 @@ class AppearanceStore(context: Context) {
         const val KEY_FOLLOW_SYSTEM = "follow-system"
         const val KEY_EXTRA_KEY_ROWS = "extra-key-rows"
         const val KEY_AGENT_LAYOUTS = "agent-key-layouts"
+        const val KEY_TOUCH_MODE = "terminal-touch-mode"
     }
 }

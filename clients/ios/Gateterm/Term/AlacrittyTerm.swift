@@ -91,6 +91,7 @@ final class AlacrittyTerm {
     /// 0 表示贴着最新一行。正数是向上翻了多少行。alt-screen 没有回滚。
     private(set) var scrollOffset = 0
     private(set) var mouseTracking = false
+    private(set) var altScreen = false
     private(set) var generation: UInt64 = 0
     private let engine: TermEngine
 
@@ -114,6 +115,7 @@ final class AlacrittyTerm {
         kittyClipboardPasteMode = st.kittyClipboardPasteMode
         scrollOffset = Int(st.scrollOffset)
         mouseTracking = st.mouseTracking
+        altScreen = st.altScreen
     }
 
     func hyperlinkAt(col: Int, row: Int) -> String? {
@@ -156,6 +158,22 @@ final class AlacrittyTerm {
     func encodePointer(col: Int, row: Int, pressed: Bool, moving: Bool) -> Data? {
         guard mouseTracking else { return nil }
         return engine.encodePointer(col: Int32(col), row: Int32(row), button: 0, pressed: pressed, moving: moving)
+    }
+
+    func encodeWheel(col: Int, row: Int, deltaLines: Int) -> Data? {
+        engine.encodeWheel(col: Int32(col), row: Int32(row), deltaLines: Int32(clamping: deltaLines))
+    }
+
+    func wordBoundsAt(col: Int, row: Int) -> (start: Int, end: Int)? {
+        guard (0..<cols).contains(col), (0..<rows).contains(row),
+              let range = engine.wordBoundsAt(col: UInt32(col), row: UInt32(row)) else { return nil }
+        return (Int(range.start), Int(range.end))
+    }
+
+    func lineBoundsAt(row: Int) -> (start: Int, end: Int)? {
+        guard (0..<rows).contains(row),
+              let range = engine.lineBoundsAt(row: UInt32(row)) else { return nil }
+        return (Int(range.start), Int(range.end))
     }
 
     func pasteRequiresConfirmation(_ text: String) -> Bool {

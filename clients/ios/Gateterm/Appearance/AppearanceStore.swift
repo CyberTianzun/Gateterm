@@ -7,6 +7,7 @@ final class AppearanceStore {
         static let followSystem = "gateterm.appearance.follow-system"
         static let extraKeyRows = "gateterm.appearance.extra-key-rows"
         static let agentLayouts = "gateterm.appearance.agent-key-layouts"
+        static let touchMode = "gateterm.appearance.terminal-touch-mode"
     }
 
     init(defaults: UserDefaults = .standard) { self.defaults = defaults }
@@ -23,6 +24,11 @@ final class AppearanceStore {
     var agentKeyLayouts: [String: AgentKeyLayout] {
         get { AgentKeyboardLayouts.decode(defaults.string(forKey: Key.agentLayouts)) }
         set { defaults.set(AgentKeyboardLayouts.encode(newValue), forKey: Key.agentLayouts) }
+    }
+
+    var touchMode: TerminalTouchMode {
+        get { TerminalTouchMode.parse(defaults.string(forKey: Key.touchMode)) }
+        set { defaults.set(newValue.rawValue, forKey: Key.touchMode) }
     }
 
     func load(prefersDark: Bool) -> TermAppearance {
