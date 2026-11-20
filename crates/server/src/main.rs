@@ -106,8 +106,10 @@ async fn run_server() -> anyhow::Result<()> {
     }
     let listen_port = listen.port();
     // 端口一变,已装的 hook 就打不通了,而 agent 对此毫无症状 —— 只能在这里喊一声。
-    let home = gateterm_server::agent::detect::DetectEnv::current();
-    for w in tokio::task::spawn_blocking(move || gateterm_server::agent::startup_warnings(&home, listen_port))
+    for w in tokio::task::spawn_blocking(move || {
+        let env = gateterm_server::agent::detect::DetectEnv::current();
+        gateterm_server::agent::startup_warnings(&env, listen_port)
+    })
         .await
         .unwrap_or_default()
     {
@@ -147,7 +149,7 @@ fn purge_hooks() -> i32 {
     // 显式敲命令就是显式动作,不看 `install_enabled`(和 HTTP 的 purge 同理)
     let opts = apply::ApplyOpts { enabled: true, backup_dir, backup_keep: 5 };
     // 端口只影响新写入的 URL,清空不看它,随便给一个
-    let ctx = InstallCtx { home: DetectEnv::current().home, port: 0, include_blocking: true };
+    let ctx = InstallCtx { home: DetectEnv::current_home(), port: 0, include_blocking: true };
     let mut failed = false;
     for &a in agent::registry() {
         let result = agent::plan_purge(a, &ctx)

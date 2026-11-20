@@ -400,13 +400,24 @@ fn resume_command(entry: &Entry, env: &DetectEnv) -> Result<Vec<String>, &'stati
 
 /// Start one background scan; reads keep using the previous immutable index until it is ready.
 pub fn start_index(state: &AppState, refresh: bool) {
-    if !state.agents.transcript_enabled {
-        return;
-    }
-    start_index_with_env(state, refresh, DetectEnv::current());
+    start_index_with(state, refresh, move || {
+        if refresh {
+            DetectEnv::current_refreshed()
+        } else {
+            DetectEnv::current()
+        }
+    });
 }
 
+#[cfg(test)]
 fn start_index_with_env(state: &AppState, refresh: bool, env: DetectEnv) {
+    start_index_with(state, refresh, move || env);
+}
+
+fn start_index_with<F>(state: &AppState, refresh: bool, resolve_env: F)
+where
+    F: FnOnce() -> DetectEnv + Send + 'static,
+{
     if !state.agents.transcript_enabled {
         return;
     }
@@ -420,7 +431,11 @@ fn start_index_with_env(state: &AppState, refresh: bool, env: DetectEnv) {
         cache.failed = false;
     }
     tokio::spawn(async move {
-        let result = tokio::task::spawn_blocking(move || scan(&env)).await;
+        let result = tokio::task::spawn_blocking(move || {
+            let env = resolve_env();
+            scan(&env)
+        })
+        .await;
         let mut cache = store.history.lock().unwrap();
         match result {
             Ok(mut next) => {
@@ -613,7 +628,14 @@ pub async fn open(
     headers: HeaderMap,
     Json(key): Json<Key>,
 ) -> Response {
-    open_with_env(state, headers, key, DetectEnv::current()).await
+    if let Some(response) = guard(&state, &headers) {
+        return response;
+    }
+    let env = match tokio::task::spawn_blocking(DetectEnv::current).await {
+        Ok(env) => env,
+        Err(_) => return error(StatusCode::INTERNAL_SERVER_ERROR, "spawn-failed"),
+    };
+    open_with_env(state, headers, key, env).await
 }
 
 async fn open_with_env(state: AppState, headers: HeaderMap, key: Key, env: DetectEnv) -> Response {
@@ -1431,5 +1453,54 @@ mod tests {
                 adapter.id()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn start_index_defers_env_resolution_to_background_and_skips_when_already_indexed() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let home = tempfile::tempdir().unwrap();
+        let home_path = home.path().to_path_buf();
+        let state = state();
+        let caller_thread = std::thread::current().id();
+        let resolved_on_caller = Arc::new(AtomicBool::new(false));
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let resolved_on_caller_clone = Arc::clone(&resolved_on_caller);
+        let calls_clone = Arc::clone(&calls);
+        let home_clone = home_path.clone();
+        start_index_with(&state, false, move || {
+            calls_clone.fetch_add(1, Ordering::SeqCst);
+            if std::thread::current().id() == caller_thread {
+                resolved_on_caller_clone.store(true, Ordering::SeqCst);
+            }
+            DetectEnv {
+                home: home_clone,
+                path: None,
+            }
+        });
+        assert!(
+            !resolved_on_caller.load(Ordering::SeqCst),
+            "env resolution must run on the background blocking pool, not synchronously on the caller thread"
+        );
+        for _ in 0..200 {
+            if !state.agent_sessions.history.lock().unwrap().indexing {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        // Already indexed and refresh=false: resolver must not be invoked at all.
+        let skipped_calls = Arc::new(AtomicUsize::new(0));
+        let skipped_calls_clone = Arc::clone(&skipped_calls);
+        start_index_with(&state, false, move || {
+            skipped_calls_clone.fetch_add(1, Ordering::SeqCst);
+            DetectEnv {
+                home: home_path,
+                path: None,
+            }
+        });
+        assert_eq!(skipped_calls.load(Ordering::SeqCst), 0);
     }
 }

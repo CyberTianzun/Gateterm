@@ -65,8 +65,14 @@ fn describe(e: &ConfigEdit) -> serde_json::Value {
 
 fn ctx_for(state: &AppState, id: &str, include_blocking: bool) -> Option<(&'static dyn crate::agent::AgentAdapter, InstallCtx)> {
     let adapter = crate::agent::find(id)?;
-    let env = DetectEnv::current();
-    Some((adapter, InstallCtx { home: env.home, port: state.listen_port, include_blocking }))
+    Some((
+        adapter,
+        InstallCtx {
+            home: DetectEnv::current_home(),
+            port: state.listen_port,
+            include_blocking,
+        },
+    ))
 }
 
 /// 装决策类 hook 会覆盖别家的决策(实测:最后注册的赢),所以默认只在**没有冲突**
@@ -76,8 +82,11 @@ fn wants_blocking(state: &AppState, id: &str, explicit: Option<bool>) -> bool {
     if let Some(v) = explicit {
         return v;
     }
-    let env = DetectEnv::current();
-    let ctx = InstallCtx { home: env.home, port: state.listen_port, include_blocking: true };
+    let ctx = InstallCtx {
+        home: DetectEnv::current_home(),
+        port: state.listen_port,
+        include_blocking: true,
+    };
     crate::agent::find(id).map(|a| a.integration(&ctx).1.is_empty()).unwrap_or(false)
 }
 
@@ -553,7 +562,7 @@ pub async fn messages(
     let path = match session.transcript {
         Some(p) => p,
         None => {
-            let home = DetectEnv::current().home;
+            let home = DetectEnv::current_home();
             let (aid, sid) = (q.agent_id.clone(), q.agent_session_id.clone());
             let found = tokio::task::spawn_blocking(move || {
                 crate::agent::find(&aid).and_then(|a| a.locate_transcript(&home, &sid))
