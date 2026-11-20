@@ -34,6 +34,10 @@ import ai.eclosion.gateterm.android.connection.ParsedEndpoint
 import ai.eclosion.gateterm.android.launcher.Launcher
 import ai.eclosion.gateterm.android.launcher.Launchers
 import ai.eclosion.gateterm.android.net.GateClient
+import ai.eclosion.gateterm.android.onboarding.OnboardingConfig
+import ai.eclosion.gateterm.android.onboarding.OnboardingDecision
+import ai.eclosion.gateterm.android.onboarding.OnboardingGate
+import ai.eclosion.gateterm.android.onboarding.OnboardingStore
 import ai.eclosion.gateterm.android.push.AgentNotifications
 import ai.eclosion.gateterm.android.push.AgentPush
 import ai.eclosion.gateterm.android.term.AlacrittyTerm
@@ -70,6 +74,10 @@ import java.util.concurrent.TimeUnit
 
 sealed class AppScreen {
     data object List : AppScreen()
+    data class Onboarding(
+        val returnTo: AppScreen = List,
+        val isFirstLaunch: Boolean = false,
+    ) : AppScreen()
     data class Editor(val connectionId: String?) : AppScreen()
     data class Server(val connectionId: String) : AppScreen()
     data object Appearance : AppScreen()
@@ -193,6 +201,9 @@ interface ConnectionActions {
     fun closeAppearance()
     fun openCloudAccount()
     fun closeCloudAccount()
+    fun openOnboarding(returnTo: AppScreen = AppScreen.List)
+    fun completeOnboarding(openScanner: Boolean = false)
+    fun copyOnboardingReleaseUrl()
     fun onNameChange(value: String)
     fun onUrlChange(value: String)
     fun onTokenChange(value: String)
@@ -275,6 +286,7 @@ class ConnectionController(
     private val connectionPreferences = ai.eclosion.gateterm.android.connection.ConnectionPreferences(app)
     private val store = ConnectionStore(app)
     private val appearanceStore = AppearanceStore(app)
+    private val onboardingStore = OnboardingStore(app)
     private var systemDark = app.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
         Configuration.UI_MODE_NIGHT_YES
     private val main = Handler(Looper.getMainLooper())
@@ -312,15 +324,26 @@ class ConnectionController(
     private val proposeFlush = Runnable { applyProposedSize() }
     private val publishSoon = Runnable { publishTerm() }
     private val _state = MutableStateFlow(
-        ConnectionUiState(
-            connections = store.load(),
-            appearance = appearanceStore.load(systemDark),
-            appearanceFollowsSystem = appearanceStore.followsSystem(),
-            extraKeyRows = appearanceStore.extraKeyRows(),
-            agentKeyLayouts = appearanceStore.agentKeyLayouts(),
-            touchMode = appearanceStore.touchMode(),
-            keepConnectionsInBackground = connectionPreferences.keepInBackground,
-        ),
+        run {
+            val savedConnections = store.load()
+            val decision = OnboardingGate.evaluate(
+                completedVersion = onboardingStore.completedVersion(),
+                hasSavedConnections = savedConnections.isNotEmpty(),
+            )
+            if (decision == OnboardingDecision.MigrateExistingUser) {
+                onboardingStore.markCompleted()
+            }
+            ConnectionUiState(
+                connections = savedConnections,
+                screen = initialScreenFor(decision),
+                appearance = appearanceStore.load(systemDark),
+                appearanceFollowsSystem = appearanceStore.followsSystem(),
+                extraKeyRows = appearanceStore.extraKeyRows(),
+                agentKeyLayouts = appearanceStore.agentKeyLayouts(),
+                touchMode = appearanceStore.touchMode(),
+                keepConnectionsInBackground = connectionPreferences.keepInBackground,
+            )
+        },
     )
     override val state: StateFlow<ConnectionUiState> = _state.asStateFlow()
 
@@ -391,6 +414,28 @@ class ConnectionController(
 
     override fun closeCloudAccount() {
         _state.update { it.copy(screen = AppScreen.List) }
+    }
+
+    override fun openOnboarding(returnTo: AppScreen) {
+        _state.update {
+            it.copy(
+                screen = AppScreen.Onboarding(returnTo = returnTo, isFirstLaunch = false),
+                showAddSheet = false,
+            )
+        }
+    }
+
+    override fun completeOnboarding(openScanner: Boolean) {
+        onboardingStore.markCompleted()
+        _state.update { current ->
+            current.copy(screen = resolveOnboardingDismissScreen(current.screen, openScanner))
+        }
+    }
+
+    override fun copyOnboardingReleaseUrl() {
+        val clipboard = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("gateterm-releases", OnboardingConfig.RELEASES_URL))
+        _messages.trySend(UserMessage.Copied)
     }
 
     override fun onNameChange(value: String) {
@@ -725,7 +770,12 @@ class ConnectionController(
 
     override fun openFromNotification(cloudServerId: String, session: Long, agentId: String?) {
         val connection = CloudLink.find(_state.value.connections, cloudServerId) ?: run {
-            _messages.trySend(UserMessage.ConnectServerFirst); return
+            _state.update { current ->
+                val nextScreen = resolveNotificationMissingServerScreen(current.screen)
+                if (nextScreen == current.screen) current else current.copy(screen = nextScreen)
+            }
+            _messages.trySend(UserMessage.ConnectServerFirst)
+            return
         }
         val target = PendingOpen(connection.id, session, agentId?.let { AgentPush.tag(cloudServerId, session, it) })
         if (selectedServerId != connection.id) leaveServer()
@@ -1550,6 +1600,26 @@ class ConnectionController(
             if (prevCols <= 0 || prevRows <= 0) return true
             return abs(cols - prevCols) >= 2 || abs(rows - prevRows) >= 2
         }
+
+        internal fun initialScreenFor(decision: OnboardingDecision): AppScreen = when (decision) {
+            OnboardingDecision.ShowFirstLaunch -> AppScreen.Onboarding(
+                returnTo = AppScreen.List,
+                isFirstLaunch = true,
+            )
+            OnboardingDecision.MigrateExistingUser, OnboardingDecision.Skip -> AppScreen.List
+        }
+
+        internal fun resolveOnboardingDismissScreen(current: AppScreen, openScanner: Boolean): AppScreen {
+            val returnTo = (current as? AppScreen.Onboarding)?.returnTo ?: AppScreen.List
+            return OnboardingGate.dismissTarget(
+                returnTo = returnTo,
+                openScanner = openScanner,
+                listScreen = AppScreen.List,
+            )
+        }
+
+        internal fun resolveNotificationMissingServerScreen(current: AppScreen): AppScreen =
+            if (current is AppScreen.Onboarding) AppScreen.List else current
 
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {

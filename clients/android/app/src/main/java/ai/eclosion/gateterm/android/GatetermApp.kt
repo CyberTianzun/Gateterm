@@ -49,6 +49,7 @@ import ai.eclosion.gateterm.android.ui.connections.QrScannerScreen
 import ai.eclosion.gateterm.android.ui.connections.ConnectionViewModel
 import ai.eclosion.gateterm.android.ui.connections.ServerHomeScreen
 import ai.eclosion.gateterm.android.ui.connections.UserMessage
+import ai.eclosion.gateterm.android.ui.onboarding.OnboardingScreen
 import ai.eclosion.gateterm.android.ui.term.TerminalScreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -124,6 +125,17 @@ fun GatetermApp(viewModel: ConnectionViewModel) {
                 onManual = { if (state.screen !is AppScreen.Editor) viewModel.addManually(); scanning = false },
             )
         } else when (val screen = state.screen) {
+            is AppScreen.Onboarding -> {
+                OnboardingScreen(
+                    isFirstLaunch = screen.isFirstLaunch,
+                    onCopyReleaseUrl = viewModel::copyOnboardingReleaseUrl,
+                    onScanNow = {
+                        viewModel.completeOnboarding(openScanner = true)
+                        scanning = true
+                    },
+                    onFinish = { viewModel.completeOnboarding(openScanner = false) },
+                )
+            }
             AppScreen.List -> {
                 ConnectionListScreen(
                     state = state,
@@ -140,6 +152,7 @@ fun GatetermApp(viewModel: ConnectionViewModel) {
                     onConfirmDelete = viewModel::confirmDelete,
                     onDismissDelete = viewModel::dismissDelete,
                     onSettings = viewModel::openAppearance,
+                    onOpenGuide = { viewModel.openOnboarding(AppScreen.List) },
                     onCloudAccount = viewModel::openCloudAccount,
                     cloudEmail = cloud.status?.email,
                 )
@@ -151,6 +164,7 @@ fun GatetermApp(viewModel: ConnectionViewModel) {
                     followsSystem = state.appearanceFollowsSystem,
                     onFollowSystem = viewModel::followSystemTheme,
                     onBack = viewModel::closeAppearance,
+                    onOpenGuide = { viewModel.openOnboarding(AppScreen.Appearance) },
                     onFontSize = viewModel::setFontSize,
                     onLineHeight = viewModel::setLineHeight,
                     onLetterSpacing = viewModel::setLetterSpacing,
