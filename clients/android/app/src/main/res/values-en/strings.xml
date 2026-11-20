@@ -40,7 +40,8 @@
     <string name="servers_add_manual_hint">Enter the URL and token yourself</string>
     <string name="servers_more">More options</string>
     <string name="servers_empty_title">No servers yet</string>
-    <string name="servers_empty_body">Add a server URL to connect. You can paste the link the daemon prints on startup.</string>
+    <string name="servers_empty_body">Run Gateterm-Desktop-Web or Gateterm-Server on your computer first, then scan the QR code or paste its link.</string>
+    <string name="servers_empty_guide">Quick start guide</string>
     <string name="servers_delete_title">Delete server?</string>
     <string name="servers_delete_body">Remove %1$s from this device? This does not stop the server.</string>
 
@@ -334,4 +335,41 @@
     <string name="cloud_consent_required">Review the updated Cloud privacy disclosure before enabling push.</string>
     <string name="cloud_consent_review">Review and enable Cloud</string>
     <string name="cloud_consent_save_failed">Could not save your choice. Please try again.</string>
+
+    <string name="settings_guide_title">Quick start guide</string>
+    <string name="settings_guide_hint">Learn how to install the host on your computer and pair via QR code</string>
+    <string name="onboarding_skip">Skip</string>
+    <string name="onboarding_close">Close</string>
+    <string name="onboarding_next">Next</string>
+    <string name="onboarding_prev">Previous</string>
+    <string name="onboarding_done">Done</string>
+    <string name="onboarding_enter_app">Go to server list</string>
+    <string name="onboarding_scan_now">Scan QR code</string>
+    <string name="onboarding_step_1_badge">STEP 01 / 04 · HOW IT WORKS</string>
+    <string name="onboarding_step_1_title">Remote client for your computer</string>
+    <string name="onboarding_step_1_body">Gateterm Android doesn’t run shells locally. Pair it with Gateterm-Desktop-Web on your computer or Gateterm-Server on a remote host—sessions stay alive in the background.</string>
+    <string name="onboarding_step_1_host_status">Host · Sessions stay alive</string>
+    <string name="onboarding_step_1_link_label">LAN / Tailscale</string>
+    <string name="onboarding_step_1_phone_synced">Live sync</string>
+    <string name="onboarding_step_2_badge">STEP 02 / 04 · INSTALL HOST</string>
+    <string name="onboarding_step_2_title">Install Desktop-Web on your PC</string>
+    <string name="onboarding_step_2_body">Download and run gateterm-desktop-web from GitHub Releases on Windows or macOS. For Linux or remote servers, run the standalone gateterm-server binary.</string>
+    <string name="onboarding_step_2_callout">(1) Pick for Win / macOS</string>
+    <string name="onboarding_step_2_desktop_desc">Windows (.zip) · macOS (.dmg) · System tray</string>
+    <string name="onboarding_step_2_server_desc">Linux / remote host · Headless CLI daemon</string>
+    <string name="onboarding_copy_link">Copy</string>
+    <string name="onboarding_share_link">Share</string>
+    <string name="onboarding_open_link">Open in browser</string>
+    <string name="onboarding_share_text">Install Gateterm-Desktop-Web on your computer (Windows / macOS): %1$s</string>
+    <string name="onboarding_step_3_badge">STEP 03 / 04 · SHOW QR CODE</string>
+    <string name="onboarding_step_3_title">Open Settings for the QR code</string>
+    <string name="onboarding_step_3_body">Open Settings from the system tray, set Listen address to 0.0.0.0 and save. Your LAN or Tailscale pairing QR code will appear below.</string>
+    <string name="onboarding_step_3_window_title">gateterm Settings</string>
+    <string name="onboarding_step_3_callout_listen">(1) Listen on 0.0.0.0</string>
+    <string name="onboarding_step_3_callout_qr">(2) Scan this QR</string>
+    <string name="onboarding_step_3_screenshot_desc">Screenshot of gateterm-desktop-web Settings showing listen address 0.0.0.0 and Android pairing QR code</string>
+    <string name="onboarding_step_4_badge">STEP 04 / 04 · CONNECT</string>
+    <string name="onboarding_step_4_title">Scan once to connect</string>
+    <string name="onboarding_step_4_body">Scan the QR code to fill in your server URL and token automatically. Using CLI gateterm-server? Paste its startup URL from the server list.</string>
+    <string name="onboarding_step_4_auto_fill">Auto-fills URL &amp; token</string>
 </resources>
