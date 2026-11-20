@@ -54,6 +54,31 @@ class ConnectionOnboardingTest {
     }
 
     @Test
+    fun dismissOnboardingPreservesNonOnboardingScreenUnlessOpeningScanner() {
+        assertEquals(
+            AppScreen.Appearance,
+            ConnectionController.resolveOnboardingDismissScreen(
+                current = AppScreen.Appearance,
+                openScanner = false,
+            ),
+        )
+        assertEquals(
+            AppScreen.Server("srv-1"),
+            ConnectionController.resolveOnboardingDismissScreen(
+                current = AppScreen.Server("srv-1"),
+                openScanner = false,
+            ),
+        )
+        assertEquals(
+            AppScreen.List,
+            ConnectionController.resolveOnboardingDismissScreen(
+                current = AppScreen.Appearance,
+                openScanner = true,
+            ),
+        )
+    }
+
+    @Test
     fun missingServerNotificationEscapesOnboardingWithoutDisruptingOtherScreens() {
         assertEquals(
             AppScreen.List,

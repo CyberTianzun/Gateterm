@@ -1610,9 +1610,11 @@ class ConnectionController(
         }
 
         internal fun resolveOnboardingDismissScreen(current: AppScreen, openScanner: Boolean): AppScreen {
-            val returnTo = (current as? AppScreen.Onboarding)?.returnTo ?: AppScreen.List
+            if (current !is AppScreen.Onboarding) {
+                return if (openScanner) AppScreen.List else current
+            }
             return OnboardingGate.dismissTarget(
-                returnTo = returnTo,
+                returnTo = current.returnTo,
                 openScanner = openScanner,
                 listScreen = AppScreen.List,
             )

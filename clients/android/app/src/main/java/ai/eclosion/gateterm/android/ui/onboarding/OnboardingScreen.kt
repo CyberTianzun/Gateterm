@@ -59,6 +59,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -366,14 +367,16 @@ private fun ReleasesActionCard(
     val context = LocalContext.current
     val shareTemplate = stringResource(R.string.onboarding_share_text)
     val shareTitle = stringResource(R.string.onboarding_share_link)
+    var copyCount by remember { mutableIntStateOf(0) }
     var copiedRecently by remember { mutableStateOf(false) }
     val triggerCopy: () -> Unit = {
-        copiedRecently = true
+        copyCount += 1
         onCopyReleaseUrl()
     }
 
-    LaunchedEffect(copiedRecently) {
-        if (copiedRecently) {
+    LaunchedEffect(copyCount) {
+        if (copyCount > 0) {
+            copiedRecently = true
             delay(1500L)
             copiedRecently = false
         }
@@ -412,7 +415,7 @@ private fun ReleasesActionCard(
                 )
                 Icon(
                     painter = painterResource(R.drawable.ic_open_in_new),
-                    contentDescription = stringResource(R.string.onboarding_open_link),
+                    contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(18.dp),
                 )
@@ -510,18 +513,28 @@ private fun OnboardingBottomBar(
                 )
 
                 Row(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .padding(start = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                 ) {
                     if (currentPage > 0) {
-                        TextButton(onClick = onPrevious) {
+                        TextButton(
+                            onClick = onPrevious,
+                            modifier = Modifier.weight(1f, fill = false),
+                        ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = null,
                                 modifier = Modifier.size(16.dp),
                             )
                             Spacer(Modifier.width(4.dp))
-                            Text(stringResource(R.string.onboarding_prev))
+                            Text(
+                                text = stringResource(R.string.onboarding_prev),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     }
 
@@ -533,6 +546,9 @@ private fun OnboardingBottomBar(
                         Text(
                             text = stringResource(R.string.onboarding_next),
                             fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
                         )
                         Spacer(Modifier.width(6.dp))
                         Icon(

@@ -200,7 +200,7 @@ private fun EmptyServers(
     Column(
         modifier = modifier
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 32.dp, vertical = 24.dp),
+            .padding(start = 32.dp, end = 32.dp, top = 24.dp, bottom = 88.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {

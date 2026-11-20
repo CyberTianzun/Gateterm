@@ -58,7 +58,10 @@ object OnboardingLinks {
 
     private tailrec fun Context.hasActivityContext(): Boolean = when (this) {
         is Activity -> true
-        is ContextWrapper -> baseContext.hasActivityContext()
+        is ContextWrapper -> {
+            val base = baseContext ?: return false
+            base.hasActivityContext()
+        }
         else -> false
     }
 }

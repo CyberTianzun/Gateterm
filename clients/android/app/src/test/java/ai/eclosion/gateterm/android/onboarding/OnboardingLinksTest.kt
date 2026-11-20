@@ -34,6 +34,14 @@ class OnboardingLinksTest {
     }
 
     @Test
+    fun sharePayloadRecoversSafelyFromMalformedPercentTemplate() {
+        val template = "Download 100% free: %2\$d"
+        val text = OnboardingLinks.sharePayload(template)
+        assertTrue(text.contains(OnboardingConfig.RELEASES_URL))
+        assertEquals("$template ${OnboardingConfig.RELEASES_URL}", text)
+    }
+
+    @Test
     fun dispatchSafelyReturnsTrueOnSuccessAndFalseOnFailure() {
         assertTrue(OnboardingLinks.dispatchSafely { })
         assertFalse(OnboardingLinks.dispatchSafely { throw IllegalStateException("no activity") })

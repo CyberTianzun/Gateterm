@@ -48,7 +48,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,6 +65,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -70,8 +73,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
+private val StageFocusBlueOnLight = Color(0xFF1F6FEB)
 
 @Immutable
 private data class StagePalette(
@@ -86,15 +92,17 @@ private data class StagePalette(
 @Composable
 private fun rememberStagePalette(): StagePalette {
     val isLight = LocalTermAppearance.current.isLightTheme()
-    val primary = MaterialTheme.colorScheme.primary
-    return StagePalette(
-        isLight = isLight,
-        warmOrange = if (isLight) Color(0xFFD94E22) else Color(0xFFF06A38),
-        warmOrangePill = if (isLight) Color(0xFFD94E22) else Color(0xFFE45A2B),
-        liveGreen = if (isLight) Color(0xFF107C10) else Color(0xFF23D18B),
-        focusBlue = if (isLight) Color(0xFF0451A5) else primary,
-        focusBluePill = if (isLight) Color(0xFF0451A5) else Color(0xFF1F6FEB),
-    )
+    return remember(isLight) {
+        val blue = if (isLight) Color(0xFF0451A5) else StageFocusBlueOnLight
+        StagePalette(
+            isLight = isLight,
+            warmOrange = if (isLight) Color(0xFFD94E22) else Color(0xFFF06A38),
+            warmOrangePill = if (isLight) Color(0xFFD94E22) else Color(0xFFE45A2B),
+            liveGreen = if (isLight) Color(0xFF107C10) else Color(0xFF23D18B),
+            focusBlue = blue,
+            focusBluePill = blue,
+        )
+    }
 }
 
 /**
@@ -194,63 +202,66 @@ private fun ArchitectureStage(
             verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterVertically),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                DesktopTerminalWindow(
-                    liveGreen = palette.liveGreen,
-                    isLight = palette.isLight,
-                    modifier = Modifier.weight(1.42f),
-                )
-                Box(
+            // Keep physical left-to-right stage ordering (desktop -> beam -> phone) even under RTL locales.
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                Row(
                     modifier = Modifier
-                        .width(62.dp)
-                        .zIndex(1f),
-                    contentAlignment = Alignment.Center,
+                        .fillMaxWidth()
+                        .padding(top = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    ConnectionBeam(
-                        progressProvider = { beamProgressState.value },
+                    DesktopTerminalWindow(
+                        liveGreen = palette.liveGreen,
+                        isLight = palette.isLight,
+                        modifier = Modifier.weight(1.42f),
+                    )
+                    Box(
+                        modifier = Modifier
+                            .width(62.dp)
+                            .zIndex(1f),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        ConnectionBeam(
+                            progressProvider = { beamProgressState.value },
+                            liveGreen = palette.liveGreen,
+                            accent = primary,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(52.dp),
+                        )
+                        // Floating network badge centered over the beam without overlapping terminal content.
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = if (palette.isLight) Color.White else Color(0xFF1F242E),
+                            border = BorderStroke(1.dp, primary.copy(alpha = 0.45f)),
+                            shadowElevation = if (palette.isLight) 3.dp else 0.dp,
+                            modifier = Modifier
+                                .wrapContentWidth(unbounded = true)
+                                .widthIn(max = 82.dp)
+                                .offset(y = (-22).dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.onboarding_step_1_link_label),
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 8.5.sp,
+                                lineHeight = 10.5.sp,
+                                color = primary,
+                                textAlign = TextAlign.Center,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.5.dp),
+                            )
+                        }
+                    }
+                    MiniaturePhoneFrame(
                         liveGreen = palette.liveGreen,
                         accent = primary,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp),
+                        isLight = palette.isLight,
+                        syncedLabel = stringResource(R.string.onboarding_step_1_phone_synced),
+                        modifier = Modifier.weight(0.95f),
                     )
-                    // Floating network badge centered over the beam without overlapping terminal content.
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = if (palette.isLight) Color.White else Color(0xFF1F242E),
-                        border = BorderStroke(1.dp, primary.copy(alpha = 0.45f)),
-                        shadowElevation = if (palette.isLight) 3.dp else 0.dp,
-                        modifier = Modifier
-                            .wrapContentWidth(unbounded = true)
-                            .widthIn(max = 82.dp)
-                            .offset(y = (-22).dp),
-                    ) {
-                        Text(
-                            text = stringResource(R.string.onboarding_step_1_link_label),
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 8.5.sp,
-                            lineHeight = 10.5.sp,
-                            color = primary,
-                            textAlign = TextAlign.Center,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.5.dp),
-                        )
-                    }
                 }
-                MiniaturePhoneFrame(
-                    liveGreen = palette.liveGreen,
-                    accent = primary,
-                    isLight = palette.isLight,
-                    syncedLabel = stringResource(R.string.onboarding_step_1_phone_synced),
-                    modifier = Modifier.weight(0.95f),
-                )
             }
 
             FlowRow(
@@ -654,6 +665,8 @@ private fun InstallHostStage(
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 11.sp,
                                         color = Color(0xFF8B97A8),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
                                     )
                                     Text(
                                         text = "gateterm-server",
@@ -740,72 +753,75 @@ private fun DesktopQrStage(
                     )
                 }
 
-                BoxWithConstraints(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(OnboardingConfig.DESKTOP_SETTINGS_ASPECT_RATIO),
-                ) {
-                    val stageWidth = maxWidth
-                    val stageHeight = maxHeight
-
-                    Image(
-                        painter = painterResource(R.drawable.tutorial_desktop_settings),
-                        contentDescription = stringResource(R.string.onboarding_step_3_screenshot_desc),
-                        contentScale = ContentScale.FillBounds,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        val pulse = pulseState.value
-                        drawFocusRing(
-                            rect = OnboardingConfig.DESKTOP_SETTINGS_LISTEN_RECT,
-                            color = palette.warmOrange,
-                            pulse = pulse,
-                        )
-                        drawFocusRing(
-                            rect = OnboardingConfig.DESKTOP_SETTINGS_QR_RECT,
-                            color = palette.focusBlue,
-                            pulse = 1f - pulse,
-                        )
-                    }
-
-                    // Callout (1) sits right next to DESKTOP_SETTINGS_LISTEN_RECT without touching 0.0.0.0 : 7683.
-                    Box(
+                // Pin screenshot overlay coordinates and callouts to physical LTR to match the raster image and Canvas rings.
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                    BoxWithConstraints(
                         modifier = Modifier
-                            .offset(
-                                x = stageWidth * 0.600f,
-                                y = stageHeight * 0.052f,
+                            .fillMaxWidth()
+                            .aspectRatio(OnboardingConfig.DESKTOP_SETTINGS_ASPECT_RATIO),
+                    ) {
+                        val stageWidth = maxWidth
+                        val stageHeight = maxHeight
+
+                        Image(
+                            painter = painterResource(R.drawable.tutorial_desktop_settings),
+                            contentDescription = stringResource(R.string.onboarding_step_3_screenshot_desc),
+                            contentScale = ContentScale.FillBounds,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val pulse = pulseState.value
+                            drawFocusRing(
+                                rect = OnboardingConfig.DESKTOP_SETTINGS_LISTEN_RECT,
+                                color = palette.warmOrange,
+                                pulse = pulse,
                             )
-                            .width(stageWidth * 0.392f),
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        CalloutPill(
-                            text = stringResource(R.string.onboarding_step_3_callout_listen),
-                            backgroundColor = palette.warmOrangePill,
-                            contentColor = Color.White,
-                            compact = true,
-                            maxLines = 2,
-                        )
-                    }
+                            drawFocusRing(
+                                rect = OnboardingConfig.DESKTOP_SETTINGS_QR_RECT,
+                                color = palette.focusBlue,
+                                pulse = 1f - pulse,
+                            )
+                        }
 
-                    // Callout (2) sits in the blank bottom-right zone and grows upward without clipping at high fontScale.
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomStart)
-                            .padding(
-                                start = stageWidth * 0.405f,
-                                end = stageWidth * 0.02f,
-                                bottom = stageHeight * 0.045f,
-                            ),
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        CalloutPill(
-                            text = stringResource(R.string.onboarding_step_3_callout_qr),
-                            backgroundColor = palette.focusBluePill,
-                            contentColor = Color.White,
-                            compact = true,
-                            maxLines = 2,
-                        )
+                        // Callout (1) sits right next to DESKTOP_SETTINGS_LISTEN_RECT without touching 0.0.0.0 : 7683.
+                        Box(
+                            modifier = Modifier
+                                .offset(
+                                    x = stageWidth * 0.600f,
+                                    y = stageHeight * 0.052f,
+                                )
+                                .width(stageWidth * 0.392f),
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
+                            CalloutPill(
+                                text = stringResource(R.string.onboarding_step_3_callout_listen),
+                                backgroundColor = palette.warmOrangePill,
+                                contentColor = Color.White,
+                                compact = true,
+                                maxLines = 2,
+                            )
+                        }
+
+                        // Callout (2) sits in the blank bottom-right zone and grows upward without clipping at high fontScale.
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .padding(
+                                    start = stageWidth * 0.405f,
+                                    end = stageWidth * 0.02f,
+                                    bottom = stageHeight * 0.045f,
+                                ),
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
+                            CalloutPill(
+                                text = stringResource(R.string.onboarding_step_3_callout_qr),
+                                backgroundColor = palette.focusBluePill,
+                                contentColor = Color.White,
+                                compact = true,
+                                maxLines = 2,
+                            )
+                        }
                     }
                 }
             }
@@ -870,227 +886,235 @@ private fun ScanConnectStage(
         palette = palette,
         modifier = modifier.heightIn(min = 264.dp),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(IntrinsicSize.Min)
-                .heightIn(min = 236.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            // Left: QR scanner viewfinder card
-            Surface(
+        // Keep scan-to-terminal diagram flow and POSIX shell prompts left-to-right under RTL locales.
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+            Row(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight(),
-                shape = RoundedCornerShape(16.dp),
-                color = Color(0xFF11151B),
-                border = BorderStroke(1.dp, palette.liveGreen.copy(alpha = 0.35f)),
-                shadowElevation = if (palette.isLight) 6.dp else 2.dp,
+                    .fillMaxWidth()
+                    .height(IntrinsicSize.Min)
+                    .heightIn(min = 236.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Column(
+                // Left: QR scanner viewfinder card
+                Surface(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(10.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.SpaceBetween,
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    shape = RoundedCornerShape(16.dp),
+                    color = Color(0xFF11151B),
+                    border = BorderStroke(1.dp, palette.liveGreen.copy(alpha = 0.35f)),
+                    shadowElevation = if (palette.isLight) 6.dp else 2.dp,
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(106.dp)
-                            .padding(2.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(86.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color.White)
-                                .padding(7.dp),
-                        ) {
-                            SampleQrMatrix(modifier = Modifier.fillMaxSize())
-                        }
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            drawViewfinderCorners(
-                                color = palette.liveGreen,
-                                cornerLength = 15.dp.toPx(),
-                                strokeWidth = 2.5.dp.toPx(),
-                            )
-                            val laserY = size.height * scanPositionState.value
-                            val trailHeight = 20.dp.toPx()
-                            drawRect(
-                                brush = Brush.verticalGradient(
-                                    colors = listOf(
-                                        Color.Transparent,
-                                        palette.liveGreen.copy(alpha = 0.28f),
-                                        Color.Transparent,
-                                    ),
-                                    startY = (laserY - trailHeight * 0.5f).coerceAtLeast(0f),
-                                    endY = (laserY + trailHeight * 0.5f).coerceAtMost(size.height),
-                                ),
-                                topLeft = Offset(4.dp.toPx(), (laserY - trailHeight * 0.5f).coerceAtLeast(0f)),
-                                size = Size(size.width - 8.dp.toPx(), trailHeight),
-                            )
-                            drawLine(
-                                color = palette.liveGreen,
-                                start = Offset(4.dp.toPx(), laserY),
-                                end = Offset(size.width - 4.dp.toPx(), laserY),
-                                strokeWidth = 2.dp.toPx(),
-                                cap = StrokeCap.Round,
-                            )
-                        }
-                    }
-
-                    Spacer(Modifier.height(6.dp))
-
-                    Text(
-                        text = stringResource(R.string.onboarding_step_4_auto_fill),
-                        fontSize = 10.sp,
-                        lineHeight = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = Color(0xFFD2DCE8),
-                        textAlign = TextAlign.Center,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-
-            // Center: Flow arrow
-            Surface(
-                shape = CircleShape,
-                color = primary.copy(alpha = if (palette.isLight) 0.12f else 0.20f),
-                border = BorderStroke(1.dp, primary.copy(alpha = 0.35f)),
-                modifier = Modifier.size(28.dp),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                        contentDescription = null,
-                        tint = primary,
-                        modifier = Modifier.size(15.dp),
-                    )
-                }
-            }
-
-            // Right: Connected Gateterm Android terminal preview
-            Surface(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight(),
-                shape = RoundedCornerShape(18.dp),
-                color = Color(0xFF191D24),
-                border = BorderStroke(
-                    1.5.dp,
-                    if (palette.isLight) Color(0xFF313844) else Color.White.copy(alpha = 0.16f),
-                ),
-                shadowElevation = if (palette.isLight) 6.dp else 2.dp,
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(6.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .width(24.dp)
-                            .height(3.dp)
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.18f)),
-                    )
-                    Spacer(Modifier.height(6.dp))
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .clip(RoundedCornerShape(11.dp))
-                            .background(Color(0xFF101318))
-                            .padding(6.dp),
+                            .padding(10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.SpaceBetween,
                     ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        Box(
+                            modifier = Modifier
+                                .widthIn(max = 106.dp)
+                                .fillMaxWidth()
+                                .aspectRatio(1f)
+                                .padding(2.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(10.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color.White)
+                                    .padding(7.dp),
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(6.dp)
-                                        .clip(CircleShape)
-                                        .background(palette.liveGreen),
-                                )
-                                Text(
-                                    text = "~/octoterm",
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 9.sp,
-                                    color = Color(0xFFE3EAF3),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                SampleQrMatrix(modifier = Modifier.fillMaxSize())
                             }
-                            Text(
-                                text = "$ gateterm",
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 8.5.sp,
-                                color = Color(0xFF8AB4F8),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                text = "✓ ${stringResource(R.string.connection_connected)}",
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 8.5.sp,
-                                color = palette.liveGreen,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            TerminalBarLine(widthFraction = 0.78f, color = Color(0xFFB8C4D4))
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp),
-                            ) {
-                                Text(
-                                    text = "$",
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 8.5.sp,
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                drawViewfinderCorners(
                                     color = palette.liveGreen,
+                                    cornerLength = 15.dp.toPx(),
+                                    strokeWidth = 2.5.dp.toPx(),
                                 )
-                                Box(
-                                    modifier = Modifier
-                                        .width(5.dp)
-                                        .height(9.dp)
-                                        .background(Color(0xFFDCE4EE)),
+                                val laserY = size.height * scanPositionState.value
+                                val trailHeight = 20.dp.toPx()
+                                drawRect(
+                                    brush = Brush.verticalGradient(
+                                        colors = listOf(
+                                            Color.Transparent,
+                                            palette.liveGreen.copy(alpha = 0.28f),
+                                            Color.Transparent,
+                                        ),
+                                        startY = (laserY - trailHeight * 0.5f).coerceAtLeast(0f),
+                                        endY = (laserY + trailHeight * 0.5f).coerceAtMost(size.height),
+                                    ),
+                                    topLeft = Offset(4.dp.toPx(), (laserY - trailHeight * 0.5f).coerceAtLeast(0f)),
+                                    size = Size(size.width - 8.dp.toPx(), trailHeight),
+                                )
+                                drawLine(
+                                    color = palette.liveGreen,
+                                    start = Offset(4.dp.toPx(), laserY),
+                                    end = Offset(size.width - 4.dp.toPx(), laserY),
+                                    strokeWidth = 2.dp.toPx(),
+                                    cap = StrokeCap.Round,
                                 )
                             }
                         }
 
                         Spacer(Modifier.height(6.dp))
 
-                        // Signature Gateterm terminal shortcut key bar
-                        FlowRow(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterHorizontally),
-                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                        Text(
+                            text = stringResource(R.string.onboarding_step_4_auto_fill),
+                            fontSize = 10.sp,
+                            lineHeight = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFFD2DCE8),
+                            textAlign = TextAlign.Center,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+
+                // Center: Flow arrow
+                Surface(
+                    shape = CircleShape,
+                    color = primary.copy(alpha = if (palette.isLight) 0.12f else 0.20f),
+                    border = BorderStroke(1.dp, primary.copy(alpha = 0.35f)),
+                    modifier = Modifier.size(28.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                            contentDescription = null,
+                            tint = primary,
+                            modifier = Modifier.size(15.dp),
+                        )
+                    }
+                }
+
+                // Right: Connected Gateterm Android terminal preview
+                Surface(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    shape = RoundedCornerShape(18.dp),
+                    color = Color(0xFF191D24),
+                    border = BorderStroke(
+                        1.5.dp,
+                        if (palette.isLight) Color(0xFF313844) else Color.White.copy(alpha = 0.16f),
+                    ),
+                    shadowElevation = if (palette.isLight) 6.dp else 2.dp,
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(6.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .width(24.dp)
+                                .height(3.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.18f)),
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(Color(0xFF101318))
+                                .padding(6.dp),
+                            verticalArrangement = Arrangement.SpaceBetween,
                         ) {
-                            listOf("ESC", "TAB", "CTRL", "↑↓").forEach { key ->
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(Color(0xFF212630))
-                                        .padding(horizontal = 3.5.dp, vertical = 2.5.dp),
-                                    contentAlignment = Alignment.Center,
+                            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp),
                                 ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .clip(CircleShape)
+                                            .background(palette.liveGreen),
+                                    )
                                     Text(
-                                        text = key,
+                                        text = "~/octoterm",
                                         fontFamily = FontFamily.Monospace,
                                         fontWeight = FontWeight.SemiBold,
-                                        fontSize = 6.5.sp,
-                                        color = Color(0xFFC8D2E0),
-                                        softWrap = false,
+                                        fontSize = 9.sp,
+                                        color = Color(0xFFE3EAF3),
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
+                                }
+                                Text(
+                                    text = "$ gateterm",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 8.5.sp,
+                                    color = Color(0xFF8AB4F8),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = "✓ ${stringResource(R.string.connection_connected)}",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 8.5.sp,
+                                    color = palette.liveGreen,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                TerminalBarLine(widthFraction = 0.78f, color = Color(0xFFB8C4D4))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                ) {
+                                    Text(
+                                        text = "$",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 8.5.sp,
+                                        color = palette.liveGreen,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .width(5.dp)
+                                            .height(9.dp)
+                                            .background(Color(0xFFDCE4EE)),
+                                    )
+                                }
+                            }
+
+                            Spacer(Modifier.height(6.dp))
+
+                            // Signature Gateterm terminal shortcut key bar
+                            FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterHorizontally),
+                                verticalArrangement = Arrangement.spacedBy(3.dp),
+                            ) {
+                                listOf("ESC", "TAB", "CTRL", "↑↓").forEach { key ->
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(Color(0xFF212630))
+                                            .padding(horizontal = 3.5.dp, vertical = 2.5.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Text(
+                                            text = key,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize = 6.5.sp,
+                                            color = Color(0xFFC8D2E0),
+                                            softWrap = false,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
                                 }
                             }
                         }
