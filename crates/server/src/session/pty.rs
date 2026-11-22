@@ -826,6 +826,10 @@ pub(crate) mod test_support {
     pub(crate) fn output(session: &Session, bytes: &[u8]) {
         session.process_output(bytes);
     }
+
+    pub(crate) fn mark_exited(session: &Session) {
+        session.mark_exited();
+    }
 }
 
 #[cfg(test)]

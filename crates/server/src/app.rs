@@ -44,6 +44,16 @@ pub fn router(state: AppState) -> Router {
         .route("/api/cloud/status", get(cloud_status_handler))
         .route("/api/update", get(update_status_handler))
         .route("/api/mcp/status", get(crate::mcp::status))
+        .route(
+            "/api/sessions",
+            get(crate::mcp::http::list_sessions).post(crate::mcp::http::create_session),
+        )
+        .route(
+            "/api/sessions/{id}",
+            axum::routing::delete(crate::mcp::http::kill_session),
+        )
+        .route("/api/sessions/{id}/screen", get(crate::mcp::http::read_screen))
+        .route("/api/sessions/{id}/input", post(crate::mcp::http::send_input))
         .route("/api/agents", get(crate::agent::routes::list))
         .route("/api/agents/{id}/plan", get(crate::agent::routes::plan))
         .route("/api/agents/{id}/install", post(crate::agent::routes::install))

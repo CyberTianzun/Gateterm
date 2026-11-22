@@ -251,3 +251,64 @@ async fn plain_allow_carries_no_updated_input() {
         serde_json::from_str(&hook.await.unwrap().text().await.unwrap()).unwrap();
     assert!(body["hookSpecificOutput"]["decision"].get("updatedInput").is_none());
 }
+
+#[tokio::test]
+async fn pending_filters_by_optional_session_id() {
+    let addr = server(30).await;
+    let hook1 = tokio::spawn(async move {
+        reqwest::Client::new()
+            .post(format!("http://{addr}/hook/claude-code/permission-request"))
+            .header("Authorization", format!("Bearer {}", hook_token()))
+            .header("X-Gateterm-Session", "1")
+            .header("Content-Type", "application/json")
+            .body(r#"{"session_id":"s1","tool_name":"Bash","tool_input":{"command":"echo 1"}}"#)
+            .send()
+            .await
+            .unwrap()
+    });
+    let hook2 = tokio::spawn(async move {
+        reqwest::Client::new()
+            .post(format!("http://{addr}/hook/claude-code/permission-request"))
+            .header("Authorization", format!("Bearer {}", hook_token()))
+            .header("X-Gateterm-Session", "2")
+            .header("Content-Type", "application/json")
+            .body(r#"{"session_id":"s2","tool_name":"Read","tool_input":{"file_path":"a.txt"}}"#)
+            .send()
+            .await
+            .unwrap()
+    });
+
+    let mut all = Vec::new();
+    for _ in 0..100 {
+        let v = get_json(addr, "/api/agents/pending").await;
+        let arr = v["pending"].as_array().unwrap();
+        if arr.len() == 2 {
+            all = arr.clone();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(all.len(), 2, "expected 2 pending requests");
+
+    let s1 = get_json(addr, "/api/agents/pending?session_id=1").await;
+    let s1_arr = s1["pending"].as_array().unwrap();
+    assert_eq!(s1_arr.len(), 1);
+    assert_eq!(s1_arr[0]["session"], 1);
+    assert_eq!(s1_arr[0]["tool_name"], "Bash");
+
+    let s2 = get_json(addr, "/api/agents/pending?session_id=2").await;
+    let s2_arr = s2["pending"].as_array().unwrap();
+    assert_eq!(s2_arr.len(), 1);
+    assert_eq!(s2_arr[0]["session"], 2);
+    assert_eq!(s2_arr[0]["tool_name"], "Read");
+
+    let s999 = get_json(addr, "/api/agents/pending?session_id=999").await;
+    assert!(s999["pending"].as_array().unwrap().is_empty());
+
+    for item in all {
+        let id = item["id"].as_str().unwrap();
+        assert_eq!(answer(addr, id, "deny").await, 200);
+    }
+    let _ = hook1.await;
+    let _ = hook2.await;
+}

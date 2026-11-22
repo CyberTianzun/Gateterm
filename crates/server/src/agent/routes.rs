@@ -472,12 +472,25 @@ pub struct AnswerBody {
     pub updated_input: Option<serde_json::Value>,
 }
 
+#[derive(serde::Deserialize)]
+pub struct PendingQuery {
+    #[serde(default)]
+    pub session_id: Option<u64>,
+}
+
 /// `GET /api/agents/pending` —— 当前有哪些请求在等人。
-pub async fn pending(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub async fn pending(
+    State(state): State<AppState>,
+    Query(q): Query<PendingQuery>,
+    headers: HeaderMap,
+) -> Response {
     if !bearer_ok(&headers, &state.token) {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
-    Json(serde_json::json!({ "pending": state.agent_sessions.list_pending() })).into_response()
+    Json(serde_json::json!({
+        "pending": crate::mcp::service::list_pending_approvals(&state, q.session_id)
+    }))
+    .into_response()
 }
 
 /// `POST /api/agents/answer` —— 替 agent 拍板。
