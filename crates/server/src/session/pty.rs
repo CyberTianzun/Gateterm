@@ -15,7 +15,7 @@ use tokio::sync::broadcast;
 use crate::config::WindowSize;
 
 use super::buffer::SeqBuffer;
-use super::grid::SessionGrid;
+use super::grid::{CursorPos, InputModes, SessionGrid};
 use super::osc52::Osc52Filter;
 
 /// 同一段文本在这个时间内再次投递给同一个 attach 时视为重复(Claude Code 在
@@ -107,6 +107,21 @@ pub struct Snapshot {
     pub rows: u16,
     /// Internal watermark for resize events represented by this snapshot.
     pub resize_revision: u64,
+}
+
+/// Plain-text screen snapshot paired with the exact buffer `seq` under one lock.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ScreenSnapshot {
+    pub session_id: u64,
+    pub cols: u16,
+    pub rows: u16,
+    pub cursor: CursorPos,
+    pub alt_screen: bool,
+    pub seq: u64,
+    pub exited: bool,
+    pub history_available: usize,
+    pub history_returned: usize,
+    pub text: String,
 }
 
 /// Replay bytes and geometry captured under the same model lock.
@@ -644,6 +659,37 @@ impl Session {
         }
     }
 
+    /// Capture a non-intrusive plain-text snapshot and `end_seq` under the same lock.
+    pub fn plain_text_screen(&self, scrollback_lines: usize) -> ScreenSnapshot {
+        let (snap, seq) = {
+            let shared = self.shared.lock().unwrap();
+            (
+                shared.grid.plain_text_snapshot(scrollback_lines),
+                shared.buffer.end_seq(),
+            )
+        };
+        ScreenSnapshot {
+            session_id: self.id,
+            cols: snap.cols,
+            rows: snap.rows,
+            cursor: snap.cursor,
+            alt_screen: snap.alt_screen,
+            seq,
+            exited: self.has_exited(),
+            history_available: snap.history_available,
+            history_returned: snap.history_returned,
+            text: snap.text,
+        }
+    }
+
+    pub fn input_modes(&self) -> InputModes {
+        self.shared.lock().unwrap().grid.input_modes()
+    }
+
+    pub fn end_seq(&self) -> u64 {
+        self.shared.lock().unwrap().buffer.end_seq()
+    }
+
     pub fn replay_from(&self, seq: u64) -> Option<(u64, Vec<u8>)> {
         self.replay_snapshot_from(seq)
             .map(|replay| (replay.end_seq, replay.bytes))
@@ -1051,6 +1097,47 @@ mod tests {
         sanitize_conpty_c0(&mut chunk2, &mut prev_esc);
         assert_eq!(&chunk2, b"\x0eD ");
         assert!(!prev_esc);
+    }
+
+    #[test]
+    fn plain_text_screen_reads_seq_and_grid_without_intrusive_side_effects() {
+        let session = test_support::session();
+        session.process_output(b"hello\r\n\x1b[?1h\x1b[?2004h\x1b[>4;1m");
+
+        let seq = session.end_seq();
+        assert!(seq > 0);
+        assert_eq!(
+            session.input_modes(),
+            InputModes {
+                app_cursor: true,
+                modify_other_keys: 1,
+                bracketed_paste: true,
+            }
+        );
+
+        let snap = session.plain_text_screen(0);
+        assert_eq!(snap.session_id, session.id);
+        assert_eq!((snap.cols, snap.rows), (80, 24));
+        assert_eq!(snap.seq, seq);
+        assert!(!snap.exited);
+        assert!(!snap.alt_screen);
+        assert_eq!(snap.cursor, super::super::grid::CursorPos { row: 1, col: 0 });
+        assert_eq!(snap.text, "hello\n");
+
+        // Non-intrusive invariant: no Viewport registered, no note_input, no default_colors mutated.
+        assert!(session.shared.lock().unwrap().viewports.is_empty());
+        assert!(session.since_last_input().is_none());
+        session.process_output(b"\x1b]11;?\x1b\\");
+        assert!(session.shared.lock().unwrap().grid.take_pty_replies().is_empty());
+
+        let vp = session.viewport(100, 30);
+        let resized_snap = session.plain_text_screen(0);
+        assert_eq!((resized_snap.cols, resized_snap.rows), (100, 30));
+        assert_eq!(session.shared.lock().unwrap().viewports.len(), 1);
+        drop(vp);
+
+        session.mark_exited();
+        assert!(session.plain_text_screen(0).exited);
     }
 }
 

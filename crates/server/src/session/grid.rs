@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::{Event, EventListener};
-use alacritty_terminal::grid::{Cursor, Dimensions, Grid};
+use alacritty_terminal::grid::{Cursor, Dimensions, Grid, Row};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::test::TermSize;
@@ -114,6 +114,35 @@ impl Handler for SnapshotModes {
     fn reset_state(&mut self) {
         *self = Self::default();
     }
+}
+
+const MAX_SCROLLBACK_LINES: usize = 500;
+
+/// 0-based visible terminal cursor coordinates returned by plain-text snapshots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct CursorPos {
+    pub row: usize,
+    pub col: usize,
+}
+
+/// Read-only terminal input mode flags needed to encode keys and pastes accurately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct InputModes {
+    pub app_cursor: bool,
+    pub modify_other_keys: u8,
+    pub bracketed_paste: bool,
+}
+
+/// Non-intrusive plain-text terminal screen snapshot extracted from `SessionGrid`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlainTextGrid {
+    pub cols: u16,
+    pub rows: u16,
+    pub cursor: CursorPos,
+    pub alt_screen: bool,
+    pub history_available: usize,
+    pub history_returned: usize,
+    pub text: String,
 }
 
 pub struct SessionGrid {
@@ -284,6 +313,77 @@ impl SessionGrid {
         (self.cols, self.rows)
     }
 
+    /// Return the terminal's current input encoding modes without modifying grid state.
+    pub fn input_modes(&self) -> InputModes {
+        let mode = self.term.mode();
+        InputModes {
+            app_cursor: mode.contains(TermMode::APP_CURSOR),
+            modify_other_keys: self.snapshot_modes.modify_other_keys,
+            bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE),
+        }
+    }
+
+    /// Extract a plain-text terminal snapshot with soft-wrapped lines merged and
+    /// trailing blank rows below `cursor.row` trimmed (non-alt-screen only).
+    pub fn plain_text_snapshot(&self, scrollback_lines: usize) -> PlainTextGrid {
+        let alt_screen =
+            self.snapshot_modes.alt_screen || self.term.mode().contains(TermMode::ALT_SCREEN);
+        let grid = self.term.grid();
+        let history_available = if alt_screen { 0 } else { grid.history_size() };
+        let history_returned = if alt_screen {
+            0
+        } else {
+            scrollback_lines
+                .min(MAX_SCROLLBACK_LINES)
+                .min(history_available)
+        };
+
+        let cols = self.cols as usize;
+        let rows = self.rows as usize;
+        let point = grid.cursor.point;
+        let cursor = CursorPos {
+            row: (point.line.0.max(0) as usize).min(rows.saturating_sub(1)),
+            col: point.column.0.min(cols.saturating_sub(1)),
+        };
+
+        let min_row = -(history_returned as i32);
+        let mut last_row = (rows as i32) - 1;
+        if !alt_screen {
+            while last_row > cursor.row as i32
+                && last_row >= min_row
+                && is_blank_row(&grid[Line(last_row)], cols)
+            {
+                last_row -= 1;
+            }
+        }
+
+        let mut lines = Vec::new();
+        let mut current = String::new();
+        for row in min_row..=last_row {
+            let line = &grid[Line(row)];
+            append_plain_row(&mut current, line, cols);
+            let wrapped = !alt_screen
+                && row < last_row
+                && cols > 0
+                && line[Column(cols - 1)].flags.contains(Flags::WRAPLINE);
+            if !wrapped {
+                let trimmed_len = current.trim_end_matches(' ').len();
+                current.truncate(trimmed_len);
+                lines.push(std::mem::take(&mut current));
+            }
+        }
+
+        PlainTextGrid {
+            cols: self.cols,
+            rows: self.rows,
+            cursor,
+            alt_screen,
+            history_available,
+            history_returned,
+            text: lines.join("\n"),
+        }
+    }
+
     /// SGR 相关的 flags 子集：用于测试比对，避免因 WRAPLINE/WIDE_CHAR 等
     /// 排版记账位在 roundtrip 前后合理不同而导致误判。
     #[cfg(test)]
@@ -433,6 +533,33 @@ impl SessionGrid {
         let mut out = out.into_bytes();
         out.extend_from_slice(self.stream_tail.pending());
         out
+    }
+}
+
+fn is_spacer(cell: &Cell) -> bool {
+    cell.flags
+        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+}
+
+fn is_blank_row(row: &Row<Cell>, cols: usize) -> bool {
+    (0..cols).all(|col| {
+        let cell = &row[Column(col)];
+        is_spacer(cell)
+            || ((cell.c == '\0' || cell.c == ' ')
+                && cell.zerowidth().is_none_or(|extra| extra.is_empty()))
+    })
+}
+
+fn append_plain_row(out: &mut String, row: &Row<Cell>, cols: usize) {
+    for col in 0..cols {
+        let cell = &row[Column(col)];
+        if is_spacer(cell) {
+            continue;
+        }
+        out.push(if cell.c == '\0' { ' ' } else { cell.c });
+        if let Some(extra) = cell.zerowidth() {
+            out.extend(extra);
+        }
     }
 }
 
@@ -970,5 +1097,98 @@ mod tests {
 
         g.advance(b"\x1b_Ga=T,t=f,i=6,q=2;L2V0Yy9wYXNzd2Q=\x1b\\");
         assert!(g.take_pty_replies().is_empty());
+    }
+
+    #[test]
+    fn plain_text_strips_ansi_and_merges_soft_wraplines() {
+        let mut g = SessionGrid::new(10, 6);
+        g.advance(b"1234567890abcde\r\n\x1b[31mred\x1b[0m   \r\nnext\r\n");
+        let snap = g.plain_text_snapshot(0);
+        assert_eq!(snap.cols, 10);
+        assert_eq!(snap.rows, 6);
+        assert!(!snap.alt_screen);
+        assert_eq!(snap.cursor, CursorPos { row: 4, col: 0 });
+        assert_eq!(snap.text, "1234567890abcde\nred\nnext\n");
+
+        // Space at the soft-wrap boundary (col 9) must be preserved when merging wrapped lines.
+        let mut g_space = SessionGrid::new(10, 4);
+        g_space.advance(b"123456789 abc");
+        let snap_space = g_space.plain_text_snapshot(0);
+        assert_eq!(snap_space.text, "123456789 abc");
+
+        // Content below cursor.row must not be truncated; only trailing blank rows > cursor.row are trimmed.
+        let mut g_below = SessionGrid::new(10, 6);
+        g_below.advance(b"row0\x1b[3;1Hrow2\x1b[1;5H");
+        let snap_below = g_below.plain_text_snapshot(0);
+        assert_eq!(snap_below.cursor, CursorPos { row: 0, col: 4 });
+        assert_eq!(snap_below.text, "row0\n\nrow2");
+    }
+
+    #[test]
+    fn plain_text_skips_cjk_wide_char_spacers() {
+        let mut g = SessionGrid::new(10, 4);
+        g.advance("中文A".as_bytes());
+        let snap = g.plain_text_snapshot(0);
+        assert_eq!(snap.cursor, CursorPos { row: 0, col: 5 });
+        assert_eq!(snap.text, "中文A");
+
+        // Wide char at last column wraps via LEADING_WIDE_CHAR_SPACER | WRAPLINE without inserting a space or newline.
+        let mut g_wrap = SessionGrid::new(10, 4);
+        g_wrap.advance("123456789中文".as_bytes());
+        let snap_wrap = g_wrap.plain_text_snapshot(0);
+        assert_eq!(snap_wrap.text, "123456789中文");
+    }
+
+    #[test]
+    fn plain_text_clamps_scrollback_and_ignores_on_alt_screen() {
+        let mut g = SessionGrid::new(20, 3);
+        for i in 0..10 {
+            if i > 0 {
+                g.advance(b"\r\n");
+            }
+            g.advance(format!("line{i}").as_bytes());
+        }
+        let s0 = g.plain_text_snapshot(0);
+        assert_eq!(s0.history_available, 7);
+        assert_eq!(s0.history_returned, 0);
+        assert_eq!(s0.text, "line7\nline8\nline9");
+
+        let s3 = g.plain_text_snapshot(3);
+        assert_eq!(s3.history_available, 7);
+        assert_eq!(s3.history_returned, 3);
+        assert_eq!(s3.text, "line4\nline5\nline6\nline7\nline8\nline9");
+
+        // Exceeding 500 lines clamps to 500.
+        let mut g_big = SessionGrid::new(20, 3);
+        for i in 0..550 {
+            if i > 0 {
+                g_big.advance(b"\r\n");
+            }
+            g_big.advance(format!("h{i}").as_bytes());
+        }
+        let s_big = g_big.plain_text_snapshot(9999);
+        assert!(s_big.history_available > 500);
+        assert_eq!(s_big.history_returned, 500);
+        assert_eq!(s_big.text.lines().count(), 503);
+
+        // Alt-screen ignores scrollback and preserves all viewport rows.
+        g_big.advance(b"\x1b[?1049h\x1b[HALT1\r\nALT2");
+        let s_alt = g_big.plain_text_snapshot(9999);
+        assert!(s_alt.alt_screen);
+        assert_eq!(s_alt.history_available, 0);
+        assert_eq!(s_alt.history_returned, 0);
+        assert_eq!(s_alt.text, "ALT1\nALT2\n");
+
+        // Input modes tracking stays accurate across toggles.
+        assert_eq!(g_big.input_modes(), InputModes::default());
+        g_big.advance(b"\x1b[?1h\x1b[>4;2m\x1b[?2004h");
+        assert_eq!(
+            g_big.input_modes(),
+            InputModes {
+                app_cursor: true,
+                modify_other_keys: 2,
+                bracketed_paste: true,
+            }
+        );
     }
 }
