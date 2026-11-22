@@ -12,7 +12,7 @@ use axum::Json;
 
 use std::net::SocketAddr;
 
-use axum::extract::{ConnectInfo, Path, Query};
+use axum::extract::{ConnectInfo, Path, Query, RawQuery};
 
 use crate::agent::apply::{apply, default_backup_dir, ApplyError, ApplyOpts};
 use crate::agent::detect::DetectEnv;
@@ -472,23 +472,41 @@ pub struct AnswerBody {
     pub updated_input: Option<serde_json::Value>,
 }
 
-#[derive(serde::Deserialize)]
-pub struct PendingQuery {
-    #[serde(default)]
-    pub session_id: Option<u64>,
+fn parse_pending_session_id(raw: Option<&str>) -> Result<Option<u64>, String> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let mut session_id = None;
+    for pair in raw.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+        if k == "session_id" {
+            let parsed = v
+                .parse::<u64>()
+                .map_err(|_| format!("invalid session_id: {v}"))?;
+            session_id = Some(parsed);
+        }
+    }
+    Ok(session_id)
 }
 
 /// `GET /api/agents/pending` —— 当前有哪些请求在等人。
 pub async fn pending(
     State(state): State<AppState>,
-    Query(q): Query<PendingQuery>,
     headers: HeaderMap,
+    RawQuery(raw_query): RawQuery,
 ) -> Response {
     if !bearer_ok(&headers, &state.token) {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
+    let session_id = match parse_pending_session_id(raw_query.as_deref()) {
+        Ok(id) => id,
+        Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+    };
     Json(serde_json::json!({
-        "pending": crate::mcp::service::list_pending_approvals(&state, q.session_id)
+        "pending": crate::mcp::service::list_pending_approvals(&state, session_id)
     }))
     .into_response()
 }

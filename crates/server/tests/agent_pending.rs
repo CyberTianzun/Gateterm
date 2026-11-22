@@ -312,3 +312,39 @@ async fn pending_filters_by_optional_session_id() {
     let _ = hook1.await;
     let _ = hook2.await;
 }
+
+#[tokio::test]
+async fn pending_requires_bearer_before_query_validation() {
+    let addr = server(30).await;
+    let client = reqwest::Client::new();
+
+    let unauth_bad = client
+        .get(format!("http://{addr}/api/agents/pending?session_id=bad"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauth_bad.status(), 401);
+
+    let query_tok_bad = client
+        .get(format!("http://{addr}/api/agents/pending?session_id=bad&token=tok"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(query_tok_bad.status(), 401);
+
+    let auth_bad = client
+        .get(format!("http://{addr}/api/agents/pending?session_id=bad"))
+        .header("Authorization", "Bearer tok")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(auth_bad.status(), 400);
+
+    let auth_empty = client
+        .get(format!("http://{addr}/api/agents/pending?session_id="))
+        .header("Authorization", "Bearer tok")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(auth_empty.status(), 400);
+}

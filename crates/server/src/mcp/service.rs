@@ -254,16 +254,16 @@ pub(crate) async fn send_input_to_session(
     )
     .map_err(ServiceError::BadRequest)?;
 
+    let wait_ms = args.wait_ms.min(MAX_WAIT_MS);
+    // Subscribe before checking/writing so an exit or fast command echo cannot slip past unobserved.
+    let rx = (wait_ms > 0).then(|| session.subscribe());
+
     if session.has_exited() {
         return Err(ServiceError::Conflict(format!(
             "session {} has exited",
             session.id
         )));
     }
-
-    let wait_ms = args.wait_ms.min(MAX_WAIT_MS);
-    // Subscribe before writing to the PTY so fast command echo cannot race past us.
-    let rx = (wait_ms > 0).then(|| session.subscribe());
 
     if let Err(e) = session.write_input(&bytes) {
         let msg = format!("{e:#}");
@@ -282,6 +282,9 @@ pub(crate) async fn send_input_to_session(
         let mut saw_output = false;
 
         loop {
+            if session.has_exited() {
+                break;
+            }
             let now = tokio::time::Instant::now();
             let next_wakeup = match quiet_deadline.filter(|_| saw_output) {
                 Some(q) if q < deadline => q,
