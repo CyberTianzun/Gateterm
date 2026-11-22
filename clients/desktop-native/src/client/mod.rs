@@ -1,4 +1,5 @@
 pub mod api;
+pub mod mcp;
 pub mod ws;
 
 use std::collections::{HashMap, HashSet};
@@ -9,6 +10,10 @@ pub use api::{
     AgentIntegrationStatus, AgentSessionInfo, AgentSessionsResponse, ChatBlock, ChatMessage,
     ChatRole, ChatWindow, CloudStatus, GateHttpClient, HistoryEntry, HistoryOpenResponse,
     HistoryPage, LauncherItem, PendingRequestInfo,
+};
+pub use mcp::{
+    McpPresets, McpServerStatus, build_mcp_presets, derive_mcp_urls, mask_token,
+    should_apply_status_response,
 };
 pub use ws::{WsCommand, WsConnectionState, WsEvent, spawn_ws_worker};
 

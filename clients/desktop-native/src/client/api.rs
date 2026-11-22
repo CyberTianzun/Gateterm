@@ -6,6 +6,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::client::mcp::McpServerStatus;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LauncherItem {
     pub id: String,
@@ -225,6 +227,13 @@ pub struct CloudStatus {
     pub email: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct McpStatusBody {
+    enabled: bool,
+    #[serde(default)]
+    protocol_versions: Vec<String>,
+}
+
 #[derive(Clone)]
 pub struct GateHttpClient {
     http: Client,
@@ -247,6 +256,33 @@ impl GateHttpClient {
 
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.base_url, path)
+    }
+
+    pub async fn fetch_mcp_status(&self) -> McpServerStatus {
+        let resp = match self
+            .http
+            .get(self.url("/api/mcp/status"))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(err) => return McpServerStatus::Error(err.to_string()),
+        };
+        let status = resp.status();
+        if status.as_u16() == 404 {
+            return McpServerStatus::Unsupported;
+        }
+        if !status.is_success() {
+            return McpServerStatus::Error(format!("HTTP {status}"));
+        }
+        match resp.json::<McpStatusBody>().await {
+            Ok(body) if body.enabled => McpServerStatus::Enabled {
+                protocol_versions: body.protocol_versions,
+            },
+            Ok(_) => McpServerStatus::Disabled,
+            Err(err) => McpServerStatus::Error(err.to_string()),
+        }
     }
 
     pub async fn fetch_launchers(&self) -> Result<Vec<LauncherItem>> {
@@ -472,5 +508,88 @@ impl GateHttpClient {
         }
         let parsed: PasteImageResp = resp.json().await?;
         Ok(parsed.path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    use super::*;
+
+    async fn serve_one_http_response(
+        status_line: &str,
+        body: &str,
+    ) -> (String, tokio::task::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let resp_str = format!(
+            "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let handle = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let n = sock.read(&mut buf).await.unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            let _ = sock.write_all(resp_str.as_bytes()).await;
+            let _ = sock.shutdown().await;
+            req
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[tokio::test]
+    async fn fetch_mcp_status_maps_enabled_disabled_404_and_errors() {
+        let (base_ok, req_ok) = serve_one_http_response(
+            "200 OK",
+            r#"{"enabled":true,"protocol_versions":["2025-11-25","2025-06-18"],"endpoint":"/mcp"}"#,
+        )
+        .await;
+        let client_ok = GateHttpClient::new(format!("{base_ok}/gateterm/"), "tok-123");
+        let status_ok = client_ok.fetch_mcp_status().await;
+        assert_eq!(
+            status_ok,
+            McpServerStatus::Enabled {
+                protocol_versions: vec!["2025-11-25".to_string(), "2025-06-18".to_string()],
+            }
+        );
+        let raw_req = req_ok.await.unwrap();
+        assert!(raw_req.starts_with("GET /gateterm/api/mcp/status "));
+        assert!(raw_req.to_ascii_lowercase().contains("authorization: bearer tok-123"));
+
+        let (base_dis, _) =
+            serve_one_http_response("200 OK", r#"{"enabled":false,"protocol_versions":[]}"#).await;
+        assert_eq!(
+            GateHttpClient::new(base_dis, "tok-123")
+                .fetch_mcp_status()
+                .await,
+            McpServerStatus::Disabled
+        );
+
+        let (base_404, _) = serve_one_http_response("404 Not Found", "").await;
+        assert_eq!(
+            GateHttpClient::new(base_404, "tok-123")
+                .fetch_mcp_status()
+                .await,
+            McpServerStatus::Unsupported
+        );
+
+        let (base_401, _) = serve_one_http_response("401 Unauthorized", "").await;
+        assert!(matches!(
+            GateHttpClient::new(base_401, "tok-123")
+                .fetch_mcp_status()
+                .await,
+            McpServerStatus::Error(_)
+        ));
+
+        let (base_bad_json, _) = serve_one_http_response("200 OK", r#"{"oops":true}"#).await;
+        assert!(matches!(
+            GateHttpClient::new(base_bad_json, "tok-123")
+                .fetch_mcp_status()
+                .await,
+            McpServerStatus::Error(_)
+        ));
     }
 }

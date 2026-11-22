@@ -2,11 +2,12 @@
 //! - Appearance, Font, Autostart, Close-to-Tray, `config.toml` & Logs (`SettingsSection::Appearance`)
 //! - Embedded Server Host/Port/Token, Save & Apply, and Android QR Code Pairing (`SettingsSection::LocalServer`)
 //! - AI Coding Agent Hooks (`SettingsSection::AgentHooks`)
+//! - External Agent MCP & HTTP API Access (`SettingsSection::Mcp`)
 //! - Gateterm Cloud Account Sign-In (Browser PKCE OAuth), Sign-Out & Account Deletion (`SettingsSection::Cloud`)
 
 use gpui::{
-    AnyElement, ClipboardItem, Context, InteractiveElement as _, IntoElement, ParentElement as _,
-    SharedString, Styled as _, div, px,
+    AnyElement, App, ClipboardItem, Context, InteractiveElement as _, IntoElement,
+    ParentElement as _, SharedString, Styled as _, div, px,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _,
@@ -19,7 +20,8 @@ use gpui_component::{
 
 use super::app::GatetermWorkbench;
 use crate::client::api::{AgentIntegrationStatus, CloudStatus};
-use crate::i18n::LanguagePref;
+use crate::client::mcp::{McpServerStatus, build_mcp_presets};
+use crate::i18n::{LanguagePref, Locale};
 use crate::system::{
     cloud::{CloudAccountStatus, CloudAction, RelayRegion},
     configfile::ServerConfigSummary,
@@ -33,6 +35,7 @@ pub enum SettingsSection {
     Appearance,
     LocalServer,
     AgentHooks,
+    Mcp,
     Cloud,
 }
 
@@ -47,6 +50,10 @@ pub struct SettingsModalState {
     pub agent_hooks: Vec<AgentIntegrationStatus>,
     pub hooks_loading: bool,
     pub hooks_message: Option<String>,
+    pub mcp_server_id: Option<String>,
+    pub mcp_reveal_token: bool,
+    pub mcp_status: McpServerStatus,
+    pub mcp_copied_key: Option<String>,
     pub cloud_status: Option<CloudStatus>,
     pub local_cloud_account: CloudAccountStatus,
     pub cloud_region: RelayRegion,
@@ -69,6 +76,10 @@ impl Default for SettingsModalState {
             agent_hooks: Vec::new(),
             hooks_loading: false,
             hooks_message: None,
+            mcp_server_id: None,
+            mcp_reveal_token: false,
+            mcp_status: McpServerStatus::Loading,
+            mcp_copied_key: None,
             cloud_status: None,
             local_cloud_account: CloudAccountStatus::LoggedOut,
             cloud_region: RelayRegion::China,
@@ -149,6 +160,22 @@ pub fn render_settings_modal(
                 })),
         )
         .child(
+            Button::new("set-nav-mcp")
+                .small()
+                .with_variant(if active_sec == SettingsSection::Mcp {
+                    ButtonVariant::Primary
+                } else {
+                    ButtonVariant::Ghost
+                })
+                .icon(IconName::Network)
+                .label(locale.t("MCP 接入", "MCP Access"))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.settings_modal.section = SettingsSection::Mcp;
+                    this.refresh_selected_mcp_status(cx);
+                    cx.notify();
+                })),
+        )
+        .child(
             Button::new("set-nav-cloud")
                 .small()
                 .with_variant(if active_sec == SettingsSection::Cloud {
@@ -169,6 +196,7 @@ pub fn render_settings_modal(
         SettingsSection::Appearance => render_appearance_section(workbench, cx),
         SettingsSection::LocalServer => render_local_server_section(workbench, cx),
         SettingsSection::AgentHooks => render_agent_hooks_section(workbench, cx),
+        SettingsSection::Mcp => render_mcp_section(workbench, cx),
         SettingsSection::Cloud => render_cloud_section(workbench, cx),
     };
 
@@ -1713,5 +1741,570 @@ fn render_cloud_section(
                         .child(SharedString::from(msg.clone()))
                 }),
         )
+        .into_any_element()
+}
+
+fn mcp_copy_button(
+    id: &'static str,
+    copy_key: &'static str,
+    copied_key: Option<&str>,
+    copy_text: String,
+    locale: Locale,
+    cx: &mut Context<GatetermWorkbench>,
+) -> Button {
+    let is_copied = copied_key == Some(copy_key);
+    Button::new(id)
+        .xsmall()
+        .with_variant(if is_copied {
+            ButtonVariant::Primary
+        } else {
+            ButtonVariant::Secondary
+        })
+        .icon(if is_copied {
+            IconName::Check
+        } else {
+            IconName::Copy
+        })
+        .label(if is_copied {
+            locale.t("已复制", "Copied")
+        } else {
+            locale.t("复制", "Copy")
+        })
+        .on_click(cx.listener(move |this, _, _, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
+            this.mark_mcp_copied(copy_key, cx);
+        }))
+}
+
+fn mcp_code_block(text: &str, cx: &App) -> AnyElement {
+    div()
+        .w_full()
+        .min_w(px(0.0))
+        .p_2p5()
+        .rounded(px(6.0))
+        .bg(cx.theme().background)
+        .border_1()
+        .border_color(cx.theme().border)
+        .overflow_hidden()
+        .font_family(cx.theme().mono_font_family.clone())
+        .text_xs()
+        .text_color(cx.theme().foreground)
+        .child(SharedString::from(text.to_string()))
+        .into_any_element()
+}
+
+fn mcp_card_shell(
+    title: &str,
+    desc: &str,
+    header_action: Option<Button>,
+    cx: &App,
+) -> gpui::Div {
+    v_flex()
+        .w_full()
+        .min_w(px(0.0))
+        .p_3p5()
+        .gap_2p5()
+        .rounded(px(6.0))
+        .bg(cx.theme().secondary.opacity(0.45))
+        .border_1()
+        .border_color(cx.theme().border)
+        .child(
+            v_flex()
+                .w_full()
+                .min_w(px(0.0))
+                .gap_1()
+                .child(
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(cx.theme().foreground)
+                                .child(SharedString::from(title.to_string())),
+                        )
+                        .children(header_action),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(SharedString::from(desc.to_string())),
+                ),
+        )
+}
+
+#[inline(never)]
+fn render_mcp_section(
+    workbench: &GatetermWorkbench,
+    cx: &mut Context<GatetermWorkbench>,
+) -> AnyElement {
+    let locale = workbench.locale;
+    let target = workbench.resolve_mcp_target(workbench.settings_modal.mcp_server_id.as_deref());
+
+    let Some((selected_id, base_url, token)) = target else {
+        return v_flex()
+            .w_full()
+            .p_5()
+            .gap_3()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(cx.theme().foreground)
+                    .child(locale.t("外部 Agent MCP 与 HTTP API 接入", "External Agent MCP & HTTP API Setup")),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(locale.t(
+                        "未找到可用的服务器配置，请先启用内置服务或添加远程服务器。",
+                        "No server profile available. Enable the embedded server or add a remote server first.",
+                    )),
+            )
+            .into_any_element();
+    };
+
+    let reveal = workbench.settings_modal.mcp_reveal_token;
+    let copied_key = workbench.settings_modal.mcp_copied_key.as_deref();
+    let display = build_mcp_presets(&base_url, &token, !reveal);
+    let raw = build_mcp_presets(&base_url, &token, false);
+
+    let mut server_buttons = h_flex().w_full().gap_1p5().flex_wrap().items_center();
+    for (srv_id, conn) in &workbench.servers {
+        let is_selected = srv_id == &selected_id;
+        let click_id = srv_id.clone();
+        server_buttons = server_buttons.child(
+            Button::new(SharedString::from(format!("mcp-srv-{srv_id}")))
+                .xsmall()
+                .with_variant(if is_selected {
+                    ButtonVariant::Primary
+                } else {
+                    ButtonVariant::Secondary
+                })
+                .label(SharedString::from(conn.profile.name.clone()))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings_modal.mcp_server_id = Some(click_id.clone());
+                    this.settings_modal.mcp_copied_key = None;
+                    this.refresh_selected_mcp_status(cx);
+                })),
+        );
+    }
+
+    let (badge_text, badge_color, banner_text, protocols_text): (
+        SharedString,
+        gpui::Hsla,
+        Option<String>,
+        Option<String>,
+    ) = match &workbench.settings_modal.mcp_status {
+        McpServerStatus::Loading => (
+            locale.t("正在检测 MCP 服务…", "Checking MCP status…").into(),
+            cx.theme().muted_foreground,
+            None,
+            None,
+        ),
+        McpServerStatus::Enabled { protocol_versions } => {
+            let protos = if protocol_versions.is_empty() {
+                None
+            } else {
+                Some(format!(
+                    "{}: {}",
+                    locale.t("协议", "Protocols"),
+                    protocol_versions.join(", ")
+                ))
+            };
+            (
+                locale.t("● MCP 已启用", "● MCP Enabled").into(),
+                cx.theme().success,
+                None,
+                protos,
+            )
+        }
+        McpServerStatus::Disabled => (
+            locale.t("MCP 已关闭", "MCP Disabled").into(),
+            cx.theme().danger,
+            Some(
+                locale
+                    .t(
+                        "服务端在 config.toml 中将 [mcp].enabled 设为 false，/mcp 当前不可用。",
+                        "The server has [mcp].enabled = false in config.toml; /mcp is currently unavailable.",
+                    )
+                    .to_string(),
+            ),
+            None,
+        ),
+        McpServerStatus::Unsupported => (
+            locale.t("服务端版本不支持", "Server Unsupported").into(),
+            cx.theme().warning,
+            Some(
+                locale
+                    .t(
+                        "当前连接的 gateterm-server 版本暂不支持 MCP，请升级服务端。",
+                        "This gateterm-server version does not support MCP yet; please upgrade the server.",
+                    )
+                    .to_string(),
+            ),
+            None,
+        ),
+        McpServerStatus::Error(err) => (
+            locale.t("状态探测失败", "Status Check Failed").into(),
+            cx.theme().danger,
+            Some(format!(
+                "{} ({err})",
+                locale.t(
+                    "无法探测 /api/mcp/status，以下配置仍可查看与复制。",
+                    "Could not reach /api/mcp/status; presets below remain copyable."
+                )
+            )),
+            None,
+        ),
+    };
+
+    let status_toolbar = h_flex()
+        .w_full()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .flex_wrap()
+        .child(
+            h_flex()
+                .items_center()
+                .gap_2()
+                .flex_wrap()
+                .child(
+                    div()
+                        .px_2p5()
+                        .py_0p5()
+                        .rounded(px(999.0))
+                        .bg(badge_color.opacity(0.14))
+                        .border_1()
+                        .border_color(badge_color.opacity(0.45))
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(badge_color)
+                        .child(badge_text),
+                )
+                .children(protocols_text.map(|protos| {
+                    div()
+                        .font_family(cx.theme().mono_font_family.clone())
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(SharedString::from(protos))
+                })),
+        )
+        .child(
+            h_flex()
+                .items_center()
+                .gap_1p5()
+                .child(
+                    Button::new("mcp-refresh")
+                        .xsmall()
+                        .ghost()
+                        .icon(IconName::Redo)
+                        .label(locale.t("刷新", "Refresh"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.refresh_selected_mcp_status(cx);
+                        })),
+                )
+                .child(
+                    Button::new("mcp-toggle-reveal")
+                        .xsmall()
+                        .with_variant(if reveal {
+                            ButtonVariant::Primary
+                        } else {
+                            ButtonVariant::Secondary
+                        })
+                        .label(if reveal {
+                            locale.t("隐藏 Token", "Hide Token")
+                        } else {
+                            locale.t("显示 Token", "Reveal Token")
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.settings_modal.mcp_reveal_token =
+                                !this.settings_modal.mcp_reveal_token;
+                            cx.notify();
+                        })),
+                ),
+        );
+
+    let endpoint_card = mcp_card_shell(
+        locale.t("Endpoint & Header", "Endpoint & Header"),
+        locale.t(
+            "适合网页或桌面 AI 客户端的表单填入。",
+            "For web or desktop AI clients that ask for an endpoint URL and header.",
+        ),
+        None,
+        cx,
+    )
+    .child(
+        v_flex()
+            .w_full()
+            .min_w(px(0.0))
+            .gap_1()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(locale.t("MCP URL", "MCP URL")),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex_1().min_w(px(0.0)).child(mcp_code_block(&display.mcp_url, cx)))
+                    .child(mcp_copy_button(
+                        "mcp-copy-url",
+                        "url",
+                        copied_key,
+                        raw.mcp_url,
+                        locale,
+                        cx,
+                    )),
+            ),
+    )
+    .child(
+        v_flex()
+            .w_full()
+            .min_w(px(0.0))
+            .gap_1()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(locale.t("Authorization Header", "Authorization Header")),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .child(mcp_code_block(&display.auth_header, cx)),
+                    )
+                    .child(mcp_copy_button(
+                        "mcp-copy-auth",
+                        "auth",
+                        copied_key,
+                        raw.auth_header,
+                        locale,
+                        cx,
+                    )),
+            ),
+    );
+
+    let json_card = mcp_card_shell(
+        locale.t("通用 Streamable HTTP MCP JSON", "Generic Streamable HTTP MCP JSON"),
+        locale.t(
+            "适合 Cursor、Antigravity、OpenCode、Claude Desktop 等支持远程 MCP JSON 的客户端。",
+            "For Cursor, Antigravity, OpenCode, Claude Desktop, and other clients using mcpServers JSON.",
+        ),
+        Some(mcp_copy_button(
+            "mcp-copy-json",
+            "json",
+            copied_key,
+            raw.generic_json,
+            locale,
+            cx,
+        )),
+        cx,
+    )
+    .child(mcp_code_block(&display.generic_json, cx));
+
+    let agents_card = mcp_card_shell(
+        locale.t("主流 Coding Agent 快速接入", "Coding Agent Quick Setup"),
+        locale.t(
+            "复制下方命令在终端执行，或写入对应配置文件。",
+            "Run the CLI command in your terminal or add the snippet to the agent config file.",
+        ),
+        None,
+        cx,
+    )
+    .child(
+        v_flex()
+            .w_full()
+            .min_w(px(0.0))
+            .gap_1p5()
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(cx.theme().foreground)
+                            .child(locale.t("Claude Code（一键 CLI 命令）", "Claude Code (CLI command)")),
+                    )
+                    .child(mcp_copy_button(
+                        "mcp-copy-claude",
+                        "claude",
+                        copied_key,
+                        raw.claude_code_cmd,
+                        locale,
+                        cx,
+                    )),
+            )
+            .child(mcp_code_block(&display.claude_code_cmd, cx)),
+    )
+    .child(
+        v_flex()
+            .w_full()
+            .min_w(px(0.0))
+            .gap_1p5()
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(cx.theme().foreground)
+                            .child(locale.t("Codex（~/.codex/config.toml）", "Codex (~/.codex/config.toml)")),
+                    )
+                    .child(mcp_copy_button(
+                        "mcp-copy-codex",
+                        "codex",
+                        copied_key,
+                        raw.codex_toml,
+                        locale,
+                        cx,
+                    )),
+            )
+            .child(mcp_code_block(&display.codex_toml, cx)),
+    );
+
+    let curl_card = mcp_card_shell(
+        locale.t("HTTP API / curl 速查", "HTTP API / curl Quick Reference"),
+        locale.t(
+            "查看会话列表、读取屏幕、发送指令并等回显、查看与答复待审批请求。",
+            "List sessions, read screen output, send input with echo wait, and handle pending approvals.",
+        ),
+        Some(mcp_copy_button(
+            "mcp-copy-curl",
+            "curl",
+            copied_key,
+            raw.curl_examples,
+            locale,
+            cx,
+        )),
+        cx,
+    )
+    .child(mcp_code_block(&display.curl_examples, cx));
+
+    v_flex()
+        .w_full()
+        .min_w(px(0.0))
+        .p_5()
+        .gap_3p5()
+        .child(
+            v_flex()
+                .gap_1()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(cx.theme().foreground)
+                        .child(locale.t(
+                            "外部 Agent MCP 与 HTTP API 接入",
+                            "External Agent MCP & HTTP API Setup",
+                        )),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(locale.t(
+                            "直接基于目标服务器地址与 Token 生成，可在本地或远端 Agent 客户端中一键复制接入。",
+                            "Generated from the target server endpoint and Bearer token for one-click setup in local or remote agent clients.",
+                        )),
+                ),
+        )
+        .children((!workbench.servers.is_empty()).then(|| {
+            v_flex()
+                .w_full()
+                .min_w(px(0.0))
+                .gap_1p5()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(cx.theme().muted_foreground)
+                        .child(locale.t("目标服务器", "Target Server")),
+                )
+                .child(server_buttons)
+        }))
+        .child(status_toolbar)
+        .children(banner_text.map(|msg| {
+            h_flex()
+                .w_full()
+                .min_w(px(0.0))
+                .items_start()
+                .gap_2()
+                .p_2p5()
+                .rounded(px(6.0))
+                .bg(badge_color.opacity(0.12))
+                .border_1()
+                .border_color(badge_color.opacity(0.45))
+                .child(
+                    Icon::new(IconName::TriangleAlert)
+                        .small()
+                        .text_color(badge_color),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .text_xs()
+                        .text_color(cx.theme().foreground)
+                        .child(SharedString::from(msg)),
+                )
+        }))
+        .child(
+            h_flex()
+                .w_full()
+                .min_w(px(0.0))
+                .items_start()
+                .gap_2()
+                .p_2p5()
+                .rounded(px(6.0))
+                .bg(cx.theme().secondary.opacity(0.45))
+                .border_1()
+                .border_color(cx.theme().border)
+                .child(
+                    Icon::new(IconName::Info)
+                        .small()
+                        .text_color(cx.theme().muted_foreground),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(locale.t(
+                            "安全提示：切勿将包含 Bearer Token 的配置粘贴进公开仓库或不可信页面；若服务端未配置固定 token，服务重启后随机 token 会变化，届时需重新复制。",
+                            "Security notice: Never paste configs containing your Bearer token into public repos or untrusted pages. If the server uses an ephemeral random token, it changes on server restart and you will need to copy it again.",
+                        )),
+                ),
+        )
+        .child(endpoint_card)
+        .child(json_card)
+        .child(agents_card)
+        .child(curl_card)
         .into_any_element()
 }

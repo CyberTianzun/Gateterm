@@ -163,6 +163,7 @@ pub struct GatetermWorkbench {
     pub last_window_title: String,
     pub cloud_abort: Option<tokio::task::AbortHandle>,
     pub cloud_generation: u64,
+    pub mcp_status_generation: u64,
 
     _subscriptions: Vec<Subscription>,
 }
@@ -446,6 +447,7 @@ impl GatetermWorkbench {
             last_window_title: "Gateterm".to_string(),
             cloud_abort: None,
             cloud_generation: 0,
+            mcp_status_generation: 0,
             _subscriptions: subscriptions,
         };
 
@@ -621,6 +623,12 @@ impl GatetermWorkbench {
                         this.refresh_pairing_from_supervisor();
                         this.refresh_tray_status();
                         this.connect_server(LOCAL_SERVER_ID, cx);
+                        if this.settings_modal.open
+                            && this.settings_modal.section
+                                == super::settings_modal::SettingsSection::Mcp
+                        {
+                            this.refresh_selected_mcp_status(cx);
+                        }
                     });
                 }
                 Err(err) => {
@@ -1832,9 +1840,127 @@ impl GatetermWorkbench {
             crate::system::autostart::is_enabled().unwrap_or(false);
         self.settings_modal.server_summary = crate::system::configfile::load_server_summary();
         self.settings_modal.local_cloud_account = crate::system::cloud::status_from_local_creds();
+        self.settings_modal.mcp_reveal_token = false;
+        self.settings_modal.mcp_copied_key = None;
+        self.settings_modal.mcp_server_id = None;
         self.refresh_pairing_from_supervisor();
         self.refresh_settings_hooks_and_cloud(cx);
+        if self.settings_modal.section == super::settings_modal::SettingsSection::Mcp {
+            self.refresh_selected_mcp_status(cx);
+        }
         cx.notify();
+    }
+
+    pub fn resolve_mcp_target(&self, requested_id: Option<&str>) -> Option<(String, String, String)> {
+        let candidate_id = requested_id.unwrap_or(&self.active_server_id);
+        let entry = self
+            .servers
+            .get_key_value(candidate_id)
+            .or_else(|| self.servers.iter().next());
+        if let Some((srv_id, conn)) = entry {
+            let is_local = srv_id == LOCAL_SERVER_ID || conn.profile.is_embedded;
+            if is_local
+                && let Some(sup) = self
+                    .local_supervisor
+                    .as_ref()
+                    .filter(|sup| sup.listen_addr().is_some())
+            {
+                return Some((
+                    srv_id.clone(),
+                    sup.base_url(),
+                    sup.token().to_string(),
+                ));
+            }
+            return Some((
+                srv_id.clone(),
+                conn.profile.http_base_url(),
+                conn.profile.token.clone(),
+            ));
+        }
+        self.local_supervisor
+            .as_ref()
+            .filter(|sup| sup.listen_addr().is_some())
+            .map(|sup| {
+                (
+                    LOCAL_SERVER_ID.to_string(),
+                    sup.base_url(),
+                    sup.token().to_string(),
+                )
+            })
+    }
+
+    pub fn refresh_selected_mcp_status(&mut self, cx: &mut Context<Self>) {
+        let Some((server_id, base_url, token)) =
+            self.resolve_mcp_target(self.settings_modal.mcp_server_id.as_deref())
+        else {
+            self.settings_modal.mcp_status = crate::client::mcp::McpServerStatus::Error(
+                self.locale
+                    .t("没有可用的服务器配置", "No server profile configured")
+                    .to_string(),
+            );
+            cx.notify();
+            return;
+        };
+        self.settings_modal.mcp_server_id = Some(server_id.clone());
+        self.refresh_mcp_status(server_id, base_url, token, cx);
+    }
+
+    pub fn refresh_mcp_status(
+        &mut self,
+        server_id: String,
+        base_url: String,
+        token: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.mcp_status_generation = self.mcp_status_generation.wrapping_add(1);
+        let req_gen = self.mcp_status_generation;
+        self.settings_modal.mcp_status = crate::client::mcp::McpServerStatus::Loading;
+        cx.notify();
+
+        let (_, api_base_url) = crate::client::mcp::derive_mcp_urls(&base_url);
+        let http = GateHttpClient::new(api_base_url, token);
+        let task = Tokio::spawn_result(cx, async move { Ok(http.fetch_mcp_status().await) });
+
+        cx.spawn(async move |this, cx| {
+            if let Ok(status) = task.await {
+                let _ = this.update(cx, |this, cx| {
+                    let current_selected_id = this
+                        .settings_modal
+                        .mcp_server_id
+                        .as_deref()
+                        .unwrap_or(&this.active_server_id);
+                    if crate::client::mcp::should_apply_status_response(
+                        current_selected_id,
+                        &server_id,
+                    ) && this.mcp_status_generation == req_gen
+                    {
+                        this.settings_modal.mcp_status = status;
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    pub fn mark_mcp_copied(&mut self, key: &'static str, cx: &mut Context<Self>) {
+        self.settings_modal.mcp_copied_key = Some(key.to_string());
+        cx.notify();
+
+        let expected = key.to_string();
+        let timer = Tokio::spawn(cx, async {
+            tokio::time::sleep(std::time::Duration::from_millis(1600)).await;
+        });
+        cx.spawn(async move |this, cx| {
+            let _ = timer.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.settings_modal.mcp_copied_key.as_deref() == Some(expected.as_str()) {
+                    this.settings_modal.mcp_copied_key = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     pub fn refresh_settings_hooks_and_cloud(&mut self, cx: &mut Context<Self>) {
