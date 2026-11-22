@@ -7,5 +7,6 @@ pub mod config;
 pub mod conn;
 pub mod launcher;
 pub mod keyboard;
+pub mod mcp;
 pub mod session;
 pub mod update;

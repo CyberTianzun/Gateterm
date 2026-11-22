@@ -148,6 +148,19 @@ impl Default for ClipboardConfig {
     }
 }
 
+/// `[mcp]` —— 外部 agent MCP server 与 HTTP API 开关。
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct McpConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Config {
     /// 配置文件里没写就是 `None` —— **「没指定」是个真实存在的状态**,不能在这一层
@@ -167,6 +180,8 @@ pub struct Config {
     pub cloud: CloudConfig,
     #[serde(default)]
     pub clipboard: ClipboardConfig,
+    #[serde(default)]
+    pub mcp: McpConfig,
     /// 自定义 Web 页面标题前缀。非空时页面 `<title>` 渲染为 `{web_title} - gateterm`;
     /// 未设置或纯空白时保持默认 `gateterm`。
     #[serde(default)]
@@ -481,5 +496,14 @@ mod tests {
 
         shared.set(Some("   ".into()));
         assert_eq!(cloned.get(), None);
+    }
+
+    #[test]
+    fn mcp_config_defaults_to_enabled_and_parses_false() {
+        let default_cfg: Config = toml::from_str("").unwrap();
+        assert!(default_cfg.mcp.enabled);
+
+        let disabled_cfg: Config = toml::from_str("[mcp]\nenabled = false\n").unwrap();
+        assert!(!disabled_cfg.mcp.enabled);
     }
 }

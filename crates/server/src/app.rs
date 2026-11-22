@@ -33,6 +33,8 @@ pub struct AppState {
     pub cloud: crate::cloud::creds::SharedCreds,
     /// 自定义 Web 页面标题前缀(为空时网页标题保持默认 `gateterm`)。
     pub web_title: crate::config::SharedWebTitle,
+    /// `[mcp]` 配置。控制外部 agent MCP server 与相关 HTTP API 是否启用。
+    pub mcp: crate::config::McpConfig,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -41,6 +43,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/launchers", get(launchers_handler))
         .route("/api/cloud/status", get(cloud_status_handler))
         .route("/api/update", get(update_status_handler))
+        .route("/api/mcp/status", get(crate::mcp::status))
         .route("/api/agents", get(crate::agent::routes::list))
         .route("/api/agents/{id}/plan", get(crate::agent::routes::plan))
         .route("/api/agents/{id}/install", post(crate::agent::routes::install))

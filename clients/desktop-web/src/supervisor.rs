@@ -40,6 +40,8 @@ pub struct Supervisor {
     cloud: gateterm_server::cloud::creds::SharedCreds,
     /// 自定义 Web 页面标题前缀。改了不用重建 HTTP 层,通过内部锁实时生效。
     web_title: gateterm_server::config::SharedWebTitle,
+    /// `[mcp]` 配置。重建 HTTP 层时原样带过去。
+    mcp: gateterm_server::config::McpConfig,
     running: Option<Running>,
 }
 
@@ -50,6 +52,7 @@ impl Supervisor {
         specs: &[LauncherSpec],
         agents: gateterm_server::config::AgentsConfig,
         web_title: Option<String>,
+        mcp: gateterm_server::config::McpConfig,
     ) -> Self {
         Self {
             manager: SessionManager::new(buffer_cap, window_size),
@@ -60,6 +63,7 @@ impl Supervisor {
                 gateterm_cloud_client::credentials::default_path(),
             ),
             web_title: gateterm_server::config::SharedWebTitle::new(web_title),
+            mcp,
             running: None,
         }
     }
@@ -153,6 +157,7 @@ impl Supervisor {
             agent_sessions: self.agent_sessions.clone(),
             cloud: self.cloud.clone(),
             web_title: self.web_title.clone(),
+            mcp: self.mcp,
         };
         gateterm_server::agent::history::start_index(&state, false);
         let join = tokio::spawn(async move {

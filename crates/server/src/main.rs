@@ -121,7 +121,8 @@ async fn run_server() -> anyhow::Result<()> {
     let web_title = gateterm_server::config::SharedWebTitle::new(
         gateterm_server::config::resolve_web_title(args.web_title, config.web_title),
     );
-    let state = AppState { manager, token, launchers, listen_port, agents, agent_sessions, cloud, web_title };
+    let mcp = config.mcp;
+    let state = AppState { manager, token, launchers, listen_port, agents, agent_sessions, cloud, web_title, mcp };
     gateterm_server::cloud::notifier::spawn(state.manager.clone(), state.agent_sessions.clone(), state.cloud.clone());
     gateterm_server::agent::history::start_index(&state, false);
     gateterm_server::update::start_daily_checks(env!("CARGO_PKG_VERSION"), |result| {

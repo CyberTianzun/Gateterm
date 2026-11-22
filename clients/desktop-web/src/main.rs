@@ -103,6 +103,7 @@ fn main() -> Result<()> {
         &config.launchers,
         config.agents,
         config.web_title.clone(),
+        config.mcp,
     );
     // 系统剪贴板监听跟 SessionManager 同寿命(见 gateterm_server::clipboard)
     if config.clipboard.host_watch {

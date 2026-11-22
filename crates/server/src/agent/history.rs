@@ -1015,6 +1015,7 @@ mod tests {
             agent_sessions: Arc::new(super::super::store::AgentSessionStore::new()),
             cloud: Default::default(),
             web_title: Default::default(),
+            mcp: Default::default(),
         }
     }
 

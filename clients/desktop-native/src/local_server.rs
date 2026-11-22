@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use gateterm_server::app::{AppState, serve};
-use gateterm_server::config::{AgentsConfig, Config as ServerConfig};
+use gateterm_server::config::{AgentsConfig, Config as ServerConfig, McpConfig};
 use gateterm_server::launcher::LauncherProvider;
 use gateterm_server::session::manager::SessionManager;
 use tokio::net::TcpListener;
@@ -42,6 +42,7 @@ pub struct LocalServerSupervisor {
     agent_sessions: Arc<gateterm_server::agent::store::AgentSessionStore>,
     cloud: gateterm_server::cloud::creds::SharedCreds,
     web_title: gateterm_server::config::SharedWebTitle,
+    mcp: McpConfig,
     running: Option<RunningListener>,
 }
 
@@ -69,6 +70,7 @@ impl LocalServerSupervisor {
             agent_sessions,
             cloud,
             web_title: gateterm_server::config::SharedWebTitle::new(cfg.web_title),
+            mcp: cfg.mcp,
             running: None,
         }
     }
@@ -157,6 +159,7 @@ impl LocalServerSupervisor {
             agent_sessions: self.agent_sessions.clone(),
             cloud: self.cloud.clone(),
             web_title: self.web_title.clone(),
+            mcp: self.mcp,
         };
         gateterm_server::agent::history::start_index(&state, false);
         let join = tokio::spawn(async move {
