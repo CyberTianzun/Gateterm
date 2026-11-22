@@ -22,6 +22,7 @@ clients/web/test/.history.build.mjs
 clients/web/test/.keys.build.mjs
 clients/web/test/.queries.build.mjs
 clients/web/test/.markdown.build.mjs
+clients/web/test/.mcp.build.mjs
 
 .DS_Store
 
