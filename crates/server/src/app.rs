@@ -45,6 +45,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/update", get(update_status_handler))
         .route("/api/mcp/status", get(crate::mcp::status))
         .route(
+            "/mcp",
+            post(crate::mcp::protocol::handle_post)
+                .get(crate::mcp::protocol::handle_method_not_allowed)
+                .delete(crate::mcp::protocol::handle_method_not_allowed)
+                .layer(axum::extract::DefaultBodyLimit::max(512 * 1024)),
+        )
+        .route(
             "/api/sessions",
             get(crate::mcp::http::list_sessions).post(crate::mcp::http::create_session),
         )

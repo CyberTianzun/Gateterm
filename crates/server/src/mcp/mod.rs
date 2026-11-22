@@ -8,6 +8,7 @@ use axum::Json;
 use crate::app::{bearer_ok, AppState};
 
 pub mod http;
+pub mod protocol;
 pub mod service;
 
 pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
