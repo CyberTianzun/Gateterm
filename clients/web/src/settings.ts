@@ -21,6 +21,8 @@ import { BUILTIN_FONTS, ensureFontLoaded, matchBuiltinFont } from "./fonts";
 import { knownThemes, loadCatalog, catalogLoaded, resolveTheme } from "./theme-catalog";
 import { LOCALES, LOCALE_NAMES, type LocalePref, type MsgKey, localeTag, subscribe, t } from "./i18n";
 import { createIcon } from "./icons";
+import { writeClipboard } from "./clipboard";
+import { buildMcpPresets, deriveEndpoints, fetchMcpStatus } from "./mcp";
 import { PROTO_VERSION } from "./protocol";
 import { WEB_VERSION, fetchVersionStatus } from "./update";
 import {
@@ -43,7 +45,7 @@ export interface SettingsHost {
   serverOs?: () => string;
 }
 
-type Tab = "theme" | "font" | "terminal" | "ui" | "io" | "agents" | "about";
+type Tab = "theme" | "font" | "terminal" | "ui" | "io" | "agents" | "mcp" | "about";
 
 const el = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -176,6 +178,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     ["ui", "settings.tab.ui"],
     ["io", "settings.tab.io"],
     ["agents", "settings.tab.agents"],
+    ["mcp", "settings.tab.mcp"],
     ["about", "settings.tab.about"],
   ];
 
@@ -665,6 +668,200 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     return wrap;
   }
 
+  /* ---------- MCP 接入 ---------- */
+  let revealMcpToken = false;
+  let mcpRenderSeq = 0;
+
+  function renderMcp(): HTMLElement {
+    const wrap = el("div", "set-pane mcp-pane");
+    const renderSeq = ++mcpRenderSeq;
+    const endpoints = deriveEndpoints(window.location.href);
+
+    const presetsFor = (masked: boolean) =>
+      buildMcpPresets({
+        mcpUrl: endpoints.mcpUrl,
+        apiBaseUrl: endpoints.apiBaseUrl,
+        token: host.token(),
+        masked,
+      });
+
+    const toolbar = el("div", "mcp-toolbar");
+    const badge = el("span", "mcp-badge", t("mcp.status.loading"));
+    badge.dataset.state = "loading";
+    const protoSpan = el("span", "mcp-protocols");
+    protoSpan.hidden = true;
+    const revealBtn = el("button", "mcp-reveal");
+    revealBtn.type = "button";
+    toolbar.append(badge, protoSpan, revealBtn);
+
+    const banner = el("div", "mcp-banner");
+    banner.hidden = true;
+    banner.setAttribute("role", "status");
+
+    const securityHint = el("div", "mcp-security", t("mcp.securityHint"));
+    const copyError = el("div", "mcp-copy-error");
+    copyError.hidden = true;
+    copyError.setAttribute("role", "status");
+
+    const COPY_FEEDBACK_MS = 1600;
+    const makeCopyButton = (getCopyText: () => string): HTMLButtonElement => {
+      const btn = el("button", "mcp-copy-btn", t("mcp.copy"));
+      btn.type = "button";
+      let resetTimer: ReturnType<typeof setTimeout> | undefined;
+      btn.addEventListener("click", () => {
+        void writeClipboard(getCopyText()).then((ok) => {
+          if (!ok) {
+            copyError.textContent = t("mcp.copyFailed");
+            copyError.hidden = false;
+            return;
+          }
+          copyError.hidden = true;
+          clearTimeout(resetTimer);
+          btn.textContent = t("mcp.copied");
+          btn.classList.add("is-copied");
+          resetTimer = setTimeout(() => {
+            btn.textContent = t("mcp.copy");
+            btn.classList.remove("is-copied");
+          }, COPY_FEEDBACK_MS);
+        });
+      });
+      return btn;
+    };
+
+    const makeCodePre = (): { pre: HTMLPreElement; code: HTMLElement } => {
+      const pre = el("pre", "mcp-code");
+      const code = el("code");
+      pre.appendChild(code);
+      return { pre, code };
+    };
+
+    // Card 1: Endpoint & Header
+    const endpointCard = el("section", "mcp-card");
+    const endpointHead = el("div", "mcp-card-head");
+    endpointHead.append(el("div", "mcp-card-title", t("mcp.card.endpoint.title")));
+    const endpointDesc = el("div", "mcp-card-desc", t("mcp.card.endpoint.desc"));
+
+    const urlField = el("div", "mcp-field");
+    urlField.append(el("span", "mcp-field-label", t("mcp.field.url")));
+    const urlRow = el("div", "mcp-field-row");
+    const urlVal = el("code", "mcp-inline");
+    urlRow.append(urlVal, makeCopyButton(() => presetsFor(false).mcpUrl));
+    urlField.appendChild(urlRow);
+
+    const authField = el("div", "mcp-field");
+    authField.append(el("span", "mcp-field-label", t("mcp.field.authHeader")));
+    const authRow = el("div", "mcp-field-row");
+    const authVal = el("code", "mcp-inline");
+    authRow.append(authVal, makeCopyButton(() => presetsFor(false).authHeader));
+    authField.appendChild(authRow);
+
+    endpointCard.append(endpointHead, endpointDesc, urlField, authField);
+
+    // Card 2: Generic Streamable HTTP MCP JSON
+    const jsonCard = el("section", "mcp-card");
+    const jsonHead = el("div", "mcp-card-head");
+    jsonHead.append(
+      el("div", "mcp-card-title", t("mcp.card.json.title")),
+      makeCopyButton(() => presetsFor(false).genericJson),
+    );
+    const jsonDesc = el("div", "mcp-card-desc", t("mcp.card.json.desc"));
+    const jsonBlock = makeCodePre();
+    jsonCard.append(jsonHead, jsonDesc, jsonBlock.pre);
+
+    // Card 3: Coding Agents (Claude Code + Codex)
+    const agentsCard = el("section", "mcp-card");
+    const agentsHead = el("div", "mcp-card-head");
+    agentsHead.append(el("div", "mcp-card-title", t("mcp.card.agents.title")));
+    const agentsDesc = el("div", "mcp-card-desc", t("mcp.card.agents.desc"));
+
+    const claudeSub = el("div", "mcp-subhead");
+    claudeSub.append(
+      el("span", "mcp-sublabel", t("mcp.agent.claudeCode")),
+      makeCopyButton(() => presetsFor(false).claudeCodeCmd),
+    );
+    const claudeBlock = makeCodePre();
+
+    const codexSub = el("div", "mcp-subhead");
+    codexSub.append(
+      el("span", "mcp-sublabel", t("mcp.agent.codex")),
+      makeCopyButton(() => presetsFor(false).codexToml),
+    );
+    const codexBlock = makeCodePre();
+
+    agentsCard.append(agentsHead, agentsDesc, claudeSub, claudeBlock.pre, codexSub, codexBlock.pre);
+
+    // Card 4: HTTP API / curl quick reference
+    const curlCard = el("section", "mcp-card");
+    const curlHead = el("div", "mcp-card-head");
+    curlHead.append(
+      el("div", "mcp-card-title", t("mcp.card.curl.title")),
+      makeCopyButton(() => presetsFor(false).curlExamples),
+    );
+    const curlDesc = el("div", "mcp-card-desc", t("mcp.card.curl.desc"));
+    const curlBlock = makeCodePre();
+    curlCard.append(curlHead, curlDesc, curlBlock.pre);
+
+    const updatePreviews = () => {
+      const p = presetsFor(!revealMcpToken);
+      revealBtn.textContent = revealMcpToken ? t("mcp.token.hide") : t("mcp.token.reveal");
+      revealBtn.setAttribute("aria-pressed", String(revealMcpToken));
+      urlVal.textContent = p.mcpUrl;
+      authVal.textContent = p.authHeader;
+      jsonBlock.code.textContent = p.genericJson;
+      claudeBlock.code.textContent = p.claudeCodeCmd;
+      codexBlock.code.textContent = p.codexToml;
+      curlBlock.code.textContent = p.curlExamples;
+    };
+
+    revealBtn.addEventListener("click", () => {
+      revealMcpToken = !revealMcpToken;
+      updatePreviews();
+    });
+    updatePreviews();
+
+    wrap.append(toolbar, banner, securityHint, copyError, endpointCard, jsonCard, agentsCard, curlCard);
+
+    void fetchMcpStatus(host.token(), undefined, endpoints.apiBaseUrl).then((res) => {
+      if (renderSeq !== mcpRenderSeq || !wrap.isConnected) return;
+      if (res.state === "enabled") {
+        badge.dataset.state = "enabled";
+        badge.textContent = t("mcp.status.enabled");
+        if (res.protocolVersions.length > 0) {
+          protoSpan.textContent = t("mcp.status.enabledProtocols", {
+            versions: res.protocolVersions.join(", "),
+          });
+          protoSpan.hidden = false;
+        } else {
+          protoSpan.hidden = true;
+        }
+        banner.hidden = true;
+      } else if (res.state === "disabled") {
+        badge.dataset.state = "disabled";
+        badge.textContent = t("mcp.status.disabled");
+        protoSpan.hidden = true;
+        banner.dataset.state = "disabled";
+        banner.textContent = t("mcp.status.disabledBanner");
+        banner.hidden = false;
+      } else if (res.state === "unsupported") {
+        badge.dataset.state = "unsupported";
+        badge.textContent = t("mcp.status.unsupported");
+        protoSpan.hidden = true;
+        banner.dataset.state = "unsupported";
+        banner.textContent = t("mcp.status.unsupportedBanner");
+        banner.hidden = false;
+      } else {
+        badge.dataset.state = "error";
+        badge.textContent = t("mcp.status.error");
+        protoSpan.hidden = true;
+        banner.dataset.state = "error";
+        banner.textContent = t("mcp.status.errorBanner");
+        banner.hidden = false;
+      }
+    });
+
+    return wrap;
+  }
+
   /* ---------- 关于 ---------- */
   function renderAbout(): HTMLElement {
     const wrap = el("div", "set-pane");
@@ -752,6 +949,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
       : tab === "ui" ? renderUi()
       : tab === "io" ? renderIo()
       : tab === "agents" ? renderAgents()
+      : tab === "mcp" ? renderMcp()
       : renderAbout();
     body.replaceChildren(pane);
   }
@@ -763,6 +961,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
 
   return {
     open() {
+      revealMcpToken = false;
       render();
       dialog.showModal();
     },
