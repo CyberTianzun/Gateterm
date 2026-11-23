@@ -617,11 +617,13 @@ function resumeTerminal() {
  *  只有一个尺寸,权威值由服务端归并后经 resized 下发,所以这里不能直接 fit()。 */
 function proposeSize(): { cols: number; rows: number } | null {
   if (!term || !fit) return null;
+  const el = $("terminal");
+  if (el.clientWidth <= 0 || el.clientHeight <= 0) return null;
   return sanitizeDimensions(fit.proposeDimensions());
 }
 
 function refit() {
-  if (terminalSuspended) return;
+  if (terminalSuspended || attachedId === null || viewMode !== "terminal") return;
   const want = proposeSize();
   if (want) client.resize(termChannel, want.cols, want.rows);
 }
