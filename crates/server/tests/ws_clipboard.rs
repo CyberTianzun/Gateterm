@@ -149,3 +149,93 @@ async fn osc52_routes_only_to_input_owner_and_never_broadcasts_or_replays() {
 
     ws_a.send(control(&ClientMsg::KillSession { id })).await.unwrap();
 }
+
+fn osc5522_echo_cmd() -> Option<Vec<String>> {
+    #[cfg(unix)]
+    return Some(vec![
+        "/bin/sh".into(),
+        "-c".into(),
+        r#"while IFS= read -r line; do case "$line" in *COPY:*) b="${line##*COPY:}"; b="${b%$'\r'}"; printf 'BEGIN_%s\033]5522;type=write:id=k1\033\\\033]5522;type=wdata:mime=dGV4dC9wbGFpbg==;%s\033\\\033]5522;type=wdata\033\\END_%s\n' "$b" "$b" "$b";; esac; done"#
+            .into(),
+    ]);
+    #[cfg(windows)]
+    {
+        let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        Some(vec![
+            format!(r"{root}\System32\WindowsPowerShell\v1.0\powershell.exe"),
+            "-NoProfile".into(),
+            "-NoLogo".into(),
+            "-NonInteractive".into(),
+            "-Command".into(),
+            "while (($line = [Console]::In.ReadLine()) -ne $null) { \
+             $idx = $line.LastIndexOf('COPY:'); \
+             if ($idx -ge 0) { \
+               $b = $line.Substring($idx + 5).Trim(); \
+               $e = [char]27; \
+               [Console]::Out.Write('BEGIN_' + $b + $e + ']5522;type=write:id=k1' + $e + '\\' + $e + ']5522;type=wdata:mime=dGV4dC9wbGFpbg==;' + $b + $e + '\\' + $e + ']5522;type=wdata' + $e + '\\END_' + $b + \"`n\") \
+             } }"
+                .into(),
+        ])
+    }
+}
+
+#[tokio::test]
+async fn osc5522_strips_from_stream_and_routes_to_input_owner() {
+    let url = start_test_server("t").await;
+    let mut ws_a = connect(&url).await;
+    let mut ws_b = connect(&url).await;
+    let id = create_session(&mut ws_a, osc5522_echo_cmd()).await;
+
+    attach_and_wait_resync(&mut ws_a, id, 1).await;
+    attach_and_wait_resync(&mut ws_b, id, 2).await;
+
+    // 1. Client B sends input triggering OSC 5522 ("from-b" -> "ZnJvbS1i"): only B receives clipboard
+    ws_b.send(input_frame(2, b"COPY:ZnJvbS1i\r")).await.unwrap();
+    let (out_b1, clips_b1) = collect_until(&mut ws_b, 2, "END_ZnJvbS1i").await;
+    let (out_a1, clips_a1) = collect_until(&mut ws_a, 1, "END_ZnJvbS1i").await;
+    assert!(
+        out_b1.contains("BEGIN_ZnJvbS1iEND_ZnJvbS1i"),
+        "OSC 5522 must be stripped: {out_b1:?}"
+    );
+    assert!(!out_b1.contains("]5522;"), "raw OSC 5522 leaked to B: {out_b1:?}");
+    assert!(!out_a1.contains("]5522;"), "raw OSC 5522 leaked to A: {out_a1:?}");
+    assert_eq!(clips_b1, vec![(2, "from-b".to_string())]);
+    assert!(clips_a1.is_empty(), "A must not receive B's clipboard: {clips_a1:?}");
+
+    // 2. Client A sends input triggering OSC 5522 ("from-a" -> "ZnJvbS1h"): only A receives clipboard
+    ws_a.send(input_frame(1, b"COPY:ZnJvbS1h\r")).await.unwrap();
+    let (out_a2, clips_a2) = collect_until(&mut ws_a, 1, "END_ZnJvbS1h").await;
+    let (out_b2, clips_b2) = collect_until(&mut ws_b, 2, "END_ZnJvbS1h").await;
+    assert!(
+        out_a2.contains("BEGIN_ZnJvbS1hEND_ZnJvbS1h"),
+        "OSC 5522 must be stripped: {out_a2:?}"
+    );
+    assert!(!out_b2.contains("]5522;"), "raw OSC 5522 leaked to B: {out_b2:?}");
+    assert_eq!(clips_a2, vec![(1, "from-a".to_string())]);
+    assert!(clips_b2.is_empty(), "B must not receive A's clipboard: {clips_b2:?}");
+
+    // 3. New client C replaying from seq=0 gets clean output without OSC 5522 or clipboard events
+    let mut ws_c = connect(&url).await;
+    ws_c.send(control(&ClientMsg::Attach {
+        id,
+        channel: 5,
+        last_seq: Some(0),
+        cols: 80,
+        rows: 24,
+        colors: None,
+    }))
+    .await
+    .unwrap();
+    let attached = common::next_control(&mut ws_c).await;
+    assert!(
+        matches!(attached, ServerMsg::Attached { channel: 5, mode: AttachMode::Replay, .. }),
+        "expected Replay, got {attached:?}"
+    );
+    let (replay_out, clips_c) = collect_until(&mut ws_c, 5, "END_ZnJvbS1h").await;
+    assert!(replay_out.contains("BEGIN_ZnJvbS1iEND_ZnJvbS1i"), "{replay_out:?}");
+    assert!(replay_out.contains("BEGIN_ZnJvbS1hEND_ZnJvbS1h"), "{replay_out:?}");
+    assert!(!replay_out.contains("]5522;"), "replay must not contain OSC 5522: {replay_out:?}");
+    assert!(clips_c.is_empty(), "replay must not re-fire clipboard: {clips_c:?}");
+
+    ws_a.send(control(&ClientMsg::KillSession { id })).await.unwrap();
+}

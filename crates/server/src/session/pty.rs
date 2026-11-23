@@ -515,18 +515,23 @@ impl Session {
     fn process_output_batch(&self, batch: Vec<u8>) {
         let (replies, copies) = {
             let mut shared = self.shared.lock().unwrap();
-            let (batch, copies) = shared.osc52.filter(&batch);
-            if !batch.is_empty() {
-                shared.grid.advance(&batch);
-                shared.buffer.append(&batch);
+            let filtered = shared.osc52.filter_with_replies(&batch);
+            if !filtered.bytes.is_empty() {
+                shared.grid.advance(&filtered.bytes);
+                shared.buffer.append(&filtered.bytes);
                 // Publication shares the model lock with resize and snapshot so
                 // every subscriber observes the same output/geometry ordering.
                 let _ = self.tx.send(SessionOutput::Data {
                     end_seq: shared.buffer.end_seq(),
-                    bytes: Bytes::from(batch),
+                    bytes: Bytes::from(filtered.bytes),
                 });
             }
-            (shared.grid.take_pty_replies(), copies)
+            let mut replies = Vec::new();
+            for reply in filtered.replies {
+                replies.extend_from_slice(&reply);
+            }
+            replies.extend_from_slice(&shared.grid.take_pty_replies());
+            (replies, filtered.copies)
         };
         for text in copies {
             self.deliver_clipboard(text);
@@ -1247,6 +1252,56 @@ mod tests {
             false,
         );
         assert_eq!(only_pi, vec![("PI_CLIPBOARD_OSC52", "1")]);
+    }
+
+    #[test]
+    fn osc5522_writes_replies_to_pty_in_order_and_routes_clipboard_to_owner() {
+        struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
+        impl Write for CaptureWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let session = test_support::session();
+        let written = Arc::new(Mutex::new(Vec::new()));
+        *session.writer.lock().unwrap() = Some(Box::new(CaptureWriter(written.clone())));
+
+        let a = session.viewport(80, 24);
+        let b = session.viewport(80, 24);
+        let mut rx = session.subscribe();
+
+        session.note_input(b.id());
+        // Write followed by read followed by trailing DSR sentinel in a single batch
+        session.process_output(
+            b"hi\x1b]5522;type=write:id=k1\x1b\\\x1b]5522;type=wdata:mime=dGV4dC9wbGFpbg==;aGVsbG8=\x1b\\\x1b]5522;type=wdata\x1b\\\x1b]5522;type=read:id=r1;dGV4dC9wbGFpbg==\x1b\\\x1b[6n",
+        );
+
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionOutput::Data { ref bytes, .. } if &bytes[..] == b"hi\x1b[6n"
+        ));
+        match rx.try_recv().unwrap() {
+            SessionOutput::Clipboard { target, text } => {
+                assert_eq!(target, b.id());
+                assert_eq!(&*text, "hello");
+            }
+            other => panic!("expected clipboard, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+
+        let replies = written.lock().unwrap().clone();
+        assert_eq!(
+            replies,
+            b"\x1b]5522;type=write:status=DONE:id=k1\x1b\\\x1b]5522;type=read:status=EPERM:id=r1\x1b\\\x1b[1;3R"
+        );
+
+        drop(a);
+        drop(b);
     }
 }
 
