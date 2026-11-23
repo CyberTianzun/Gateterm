@@ -27,12 +27,14 @@ use crate::session::manager::SessionManager;
 /// 立刻发生,`/copy` 在回车后立刻发生(一次性子进程冷启动如 PowerShell 也在此窗口内)。
 pub const NULL_OWNER_WINDOW: Duration = Duration::from_millis(3000);
 
+#[cfg(any(windows, test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Attribution {
     Session(u64),
     Drop(&'static str),
 }
 
+#[cfg(any(windows, test))]
 #[derive(Debug, Clone)]
 pub(crate) struct Candidate {
     pub id: u64,
@@ -41,6 +43,7 @@ pub(crate) struct Candidate {
 }
 
 /// 判断进程名是否为 Windows ConPTY 控制台宿主(`conhost.exe` / `OpenConsole.exe`)。
+#[cfg(any(windows, test))]
 pub(crate) fn is_conhost_exe(name: &str) -> bool {
     name.eq_ignore_ascii_case("conhost.exe") || name.eq_ignore_ascii_case("OpenConsole.exe")
 }
@@ -50,6 +53,7 @@ pub(crate) fn is_conhost_exe(name: &str) -> bool {
 /// - `ancestors(pid)`:进程存在时返回 `[pid, 父, 祖父, …]`,不存在返回 `None`;
 /// - `is_conhost(pid)`:判断进程是否为 ConPTY 控制台宿主(`conhost.exe` / `OpenConsole.exe`);
 /// - `local_idle`:服务端电脑本机键鼠空闲了多久(拿不到为 `None`)。
+#[cfg(any(windows, test))]
 pub(crate) fn attribute(
     owner_pid: Option<u32>,
     self_pid: u32,
@@ -93,6 +97,7 @@ pub(crate) fn attribute(
     Attribution::Session(id)
 }
 
+#[cfg(windows)]
 fn candidates(manager: &SessionManager) -> Vec<(Candidate, Arc<crate::session::pty::Session>)> {
     manager
         .sessions()
