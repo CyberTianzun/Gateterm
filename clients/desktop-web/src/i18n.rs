@@ -63,6 +63,30 @@ impl Locale {
             },
         }
     }
+
+    pub fn apply_error(self, err: &gateterm_server::agent::apply::ApplyError) -> String {
+        use gateterm_server::agent::apply::ApplyError;
+        match err {
+            ApplyError::Disabled => self
+                .text(
+                    "agent 集成的安装功能未启用（config.toml 中 agents.install_enabled = false）",
+                    "Agent integration installing is disabled (agents.install_enabled = false in config.toml)",
+                )
+                .into(),
+            ApplyError::Invalid { path, detail } => crate::tr!(
+                self,
+                "{} 配置无效，拒绝改写：{detail}",
+                "{} is invalid; refused to modify: {detail}",
+                path.display()
+            ),
+            ApplyError::Io { path, detail } => crate::tr!(
+                self,
+                "读写 {} 失败：{detail}",
+                "Failed to read or write {}: {detail}",
+                path.display()
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -155,5 +179,46 @@ mod tests {
             LanguagePref::from_config("future-language"),
             LanguagePref::Auto
         );
+    }
+
+    #[test]
+    fn apply_error_translates_all_variants_in_english_without_chinese() {
+        use std::path::PathBuf;
+        use gateterm_server::agent::apply::ApplyError;
+
+        let cases = [
+            ApplyError::Disabled,
+            ApplyError::Invalid {
+                path: PathBuf::from("/tmp/claude/settings.json"),
+                detail: "expected colon at line 2".into(),
+            },
+            ApplyError::Io {
+                path: PathBuf::from("/tmp/codex/hooks.json"),
+                detail: "permission denied".into(),
+            },
+        ];
+
+        for err in &cases {
+            let en = Locale::En.apply_error(err);
+            let zh = Locale::ZhCn.apply_error(err);
+            assert!(!en.is_empty());
+            assert!(!zh.is_empty());
+            assert_ne!(en, zh, "expected distinct translations for {err:?}");
+            assert!(
+                !en.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
+                "English ApplyError leaked Chinese: {en}"
+            );
+        }
+
+        let en_disabled = Locale::En.apply_error(&cases[0]);
+        assert!(en_disabled.to_ascii_lowercase().contains("disabled"), "{en_disabled}");
+
+        let en_invalid = Locale::En.apply_error(&cases[1]);
+        assert!(en_invalid.contains("/tmp/claude/settings.json"), "{en_invalid}");
+        assert!(en_invalid.contains("expected colon at line 2"), "{en_invalid}");
+
+        let en_io = Locale::En.apply_error(&cases[2]);
+        assert!(en_io.contains("/tmp/codex/hooks.json"), "{en_io}");
+        assert!(en_io.contains("permission denied"), "{en_io}");
     }
 }

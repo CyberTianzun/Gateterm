@@ -36,6 +36,18 @@ pub enum UserEvent {
     SessionsChanged,
     /// 设置窗口发起的 Cloud 操作完成了(在 tokio 线程上跑,结果经 proxy 送回主线程)。
     CloudDone(u64, crate::settings::cloud::CloudAction, Result<String, String>),
+    AgentsScanned(u64, Option<u16>, Vec<gateterm_server::agent::AgentStatus>),
+    AgentPreviewReady(
+        u64,
+        String,
+        Result<gateterm_server::agent::ops::AgentPlanSummary, String>,
+    ),
+    AgentActionDone(
+        u64,
+        String,
+        crate::settings::agents::AgentActionKind,
+        Result<String, String>,
+    ),
     UpdateAvailable(gateterm_server::update::ReleaseUpdate),
 }
 
@@ -72,6 +84,7 @@ pub struct App {
     resolved_web_host: Option<IpAddr>,
     cloud_task: Option<tokio::task::JoinHandle<()>>,
     cloud_generation: u64,
+    agents_generation: u64,
     rt: Runtime,
     sup: Supervisor,
     tray: Option<Tray>,
@@ -110,6 +123,7 @@ impl App {
             resolved_web_host,
             cloud_task: None,
             cloud_generation: 0,
+            agents_generation: 0,
             rt,
             sup,
             tray: None,
@@ -156,6 +170,7 @@ impl App {
         };
         let banner = self.banner();
         View {
+            tab: crate::settings::ui::SettingsTab::General,
             form,
             web_addr: crate::settings::web_addr::WebAddrPicker::new(self.sup.listen()),
             // WindowSize 只有 Smallest / Largest / Latest 三个单词,和 config.toml
@@ -170,6 +185,11 @@ impl App {
                 .collect(),
             banner,
             message: None,
+            agents: crate::settings::agents::AgentsView {
+                listen_port: self.sup.listen().map(|a| a.port()),
+                install_enabled: self.startup.config.agents.install_enabled,
+                ..Default::default()
+            },
             cloud: crate::settings::cloud::CloudForm {
                 region: crate::settings::cloud::RelayRegion::from_url(
                     &Self::cloud_creds()
@@ -182,6 +202,146 @@ impl App {
             cloud_status: crate::settings::cloud::status_from(Self::cloud_creds()),
             cloud_busy: self.cloud_task.is_some(),
             cloud_message: None,
+        }
+    }
+
+    fn agents_scan_port(&self) -> u16 {
+        self.sup
+            .listen()
+            .map(|a| a.port())
+            .or_else(|| self.startup.config.listen.map(|a| a.port()).filter(|&p| p != 0))
+            .unwrap_or_else(|| gateterm_server::config::desktop_default_listen().port())
+    }
+
+    fn start_agents_scan(&mut self, refresh_shell_path: bool) {
+        self.agents_generation = self.agents_generation.wrapping_add(1);
+        let generation = self.agents_generation;
+        let listen_port = self.sup.listen().map(|a| a.port());
+        let scan_port = self.agents_scan_port();
+        if let Some(view) = self.view.as_mut() {
+            view.agents.loading = true;
+            view.agents.listen_port = listen_port;
+            view.agents.install_enabled = self.startup.config.agents.install_enabled;
+            view.agents.previews.clear();
+            view.agents.expanded_preview = None;
+        }
+        let proxy = self.proxy.clone();
+        self.rt.spawn(async move {
+            let items = tokio::task::spawn_blocking(move || {
+                let env = if refresh_shell_path {
+                    gateterm_server::agent::detect::DetectEnv::current_refreshed()
+                } else {
+                    gateterm_server::agent::detect::DetectEnv::current()
+                };
+                gateterm_server::agent::scan(&env, scan_port)
+            })
+            .await
+            .unwrap_or_default();
+            let _ = proxy.send_event(UserEvent::AgentsScanned(generation, listen_port, items));
+        });
+    }
+
+    fn start_agents_preview(&mut self, id: String) {
+        let Some(view) = self.view.as_mut() else { return };
+        if view.agents.busy_id.is_some() {
+            return;
+        }
+        view.agents.expanded_preview = Some(id.clone());
+        view.agents.previews.remove(&id);
+
+        let generation = self.agents_generation;
+        let scan_port = self.agents_scan_port();
+        let locale = self.locale;
+        let proxy = self.proxy.clone();
+        let id_for_task = id.clone();
+        self.rt.spawn(async move {
+            let res = tokio::task::spawn_blocking(move || {
+                let Some(adapter) = gateterm_server::agent::find(&id_for_task) else {
+                    return Err(tr!(locale, "未知的 Agent：{id_for_task}", "Unknown agent: {id_for_task}"));
+                };
+                let home = gateterm_server::agent::detect::DetectEnv::current_home();
+                gateterm_server::agent::ops::preview_plan(adapter, &home, scan_port)
+                    .map_err(|e| e.to_string())
+            })
+            .await;
+            let summary = match res {
+                Ok(inner) => inner,
+                Err(e) => Err(tr!(locale, "后台任务失败：{e}", "Background task failed: {e}")),
+            };
+            let _ = proxy.send_event(UserEvent::AgentPreviewReady(generation, id, summary));
+        });
+    }
+
+    fn start_agents_action(
+        &mut self,
+        id: String,
+        kind: crate::settings::agents::AgentActionKind,
+    ) {
+        use crate::settings::{agents::AgentActionKind, state::Message};
+        let Some(view) = self.view.as_mut() else { return };
+        if view.agents.busy_id.is_some() {
+            return;
+        }
+        let listen_port = self.sup.listen().map(|a| a.port());
+        if kind == AgentActionKind::Install && listen_port.is_none() {
+            view.agents.messages.insert(
+                id,
+                Message::Err(
+                    self.locale
+                        .text(
+                            "当前服务未监听，无法安装 hook。",
+                            "The server is not listening; cannot install hooks.",
+                        )
+                        .into(),
+                ),
+            );
+            return;
+        }
+
+        self.agents_generation = self.agents_generation.wrapping_add(1);
+        let generation = self.agents_generation;
+        view.agents.busy_id = Some(id.clone());
+        view.agents.confirm_purge_id = None;
+
+        let scan_port = self.agents_scan_port();
+        let install_enabled = self.startup.config.agents.install_enabled;
+        let locale = self.locale;
+        let proxy = self.proxy.clone();
+        let id_for_task = id.clone();
+        self.rt.spawn(async move {
+            let res = tokio::task::spawn_blocking(move || {
+                let Some(adapter) = gateterm_server::agent::find(&id_for_task) else {
+                    return Err(tr!(locale, "未知的 Agent：{id_for_task}", "Unknown agent: {id_for_task}"));
+                };
+                let home = gateterm_server::agent::detect::DetectEnv::current_home();
+                run_agent_mutation(
+                    adapter,
+                    &home,
+                    scan_port,
+                    install_enabled,
+                    kind,
+                    locale,
+                )
+            })
+            .await;
+            let result = match res {
+                Ok(inner) => inner,
+                Err(e) => Err(tr!(locale, "后台任务失败：{e}", "Background task failed: {e}")),
+            };
+            let _ = proxy.send_event(UserEvent::AgentActionDone(generation, id, kind, result));
+        });
+    }
+
+    fn handle_agent_action(&mut self, action: crate::settings::agents::AgentUiAction) {
+        use crate::settings::agents::{AgentActionKind, AgentUiAction};
+        match action {
+            AgentUiAction::Refresh => self.start_agents_scan(true),
+            AgentUiAction::Preview(id) => self.start_agents_preview(id),
+            AgentUiAction::Install(id) => self.start_agents_action(id, AgentActionKind::Install),
+            AgentUiAction::Uninstall(id) => {
+                self.start_agents_action(id, AgentActionKind::Uninstall)
+            }
+            AgentUiAction::Purge(id) => self.start_agents_action(id, AgentActionKind::Purge),
         }
     }
 
@@ -295,12 +455,16 @@ impl App {
             view.banner = banner;
             view.message = Some(applied.message);
             view.web_addr.refresh(self.sup.listen());
+            view.agents.listen_port = self.sup.listen().map(|a| a.port());
             self.resolved_web_host = self
                 .sup
                 .listen()
                 .map(|listen| view.web_addr.resolved(listen, self.startup.web_host));
         } else {
             self.refresh_resolved_web_host();
+        }
+        if applied.restarted {
+            self.start_agents_scan(false);
         }
 
         // 无条件刷新,不看 `applied.restarted`:restart 失败时它是 false,而
@@ -313,6 +477,7 @@ impl App {
     /// 关掉设置窗口:GPU 资源随 `EguiWindow` 的 Drop 当场还回去,界面状态一并
     /// 丢掉——下次开窗要重新读当前生效值,而不是接着上次没保存的输入往下改。
     fn close_settings(&mut self) {
+        self.agents_generation = self.agents_generation.wrapping_add(1);
         self.settings_window = None;
         self.view = None;
     }
@@ -615,6 +780,50 @@ impl ApplicationHandler<UserEvent> for App {
                     w.request_redraw();
                 }
             }
+            UserEvent::AgentsScanned(generation, listen_port, items) => {
+                if generation != self.agents_generation {
+                    return;
+                }
+                if let Some(view) = self.view.as_mut() {
+                    view.agents.loading = false;
+                    view.agents.busy_id = None;
+                    view.agents.listen_port = listen_port;
+                    view.agents.items = items;
+                }
+                if let Some(w) = &self.settings_window {
+                    w.request_redraw();
+                }
+            }
+            UserEvent::AgentPreviewReady(generation, id, result) => {
+                if generation != self.agents_generation {
+                    return;
+                }
+                if let Some(view) = self.view.as_mut() {
+                    view.agents.previews.insert(id, result);
+                }
+                if let Some(w) = &self.settings_window {
+                    w.request_redraw();
+                }
+            }
+            UserEvent::AgentActionDone(generation, id, _kind, result) => {
+                if generation != self.agents_generation {
+                    return;
+                }
+                if let Some(view) = self.view.as_mut() {
+                    view.agents.busy_id = None;
+                    view.agents.messages.insert(
+                        id,
+                        match result {
+                            Ok(m) => crate::settings::state::Message::Ok(m),
+                            Err(m) => crate::settings::state::Message::Err(m),
+                        },
+                    );
+                }
+                self.start_agents_scan(false);
+                if let Some(w) = &self.settings_window {
+                    w.request_redraw();
+                }
+            }
             UserEvent::UpdateAvailable(update) => {
                 if crate::dialog::confirm_update(env!("CARGO_PKG_VERSION"), &update, self.locale)
                     && let Err(e) = open::that_detached(&update.url)
@@ -653,10 +862,14 @@ impl ApplicationHandler<UserEvent> for App {
                     // 每次开窗都重新读一遍当前生效值,而不是复用上次关窗时的表单:
                     // 期间监听地址可能已经被别处改过了。
                     self.view = Some(self.build_view());
-                    match EguiWindow::open(event_loop, self.locale.text("gateterm 设置", "gateterm Settings"), (560, 680)) {
-                        Ok(w) => self.settings_window = Some(w),
+                    match EguiWindow::open(event_loop, self.locale.text("gateterm 设置", "gateterm Settings"), (600, 680)) {
+                        Ok(w) => {
+                            self.settings_window = Some(w);
+                            self.start_agents_scan(false);
+                        }
                         Err(e) => {
                             tracing::error!(error = %format!("{e:#}"), "无法打开设置窗口");
+                            self.agents_generation = self.agents_generation.wrapping_add(1);
                             self.view = None;
                         }
                     }
@@ -706,6 +919,7 @@ impl ApplicationHandler<UserEvent> for App {
                     w.redraw_ui(|ui| outcome = draw(ui, view, self.locale));
                 }
                 let closed = w.close_requested();
+                let acted = outcome != Outcome::None;
                 match outcome {
                     Outcome::None => {}
                     Outcome::Save => self.apply_settings(),
@@ -736,6 +950,7 @@ impl ApplicationHandler<UserEvent> for App {
                         }
                         self.refresh_status();
                     }
+                    Outcome::Agents(action) => self.handle_agent_action(action),
                     Outcome::Cloud(action) => self.start_cloud(action),
                 }
                 // 界面里 `send_viewport_cmd(ViewportCommand::Close)` 的结果从这里
@@ -747,7 +962,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 // 保存结果、重新生成的 token 这些都是刚刚才写进 view 的,而这一帧
                 // 已经画完了 —— 不主动再要一帧,用户点完按钮会看不到任何变化。
-                if outcome != Outcome::None
+                if acted
                     && let Some(w) = &self.settings_window
                 {
                     w.request_redraw();
@@ -787,5 +1002,100 @@ impl ApplicationHandler<UserEvent> for App {
             None => ControlFlow::Wait,
         };
         event_loop.set_control_flow(flow);
+    }
+}
+
+fn run_agent_mutation(
+    adapter: &'static dyn gateterm_server::agent::AgentAdapter,
+    home: &Path,
+    port: u16,
+    install_enabled: bool,
+    kind: crate::settings::agents::AgentActionKind,
+    locale: Locale,
+) -> Result<String, String> {
+    use crate::settings::agents::AgentActionKind;
+    use gateterm_server::agent::ops;
+
+    match kind {
+        AgentActionKind::Install => {
+            let res = ops::install(adapter, home, port, install_enabled)
+                .map_err(|e| locale.apply_error(&e))?;
+            let changed = res.outcomes.iter().any(|o| o.changed);
+            let backup = res.outcomes.iter().find_map(|o| o.backup.as_ref());
+            if !res.include_blocking {
+                Ok(locale
+                    .text(
+                        "已安装状态上报 hook（检测到冲突，未安装授权拦截）",
+                        "Installed status reporting hooks (skipped approval interception due to conflict)",
+                    )
+                    .into())
+            } else if changed {
+                Ok(match backup {
+                    Some(b) => tr!(
+                        locale,
+                        "已安装（原配置已备份至 {}）",
+                        "Installed (backup saved to {})",
+                        b.display()
+                    ),
+                    None => locale.text("已安装", "Installed").into(),
+                })
+            } else {
+                Ok(locale
+                    .text("已是最新，无需变更", "Already up to date; no changes needed")
+                    .into())
+            }
+        }
+        AgentActionKind::Uninstall => {
+            let res = ops::uninstall(adapter, home, port, install_enabled)
+                .map_err(|e| locale.apply_error(&e))?;
+            let changed = res.outcomes.iter().any(|o| o.changed);
+            let backup = res.outcomes.iter().find_map(|o| o.backup.as_ref());
+            if changed {
+                Ok(match backup {
+                    Some(b) => tr!(
+                        locale,
+                        "已卸载（已备份至 {}）",
+                        "Uninstalled (backup saved to {})",
+                        b.display()
+                    ),
+                    None => locale.text("已卸载", "Uninstalled").into(),
+                })
+            } else {
+                Ok(locale
+                    .text(
+                        "未发现需要卸载的 Gateterm hook",
+                        "No Gateterm hooks needed removal",
+                    )
+                    .into())
+            }
+        }
+        AgentActionKind::Purge => {
+            let outcomes = ops::purge(adapter, home).map_err(|e| locale.apply_error(&e))?;
+            let changed = outcomes.iter().any(|o| o.changed);
+            let backup = outcomes.iter().find_map(|o| o.backup.as_ref());
+            if changed {
+                Ok(match backup {
+                    Some(b) => tr!(
+                        locale,
+                        "已清理 Gateterm hooks（已备份至 {}）。其他程序的 hook 会保留。",
+                        "Gateterm hooks removed (backup saved to {}). Other programs' hooks are preserved.",
+                        b.display()
+                    ),
+                    None => locale
+                        .text(
+                            "已清理 Gateterm hooks。其他程序的 hook 会保留。",
+                            "Gateterm hooks removed. Other programs' hooks are preserved.",
+                        )
+                        .into(),
+                })
+            } else {
+                Ok(locale
+                    .text(
+                        "没有需要清理的 Gateterm hook。其他程序的 hook 会保留。",
+                        "No Gateterm hooks needed removal. Other programs' hooks are preserved.",
+                    )
+                    .into())
+            }
+        }
     }
 }
