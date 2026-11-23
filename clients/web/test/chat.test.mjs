@@ -12,6 +12,7 @@ execSync("npx esbuild src/chat.ts --bundle --format=esm --outfile=test/.chat.bui
 const {
   mergeWindow,
   fetchMessages,
+  fetchMessagesWithRecovery,
   fallbackText,
   preview,
   isUserPromptMessage,
@@ -597,4 +598,139 @@ test("renderMessages 在 userOnly 模式下加载更早消息 (prepend) 时保�
 
   // u1 (100px) was prepended in filtered view (a1 filtered out), so scrollTop shifts by +100
   assert.equal(box.scrollTop, 140);
+});
+
+test("fetchMessages preserves HTTP status on non-2xx fallback", async (t) => {
+  const prevFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = prevFetch;
+  });
+
+  globalThis.fetch = async () => ({ ok: false, status: 404 });
+  assert.deepEqual(await fetchMessages("t", "antigravity", "s-old"), {
+    source: "terminal",
+    reason: "unreadable",
+    status: 404,
+  });
+
+  globalThis.fetch = async () => ({ ok: false, status: 500 });
+  assert.deepEqual(await fetchMessages("t", "antigravity", "s-old"), {
+    source: "terminal",
+    reason: "unreadable",
+    status: 500,
+  });
+
+  globalThis.fetch = async () => {
+    throw new Error("offline");
+  };
+  assert.deepEqual(await fetchMessages("t", "antigravity", "s-old"), {
+    source: "terminal",
+    reason: "unreadable",
+  });
+});
+
+test("fetchMessagesWithRecovery refreshes agents once and retries on 404", async () => {
+  const sOld = { agent_id: "antigravity", agent_session_id: "s-old" };
+  const sNew = { agent_id: "antigravity", agent_session_id: "s-new" };
+  const expectedWin = win([msg("m1", "recovered")]);
+  let active = sOld;
+  let refreshCount = 0;
+  const fetched = [];
+
+  const result = await fetchMessagesWithRecovery({
+    initialAgent: sOld,
+    currentAgent: () => active,
+    refreshAgents: async () => {
+      refreshCount++;
+      active = sNew;
+    },
+    fetchWindow: async (agent) => {
+      fetched.push(agent.agent_session_id);
+      if (agent.agent_session_id === "s-old") {
+        return { source: "terminal", reason: "unreadable", status: 404 };
+      }
+      return expectedWin;
+    },
+  });
+
+  assert.equal(refreshCount, 1);
+  assert.deepEqual(fetched, ["s-old", "s-new"]);
+  assert.deepEqual(result, { agent: sNew, window: expectedWin });
+});
+
+test("fetchMessagesWithRecovery stops without looping when retry also returns 404", async () => {
+  const sOld = { agent_id: "antigravity", agent_session_id: "s-old" };
+  const sNew = { agent_id: "antigravity", agent_session_id: "s-new" };
+  const notFound = { source: "terminal", reason: "unreadable", status: 404 };
+  let active = sOld;
+  let refreshCount = 0;
+  const fetched = [];
+
+  const result = await fetchMessagesWithRecovery({
+    initialAgent: sOld,
+    currentAgent: () => active,
+    refreshAgents: async () => {
+      refreshCount++;
+      active = sNew;
+    },
+    fetchWindow: async (agent) => {
+      fetched.push(agent.agent_session_id);
+      return notFound;
+    },
+  });
+
+  assert.equal(refreshCount, 1);
+  assert.deepEqual(fetched, ["s-old", "s-new"]);
+  assert.deepEqual(result, { agent: sNew, window: notFound });
+});
+
+test("fetchMessagesWithRecovery returns null agent when currentAgent disappears after refresh", async () => {
+  const sOld = { agent_id: "antigravity", agent_session_id: "s-old" };
+  const notFound = { source: "terminal", reason: "unreadable", status: 404 };
+  let active = sOld;
+  let refreshCount = 0;
+  const fetched = [];
+
+  const result = await fetchMessagesWithRecovery({
+    initialAgent: sOld,
+    currentAgent: () => active,
+    refreshAgents: async () => {
+      refreshCount++;
+      active = null;
+    },
+    fetchWindow: async (agent) => {
+      fetched.push(agent.agent_session_id);
+      return notFound;
+    },
+  });
+
+  assert.equal(refreshCount, 1);
+  assert.deepEqual(fetched, ["s-old"]);
+  assert.deepEqual(result, { agent: null, window: notFound });
+});
+
+test("fetchMessagesWithRecovery does not refreshAgents on non-404 fallbacks", async () => {
+  const initial = { agent_id: "antigravity", agent_session_id: "s-1" };
+  for (const fallbackWin of [
+    { source: "terminal", reason: "unreadable", status: 500 },
+    { source: "terminal", reason: "disabled" },
+    { source: "terminal", reason: "no-transcript-path" },
+  ]) {
+    let refreshCount = 0;
+    const fetched = [];
+    const result = await fetchMessagesWithRecovery({
+      initialAgent: initial,
+      currentAgent: () => initial,
+      refreshAgents: async () => {
+        refreshCount++;
+      },
+      fetchWindow: async (agent) => {
+        fetched.push(agent.agent_session_id);
+        return fallbackWin;
+      },
+    });
+    assert.equal(refreshCount, 0);
+    assert.deepEqual(fetched, ["s-1"]);
+    assert.deepEqual(result, { agent: initial, window: fallbackWin });
+  }
 });

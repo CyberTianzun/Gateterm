@@ -34,7 +34,7 @@ export type FallbackReason =
 
 export type ChatWindow =
   | { source: "transcript"; messages: Message[]; cursor: string; reset: boolean; more: boolean; older_cursor?: string | null }
-  | { source: "terminal"; reason: FallbackReason };
+  | { source: "terminal"; reason: FallbackReason; status?: number };
 
 const FALLBACK_KEY: Record<FallbackReason, MsgKey> = {
   disabled: "chat.fallback.disabled",
@@ -73,11 +73,42 @@ export async function fetchMessages(
       headers: { Authorization: `Bearer ${token}` },
     });
     // 老版本服务端没有这个路由。降级,不是报错(协议 T12)。
-    if (!r.ok) return { source: "terminal", reason: "unreadable" };
+    if (!r.ok) return { source: "terminal", reason: "unreadable", status: r.status };
     return (await r.json()) as ChatWindow;
   } catch {
     return { source: "terminal", reason: "unreadable" };
   }
+}
+
+export interface AgentRef {
+  agent_id: string;
+  agent_session_id: string;
+}
+
+/**
+ * 拉取对话窗口，遇到 HTTP 404 时刷新一次 agent 会话快照并重试一次。
+ *
+ * 当服务端已经替换/重连了 agent_session_id 而前端 `agents` 尚未同步时，旧的
+ * `agent_session_id` 会收到 `404 no such agent session`。只重试一次，防止
+ * 服务端持续 404 时陷入死循环。
+ */
+export async function fetchMessagesWithRecovery<T extends AgentRef>(opts: {
+  fetchWindow: (agent: T) => Promise<ChatWindow>;
+  refreshAgents: () => Promise<void>;
+  currentAgent: () => T | null;
+  initialAgent: T;
+}): Promise<{ agent: T | null; window: ChatWindow }> {
+  const window = await opts.fetchWindow(opts.initialAgent);
+  if (window.source !== "terminal" || window.status !== 404) {
+    return { agent: opts.initialAgent, window };
+  }
+  await opts.refreshAgents();
+  const next = opts.currentAgent();
+  if (!next) {
+    return { agent: null, window };
+  }
+  const retryWin = await opts.fetchWindow(next);
+  return { agent: next, window: retryWin };
 }
 
 /**

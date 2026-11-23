@@ -35,6 +35,7 @@ import {
   type Message as ChatMessage,
   fallbackText,
   fetchMessages,
+  fetchMessagesWithRecovery,
   mergeWindow,
 } from "./chat";
 import { renderMessages } from "./chat-view";
@@ -811,24 +812,52 @@ function showView() {
  */
 async function refreshChat(incremental: boolean) {
   if (!chatAvailable(agents, attachedId, transcriptEnabled)) { showView(); return; }
-  const agent = attachedAgent();
-  if (!agent) { chatFallback = t("chat.fallback.noAgent"); renderChat(); return; }
+  const initial = attachedAgent();
+  if (!initial) { chatFallback = t("chat.fallback.noAgent"); renderChat(); return; }
+  let activeAgent = initial;
   const sessionId = attachedId;
-  const scope = JSON.stringify([sessionId, keyOf(agent)]);
+  const scope = JSON.stringify([sessionId, keyOf(activeAgent)]);
   if (chatScope !== scope) { resetChatPages(); chatScope = scope; incremental = false; }
   if (chatBusy) { chatAgain = true; return; }
-  const epoch = chatEpoch;
+  let epoch = chatEpoch;
   chatBusy = true;
   try {
     do {
       chatAgain = false;
-      const win = await fetchMessages(token(), agent.agent_id, agent.agent_session_id,
-        incremental ? (chatCursor ?? undefined) : undefined);
+      const attemptAgent = activeAgent;
+      const recovered = await fetchMessagesWithRecovery({
+        initialAgent: attemptAgent,
+        fetchWindow: (target) =>
+          fetchMessages(
+            token(),
+            target.agent_id,
+            target.agent_session_id,
+            incremental && keyOf(target) === keyOf(attemptAgent) ? (chatCursor ?? undefined) : undefined,
+          ),
+        refreshAgents,
+        currentAgent: () =>
+          epoch === chatEpoch && attachedId === sessionId && chatAvailable(agents, attachedId, transcriptEnabled)
+            ? attachedAgent()
+            : null,
+      });
+      if (epoch !== chatEpoch || attachedId !== sessionId) return;
+      if (!recovered.agent || !chatAvailable(agents, attachedId, transcriptEnabled)) {
+        showView();
+        return;
+      }
       const currentAgent = attachedAgent();
-      if (epoch !== chatEpoch || attachedId !== sessionId || !currentAgent ||
-          keyOf(currentAgent) !== keyOf(agent) || !chatAvailable(agents, attachedId, transcriptEnabled)) return;
+      if (!currentAgent || keyOf(currentAgent) !== keyOf(recovered.agent)) return;
+      if (keyOf(recovered.agent) !== keyOf(attemptAgent)) {
+        resetChatPages();
+        epoch = chatEpoch;
+        chatScope = JSON.stringify([sessionId, keyOf(recovered.agent)]);
+        chatBusy = true;
+        activeAgent = recovered.agent;
+        incremental = false;
+      }
+      const win = recovered.window;
       if (win.source !== "transcript") {
-        chatFallback = fallbackText(win.reason, agent.agent_id); renderChat(); return;
+        chatFallback = fallbackText(win.reason, activeAgent.agent_id); renderChat(); return;
       }
       chatFallback = null;
       if (win.reset || !incremental) {
