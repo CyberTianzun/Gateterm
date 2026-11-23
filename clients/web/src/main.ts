@@ -8,6 +8,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { GateClient } from "./client";
+import { createRefitScheduler, sanitizeDimensions } from "./terminal-size";
 import { writeClipboard } from "./clipboard";
 import { readToken } from "./auth";
 import { mountCloudStatus } from "./cloud";
@@ -232,7 +233,7 @@ function syncFont(stack: string) {
     if (changed && term) {
       term.clearTextureAtlas();
       term.options.fontFamily = config.font.family;
-      requestAnimationFrame(refit);
+      scheduleRefit();
     }
   });
 }
@@ -253,7 +254,7 @@ syncFont(config.font.family);
     if (!terminalSuspended) client.setColors(termChannel, termColors(term.options.theme));
     // 字号/行高/字距一变,cell 尺寸就变了,能放下的 cols×rows 也跟着变。xterm
     // 要一帧才把新的 cell 尺寸量出来,这里等一帧再上报,否则量到的还是旧值。
-    requestAnimationFrame(refit);
+    scheduleRefit();
   }
 }
 
@@ -271,6 +272,10 @@ function applyRenderer(terminal: Terminal) {
       console.warn("gateterm: WebGL 上下文丢失,回落到 DOM 渲染器");
       if (webgl === addon) disposeWebgl();
       else addon.dispose();
+      if (term === terminal) {
+        terminal.refresh(0, terminal.rows - 1);
+        scheduleRefit();
+      }
     });
     terminal.loadAddon(addon);
     webgl = addon;
@@ -372,7 +377,7 @@ function syncSidebarPosition() {
   $("sidebar-show").setAttribute("aria-label", t("sidebar.show"));
   button.innerHTML = iconSvg(position === "left" ? "sidebar-pin-right" : "sidebar-hide");
   setDrawer(document.body.classList.contains("sidebar-open"));
-  requestAnimationFrame(refit);
+  scheduleRefit();
 }
 
 function setSidebarPosition(position: GateConfig["ui"]["sidebarPosition"]) {
@@ -421,6 +426,7 @@ function openTerminal(id: number) {
   resetChatPages();
   chatFallback = null;
   viewMode = "terminal";
+  showView({ skipRefit: true });
   term = new Terminal({ allowProposedApi: true, ...toTerminalOptions(config) });
   fit = new FitAddon();
   term.loadAddon(fit);
@@ -512,8 +518,8 @@ function openTerminal(id: number) {
   );
   term.focus();
   renderSidebar();
-  // 视图归位放在终端建好之后:showView 末尾会量尺寸
-  showView();
+  syncViewToggle();
+  scheduleRefit();
 }
 
 /**
@@ -543,6 +549,7 @@ function releaseKeyboard() {
 /** addon 必须先于 Terminal 释放:0.18.0 的恢复路径会去碰 `_core._renderService`,
  *  Terminal 先没了就是对着一个拆掉的 render service 操作。 */
 function disposeTerminal() {
+  refitScheduler.cancel();
   // Disposed xterm instances may never call their queued write callbacks.
   // Release receive dispatch so the replacement terminal can begin attaching.
   finishTerminalWrite?.();
@@ -603,16 +610,14 @@ function resumeTerminal() {
     want?.rows ?? term.rows,
     termColors(term.options.theme),
   );
+  scheduleRefit();
 }
 
 /** 量一下当前视口放得下多大。只作为"诉求"上报——多端 attach 同一个会话时 pty
  *  只有一个尺寸,权威值由服务端归并后经 resized 下发,所以这里不能直接 fit()。 */
 function proposeSize(): { cols: number; rows: number } | null {
   if (!term || !fit) return null;
-  const dims = fit.proposeDimensions();
-  if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return null;
-  if (dims.cols < 1 || dims.rows < 1) return null;
-  return { cols: dims.cols, rows: dims.rows };
+  return sanitizeDimensions(fit.proposeDimensions());
 }
 
 function refit() {
@@ -621,8 +626,27 @@ function refit() {
   if (want) client.resize(termChannel, want.cols, want.rows);
 }
 
-window.addEventListener("resize", refit);
-window.visualViewport?.addEventListener("resize", refit);
+const refitScheduler = createRefitScheduler({
+  scheduleFrame: (cb) => requestAnimationFrame(cb),
+  cancelFrame: (id) => cancelAnimationFrame(id),
+  run: refit,
+});
+
+function scheduleRefit() {
+  refitScheduler.schedule();
+}
+
+if (typeof ResizeObserver !== "undefined") {
+  new ResizeObserver(scheduleRefit).observe($("terminal"));
+}
+window.addEventListener("resize", scheduleRefit);
+window.visualViewport?.addEventListener("resize", scheduleRefit);
+void document.fonts?.ready?.then(() => {
+  if (term) {
+    term.clearTextureAtlas();
+    scheduleRefit();
+  }
+});
 window.addEventListener("online", () => client.kick());
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") {
@@ -686,7 +710,7 @@ $("sidebar-position").addEventListener("click", () => {
 $("sidebar-show").addEventListener("click", () => setSidebarPosition("left"));
 narrowSidebar.addEventListener("change", () => {
   setDrawer(false);
-  requestAnimationFrame(refit);
+  scheduleRefit();
 });
 // 回列表 = detach 并回到主视图。会话本身不受影响(协议 CH6:detach 从不结束会话),
 // 再点进来是一次 resync —— 用一次重绘换「随时能纵览全局」,值。
@@ -740,6 +764,9 @@ client.onOpen = () => {
   setBanner(null);
   setConn("conn.connected");
   client.send({ type: "list-sessions" });
+  if (attachedId !== null && !terminalSuspended && viewMode === "terminal") {
+    scheduleRefit();
+  }
 };
 client.onReconnecting = () => {
   cloudStatus.setOnline(false);
@@ -790,7 +817,7 @@ function syncViewToggle() {
  *
  * 所以现在:别处只改状态,改完调这里。
  */
-function showView() {
+function showView(opts?: { skipRefit?: boolean }) {
   if (viewMode === "chat" && !chatAvailable(agents, attachedId, transcriptEnabled)) {
     viewMode = "terminal";
     term?.focus();
@@ -802,7 +829,10 @@ function showView() {
   $("back-to-list").hidden = attachedId === null;
   syncViewToggle();
   // 从聊天切回终端时终端刚从 hidden 变回可见,尺寸要重新量一次并上报
-  if (!chatting && attachedId !== null) refit();
+  if (!opts?.skipRefit && !chatting && attachedId !== null) {
+    refit();
+    scheduleRefit();
+  }
 }
 
 /**

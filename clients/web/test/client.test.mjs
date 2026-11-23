@@ -19,7 +19,7 @@ function frame(channel, body) {
   data.set(payload, 5);
   return data.buffer;
 }
-function setup() {
+async function setup() {
   let socket;
   const sockets = [];
   globalThis.WebSocket = class {
@@ -31,6 +31,8 @@ function setup() {
   };
   const client = new GateClient();
   client.connect("ws://test", "token");
+  socket.emit({ type: "hello-ok", proto: 1 });
+  await tick();
   client.attach(10, 1, 80, 24, colors);
   socket.emit({ type: "attached", channel: 1, mode: "resync", seq: 0 });
   return { client, socket, sockets };
@@ -38,7 +40,7 @@ function setup() {
 afterEach(() => { delete globalThis.WebSocket; });
 
 test("resize, reset and resync anchors wait for the preceding write to apply", async () => {
-  const { client, socket } = setup();
+  const { client, socket } = await setup();
   let apply;
   const events = [];
   client.onChannelData = () => new Promise(resolve => { apply = () => { events.push("write"); resolve(); }; });
@@ -57,7 +59,7 @@ test("resize, reset and resync anchors wait for the preceding write to apply", a
 });
 
 test("reconnect advertises only applied bytes and waits for a pending write", async () => {
-  const { client, socket } = setup();
+  const { client, socket } = await setup();
   socket.emit({ type: "resync-end", channel: 1, seq: 100 });
   await tick();
   let apply;
@@ -72,7 +74,7 @@ test("reconnect advertises only applied bytes and waits for a pending write", as
 });
 
 test("snapshot bytes never advance the live sequence before its resync anchor", async () => {
-  const { client, socket } = setup();
+  const { client, socket } = await setup();
   socket.emit({ type: "resync-end", channel: 1, seq: 100 });
   socket.emit({ type: "resync-begin", channel: 1 });
   socket.emit("synthetic snapshot", 1);
@@ -82,7 +84,7 @@ test("snapshot bytes never advance the live sequence before its resync anchor", 
 });
 
 test("an asynchronous control cannot anchor a replacement attachment on the same channel", async () => {
-  const { client, socket } = setup();
+  const { client, socket } = await setup();
   await tick();
   let apply;
   client.onControl = msg => msg.type === "resync-end"
@@ -99,7 +101,7 @@ test("an asynchronous control cannot anchor a replacement attachment on the same
 });
 
 test("detached channels cannot deliver stale output or channel controls", async () => {
-  const { client, socket } = setup();
+  const { client, socket } = await setup();
   await tick();
   const events = [];
   client.onChannelData = () => events.push("data");
@@ -120,7 +122,7 @@ test("detached channels cannot deliver stale output or channel controls", async 
 });
 
 test("reconnect drains applied output but ignores an obsolete queued handshake", async context => {
-  const { client, socket, sockets } = setup();
+  const { client, socket, sockets } = await setup();
   socket.emit({ type: "resync-end", channel: 1, seq: 100 });
   await tick();
   let apply;
@@ -144,7 +146,7 @@ test("reconnect drains applied output but ignores an obsolete queued handshake",
 });
 
 test("invalid credentials stop reconnecting while an old terminal write is pending", async context => {
-  const { client, socket, sockets } = setup();
+  const { client, socket, sockets } = await setup();
   socket.emit({ type: "hello-ok", proto: 1 });
   await tick();
   let apply;
@@ -171,7 +173,7 @@ test("invalid credentials stop reconnecting while an old terminal write is pendi
 });
 
 test("queued errors from an old socket cannot poison a new authentication attempt", async context => {
-  const { client, socket, sockets } = setup();
+  const { client, socket, sockets } = await setup();
   socket.emit({ type: "hello-ok", proto: 1 });
   await tick();
   let apply;
@@ -193,7 +195,7 @@ test("queued errors from an old socket cannot poison a new authentication attemp
 });
 
 test("a received hello prevents ordinary errors being mistaken for authentication failure", async context => {
-  const { client, socket, sockets } = setup();
+  const { client, socket, sockets } = await setup();
   socket.emit({ type: "hello-ok", proto: 1 });
   await tick();
   let apply;
@@ -217,7 +219,7 @@ test("a received hello prevents ordinary errors being mistaken for authenticatio
 });
 
 test("coalesces consecutive queued data frames while a write is pending and preserves control ordering", async () => {
-  const { client, socket } = setup();
+  const { client, socket } = await setup();
   socket.emit({ type: "resync-end", channel: 1, seq: 100 });
   await tick();
   const resolvers = [];
@@ -253,7 +255,7 @@ test("coalesces consecutive queued data frames while a write is pending and pres
 });
 
 test("kick immediately redials when waiting on reconnect backoff", async context => {
-  const { client, socket, sockets } = setup();
+  const { client, socket, sockets } = await setup();
   socket.emit({ type: "hello-ok", proto: 1 });
   await tick();
   const timers = [];
@@ -267,4 +269,49 @@ test("kick immediately redials when waiting on reconnect backoff", async context
   assert.equal(timers.length, 1);
   client.kick();
   assert.equal(sockets.length, 2);
+});
+
+test("defers attach, resize, setColors and sendInput while CONNECTING, pre-hello-ok OPEN, or CLOSED", async () => {
+  let socket;
+  globalThis.WebSocket = class {
+    readyState = 0; // CONNECTING
+    sent = [];
+    constructor() { socket = this; }
+    send(data) {
+      if (this.readyState !== 1) throw new Error("InvalidStateError");
+      this.sent.push(JSON.parse(decoder.decode(new Uint8Array(data).slice(5))));
+    }
+    emit(message, channel = 0) { this.onmessage({ data: frame(channel, message) }); }
+    close() { this.readyState = 3; }
+  };
+  const client = new GateClient();
+  client.connect("ws://test", "token");
+  // While CONNECTING (0): must not throw or send
+  client.attach(10, 1, 80, 24, colors);
+  client.resize(1, 132, 42);
+  client.setColors(1, { fg: "#111111", bg: "#222222" });
+  client.sendInput(1, encoder.encode("ls\n"));
+  assert.deepEqual(socket.sent, []);
+  // Socket opens (1) and sends hello, but hello-ok has not arrived yet:
+  // still must not send premature resize or duplicate attach!
+  socket.readyState = 1;
+  socket.onopen();
+  client.resize(1, 140, 48);
+  client.sendInput(1, encoder.encode("pwd\n"));
+  assert.deepEqual(socket.sent.map(m => m.type), ["hello"]);
+  // Once hello-ok arrives, exactly one attach is sent with the latest dimensions & colors
+  socket.emit({ type: "hello-ok", proto: 1 });
+  await tick();
+  assert.equal(socket.sent.length, 2);
+  assert.equal(socket.sent[1].type, "attach");
+  assert.equal(socket.sent[1].cols, 140);
+  assert.equal(socket.sent[1].rows, 48);
+  assert.deepEqual(socket.sent[1].colors, { fg: "#111111", bg: "#222222" });
+  // After hello-ok, resize works normally; after close (3), send is a safe no-op
+  client.resize(1, 150, 50);
+  assert.equal(socket.sent.at(-1).type, "resize");
+  socket.readyState = 3;
+  client.resize(1, 160, 52);
+  client.sendInput(1, encoder.encode("x"));
+  assert.equal(socket.sent.length, 3);
 });

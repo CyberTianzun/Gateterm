@@ -40,6 +40,7 @@ export class GateClient {
   private backoffMs = 250;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
+  private ready = false;
   private attachments = new Map<number, AttachState>();
   // xterm applies writes asynchronously. Keep controls and reconnect anchors behind
   // the parser callback, including frames received in the same browser turn, while
@@ -63,6 +64,7 @@ export class GateClient {
 
   close() {
     this.closed = true;
+    this.ready = false;
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -80,6 +82,7 @@ export class GateClient {
   }
 
   private dial() {
+    this.ready = false;
     // Close events must see authentication facts immediately, even while an old
     // terminal write blocks receive dispatch. Each socket owns its own facts.
     let authOk = false;
@@ -89,6 +92,7 @@ export class GateClient {
     ws.binaryType = "arraybuffer";
     this.ws = ws;
     ws.onopen = () => {
+      if (this.ws !== ws || ws.readyState === 2 || ws.readyState === 3) return;
       ws.send(encodeControl({ type: "hello", token: this.token, proto: PROTO_VERSION }));
     };
     ws.onmessage = (ev) => {
@@ -138,6 +142,7 @@ export class GateClient {
     ws.onclose = () => {
       socketClosed = true;
       if (this.ws !== ws) return;
+      this.ready = false;
       if (this.closed) return;
       // 这次拨号连 hello-ok 都没等到,而且服务端在那之前就已经报过错(典型情况:
       // token 不对)——重试没有意义,停止重连并让上层提示用户。
@@ -163,7 +168,7 @@ export class GateClient {
         const item = this.queue.shift()!;
         if (item.kind === "control") {
           const { msg, ws, isSocketClosed, channel, attachment } = item;
-          if (msg.type === "hello-ok" && isSocketClosed()) continue;
+          if (msg.type === "hello-ok" && (this.closed || isSocketClosed())) continue;
           if ((msg.type === "hello-ok" || msg.type === "error") && this.ws !== ws) continue;
           // A switch can dispose the old terminal while its write is pending.
           if (channel !== CONTROL_CHANNEL && this.attachments.get(channel) !== attachment) continue;
@@ -195,6 +200,7 @@ export class GateClient {
     const attachment = this.attachments.get(msg.channel);
     switch (msg.type) {
       case "hello-ok": {
+        this.ready = true;
         // 重连后恢复所有 attach
         for (const [channel, a] of this.attachments) {
           this.send({
@@ -231,11 +237,22 @@ export class GateClient {
     if (a) a.lastSeq = seq;
   }
 
+  private isReady(): boolean {
+    return (
+      !this.closed &&
+      this.ready &&
+      this.ws !== null &&
+      (this.ws.readyState === undefined || this.ws.readyState === 1)
+    );
+  }
+
   send(msg: unknown) {
+    if (!this.isReady()) return;
     this.ws?.send(encodeControl(msg));
   }
 
   sendInput(channel: number, bytes: Uint8Array) {
+    if (!this.isReady()) return;
     this.ws?.send(encodeFrame(channel, bytes));
   }
 
