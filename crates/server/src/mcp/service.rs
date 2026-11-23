@@ -447,6 +447,7 @@ mod tests {
             updated_at,
             acked_at: 0,
             process: None,
+            revision: 0,
         }
     }
 

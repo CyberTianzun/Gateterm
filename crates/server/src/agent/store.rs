@@ -6,8 +6,8 @@
 //! **任何事件都能惰性创建会话**,不假设 `SessionStart` 一定先到 —— Task 3 的端到端
 //! 里就观察到过 `-p` 模式下第一个到达的是 `UserPromptSubmit`。
 
-use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -168,6 +168,8 @@ pub struct AgentSession {
     pub acked_at: u64,
     #[serde(skip)]
     pub(crate) process: Option<super::process::Identity>,
+    #[serde(skip)]
+    pub(crate) revision: u64,
 }
 
 impl AgentSession {
@@ -245,6 +247,14 @@ pub enum AnswerResult {
 const ANSWERED_MEMORY: usize = 64;
 const RETIRED_PROCESS_MEMORY: usize = 64;
 
+#[derive(Debug, Clone)]
+struct AutoTitleRecord {
+    agent_id: String,
+    agent_session_id: String,
+    rank: super::title::TitleRank,
+    full_title: String,
+}
+
 #[derive(Default)]
 pub struct AgentSessionStore {
     pub(crate) history: Mutex<super::history::Catalog>,
@@ -256,6 +266,10 @@ pub struct AgentSessionStore {
     pending: Mutex<HashMap<String, PendingEntry>>,
     answered: Mutex<VecDeque<String>>,
     sweeper_started: AtomicBool,
+    revision_seq: AtomicU64,
+    auto_titles: Mutex<HashMap<u64, AutoTitleRecord>>,
+    consumed_osc_seq: Mutex<HashMap<u64, u64>>,
+    title_watchers: Mutex<HashSet<u64>>,
 }
 
 /// 对一个 agent 会话的清理判决。
@@ -412,6 +426,7 @@ impl AgentSessionStore {
             updated_at: now(),
             acked_at: 0,
             process: None,
+            revision: 0,
         });
         if let Some(s) = up.state {
             entry.state = s;
@@ -437,7 +452,144 @@ impl AgentSessionStore {
             entry.session = session;
         }
         entry.updated_at = now();
+        entry.revision = self.revision_seq.fetch_add(1, Ordering::SeqCst) + 1;
         (entry.clone(), superseded)
+    }
+
+    pub fn active_agent_for_session(&self, session_id: u64) -> Option<(String, String)> {
+        self.sessions
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|s| s.session == Some(session_id) && s.state != AgentState::Done)
+            .max_by_key(|s| s.revision)
+            .map(|s| (s.agent_id.clone(), s.agent_session_id.clone()))
+    }
+
+    pub fn apply_auto_title(
+        &self,
+        manager: &crate::session::manager::SessionManager,
+        session_id: u64,
+        agent_id: &str,
+        agent_session_id: &str,
+        raw: &str,
+        rank: super::title::TitleRank,
+    ) -> bool {
+        let Some(adapter) = super::find(agent_id) else {
+            return false;
+        };
+        let Some(full_title) = super::title::clean_title(raw, rank, adapter) else {
+            return false;
+        };
+        let concise = super::title::truncate_session_name(
+            &full_title,
+            super::title::SESSION_NAME_MAX_COLS,
+        );
+
+        let mut titles = self.auto_titles.lock().unwrap();
+        if let Some(record) = titles.get(&session_id)
+            && record.agent_id == agent_id
+            && record.agent_session_id == agent_session_id
+        {
+            if rank < record.rank {
+                return false;
+            }
+            if rank == super::title::TitleRank::FirstPrompt
+                && record.rank >= super::title::TitleRank::FirstPrompt
+            {
+                return false;
+            }
+            if rank == record.rank && record.full_title == full_title {
+                return false;
+            }
+        }
+
+        {
+            let mut sessions = self.sessions.lock().unwrap();
+            let key = (agent_id.to_string(), agent_session_id.to_string());
+            let Some(agent) = sessions.get_mut(&key) else {
+                return false;
+            };
+            if agent.session != Some(session_id) || agent.state == AgentState::Done {
+                return false;
+            }
+            agent.title = Some(full_title.clone());
+        }
+
+        titles.insert(
+            session_id,
+            AutoTitleRecord {
+                agent_id: agent_id.to_string(),
+                agent_session_id: agent_session_id.to_string(),
+                rank,
+                full_title,
+            },
+        );
+        let _ = manager.auto_rename(session_id, &concise);
+        true
+    }
+
+    pub fn seed_auto_title(
+        &self,
+        session_id: u64,
+        agent_id: &str,
+        agent_session_id: &str,
+        full_title: String,
+        rank: super::title::TitleRank,
+    ) {
+        if full_title.is_empty() {
+            return;
+        }
+        self.auto_titles.lock().unwrap().insert(
+            session_id,
+            AutoTitleRecord {
+                agent_id: agent_id.to_string(),
+                agent_session_id: agent_session_id.to_string(),
+                rank,
+                full_title,
+            },
+        );
+    }
+
+    pub fn has_explicit_summary(
+        &self,
+        session_id: u64,
+        agent_id: &str,
+        agent_session_id: &str,
+    ) -> bool {
+        self.auto_titles.lock().unwrap().get(&session_id).is_some_and(|r| {
+            r.agent_id == agent_id
+                && r.agent_session_id == agent_session_id
+                && r.rank == super::title::TitleRank::ExplicitSummary
+        })
+    }
+
+    pub fn record_osc_seq(&self, session_id: u64, seq: u64) -> bool {
+        if seq == 0 {
+            return false;
+        }
+        let mut guard = self.consumed_osc_seq.lock().unwrap();
+        match guard.get_mut(&session_id) {
+            Some(prev) if seq <= *prev => false,
+            Some(prev) => {
+                *prev = seq;
+                true
+            }
+            None => {
+                guard.insert(session_id, seq);
+                true
+            }
+        }
+    }
+
+    pub fn claim_title_watcher(&self, session_id: u64) -> bool {
+        self.title_watchers.lock().unwrap().insert(session_id)
+    }
+
+    pub fn release_title_watcher(&self, session_id: u64) {
+        self.title_watchers.lock().unwrap().remove(&session_id);
+        self.auto_titles.lock().unwrap().remove(&session_id);
+        self.consumed_osc_seq.lock().unwrap().remove(&session_id);
     }
 
     pub(crate) fn is_retired(&self, agent_id: &str, agent_session_id: &str) -> bool {
@@ -765,6 +917,7 @@ mod tests {
             updated_at,
             acked_at: 0,
             process: None,
+            revision: 0,
         }
     }
 

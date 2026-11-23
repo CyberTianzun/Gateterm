@@ -679,10 +679,20 @@ async fn open_with_env(state: AppState, headers: HeaderMap, key: Key, env: Detec
         return error(StatusCode::NOT_FOUND, "not-found");
     }
     let manager = state.manager.clone();
-    let (name, cwd) = (
-        format!("{} · {}", entry.agent_name, entry.title),
-        entry.cwd.clone(),
-    );
+    let seed_rank = if entry.has_explicit_title {
+        super::title::TitleRank::ExplicitSummary
+    } else {
+        super::title::TitleRank::FirstPrompt
+    };
+    let clean_full = super::find(&entry.agent_id)
+        .and_then(|adapter| super::title::clean_title(&entry.title, seed_rank, adapter))
+        .filter(|s| !s.is_empty());
+    let name = clean_full
+        .as_deref()
+        .map(|full| super::title::truncate_session_name(full, super::title::SESSION_NAME_MAX_COLS))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| entry.agent_name.clone());
+    let cwd = entry.cwd.clone();
     let result =
         tokio::task::spawn_blocking(move || manager.create(Some(name), Some(command), cwd)).await;
     match result {
@@ -703,12 +713,22 @@ async fn open_with_env(state: AppState, headers: HeaderMap, key: Key, env: Detec
                 Some(session.id),
                 super::store::Update {
                     cwd: entry.cwd,
-                    title: Some(entry.title),
+                    title: clean_full.clone(),
                     transcript: Some(entry.path.to_string_lossy().into_owned()),
                     ..Default::default()
                 },
             );
+            if let Some(full_title) = clean_full {
+                state.agent_sessions.seed_auto_title(
+                    session.id,
+                    &entry.agent_id,
+                    &entry.agent_session_id,
+                    full_title,
+                    seed_rank,
+                );
+            }
             state.manager.publish(snapshot.to_msg());
+            super::title::ensure_osc_watcher(&state, session.id);
             if let Some(adapter) = super::find(&entry.agent_id) {
                 super::process::watch_agent(&state, adapter, &snapshot, "SessionStart").await;
             }
@@ -1565,5 +1585,165 @@ mod tests {
             .find(|e| e.agent_session_id == "codex-idx")
             .unwrap();
         assert!(codex_idx.has_explicit_title);
+    }
+
+    #[tokio::test]
+    async fn open_uses_concise_title_without_brand_prefix_and_respects_title_rank() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        fs::create_dir(&bin).unwrap();
+        #[cfg(windows)]
+        fixture(
+            &bin,
+            "claude.cmd",
+            "@echo off\r\nset /p waiting=\r\n",
+        );
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fixture(&bin, "claude", "#!/bin/sh\nread waiting\n");
+            fs::set_permissions(bin.join("claude"), fs::Permissions::from_mode(0o700)).unwrap();
+        }
+
+        let ws = serde_json::to_string(home.path()).unwrap();
+        let long_prompt = "Implement remote clipboard synchronization across multiple browsers";
+        fixture(
+            home.path(),
+            ".claude/projects/p/s-prompt.jsonl",
+            &format!(
+                "{{\"sessionId\":\"s-prompt\",\"cwd\":{ws},\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":{}}}}}\n",
+                serde_json::to_string(&format!("## {long_prompt}")).unwrap()
+            ),
+        );
+        fixture(
+            home.path(),
+            ".claude/projects/p/s-explicit.jsonl",
+            &format!(
+                "{{\"sessionId\":\"s-explicit\",\"cwd\":{ws},\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"Ignore fallback\"}}}}\n\
+                 {{\"type\":\"custom-title\",\"customTitle\":\"Claude Code: Explicit Summary\"}}\n"
+            ),
+        );
+        fixture(
+            home.path(),
+            ".claude/projects/p/s-empty.jsonl",
+            &format!(
+                "{{\"sessionId\":\"s-empty\",\"cwd\":{ws},\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"<system-reminder>ignore</system-reminder>\"}}}}\n"
+            ),
+        );
+
+        let env = || DetectEnv {
+            home: home.path().into(),
+            path: Some(std::env::join_paths([&bin]).unwrap()),
+        };
+        let state = state();
+        *state.agent_sessions.history.lock().unwrap() = scan(&env());
+
+        // 1. Prompt-seeded session: concise title without "{agent_name} · " prefix, and OscTitle can upgrade it.
+        let r_prompt = open_with_env(
+            state.clone(),
+            headers(),
+            Key {
+                agent_id: "claude-code".into(),
+                agent_session_id: "s-prompt".into(),
+            },
+            env(),
+        )
+        .await;
+        assert_eq!(r_prompt.status(), StatusCode::OK);
+        let body_prompt: Value = serde_json::from_slice(
+            &axum::body::to_bytes(r_prompt.into_body(), 4096).await.unwrap(),
+        )
+        .unwrap();
+        let sid_prompt = body_prompt["session"]["id"].as_u64().unwrap();
+        let name_prompt = body_prompt["session"]["name"].as_str().unwrap();
+        assert!(!name_prompt.contains("Claude Code · "), "{name_prompt:?}");
+        assert!(
+            super::super::title::display_width(name_prompt)
+                <= super::super::title::SESSION_NAME_MAX_COLS,
+            "{name_prompt:?}"
+        );
+        assert_eq!(
+            state
+                .agent_sessions
+                .snapshot("claude-code", "s-prompt")
+                .and_then(|s| s.title),
+            Some(long_prompt.to_string())
+        );
+        assert!(
+            !state.agent_sessions.claim_title_watcher(sid_prompt),
+            "open_with_env must start the OSC watcher"
+        );
+        assert!(state.agent_sessions.apply_auto_title(
+            &state.manager,
+            sid_prompt,
+            "claude-code",
+            "s-prompt",
+            "✳ Claude Code: Upgraded Live OSC",
+            super::super::title::TitleRank::OscTitle,
+        ));
+        assert_eq!(
+            state.manager.get(sid_prompt).unwrap().info().name,
+            "Upgraded Live OSC"
+        );
+        state.manager.kill(sid_prompt);
+
+        // 2. Explicitly titled session: brand prefix cleaned, and OscTitle must NOT downgrade it.
+        let r_explicit = open_with_env(
+            state.clone(),
+            headers(),
+            Key {
+                agent_id: "claude-code".into(),
+                agent_session_id: "s-explicit".into(),
+            },
+            env(),
+        )
+        .await;
+        assert_eq!(r_explicit.status(), StatusCode::OK);
+        let body_explicit: Value = serde_json::from_slice(
+            &axum::body::to_bytes(r_explicit.into_body(), 4096).await.unwrap(),
+        )
+        .unwrap();
+        let sid_explicit = body_explicit["session"]["id"].as_u64().unwrap();
+        assert_eq!(body_explicit["session"]["name"], "Explicit Summary");
+        assert!(!state.agent_sessions.apply_auto_title(
+            &state.manager,
+            sid_explicit,
+            "claude-code",
+            "s-explicit",
+            "Lower Osc Title",
+            super::super::title::TitleRank::OscTitle,
+        ));
+        assert_eq!(
+            state.manager.get(sid_explicit).unwrap().info().name,
+            "Explicit Summary"
+        );
+        state.manager.kill(sid_explicit);
+
+        // 3. Empty title: falls back to entry.agent_name ONLY when cleaned title is empty.
+        let r_empty = open_with_env(
+            state.clone(),
+            headers(),
+            Key {
+                agent_id: "claude-code".into(),
+                agent_session_id: "s-empty".into(),
+            },
+            env(),
+        )
+        .await;
+        assert_eq!(r_empty.status(), StatusCode::OK);
+        let body_empty: Value = serde_json::from_slice(
+            &axum::body::to_bytes(r_empty.into_body(), 4096).await.unwrap(),
+        )
+        .unwrap();
+        let sid_empty = body_empty["session"]["id"].as_u64().unwrap();
+        assert_eq!(body_empty["session"]["name"], "Claude Code");
+        assert_eq!(
+            state
+                .agent_sessions
+                .snapshot("claude-code", "s-empty")
+                .and_then(|s| s.title),
+            None
+        );
+        state.manager.kill(sid_empty);
     }
 }

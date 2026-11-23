@@ -331,7 +331,8 @@ pub async fn hook(
     if is_blocking {
         return blocking_hook(&state, adapter, &agent_session_id, session, &payload).await;
     }
-    let update = update.expect("checked non-blocking update above");
+    let mut update = update.expect("checked non-blocking update above");
+    let explicit_hook_title = update.title.take();
 
     let (snapshot, superseded) = if supersedes(&event) {
         state.agent_sessions.apply_superseding(adapter.id(), &agent_session_id, Some(session), update)
@@ -342,6 +343,14 @@ pub async fn hook(
         state.manager.publish(gone.to_msg());
     }
     state.manager.publish(snapshot.to_msg());
+    super::title::on_hook_event(
+        &state,
+        adapter,
+        &snapshot,
+        &event,
+        &payload,
+        explicit_hook_title.as_deref(),
+    );
     if crate::cloud::notifier::is_turn_completed(&event, &payload, snapshot.state) {
         state.manager.turn_completed(session, adapter.id(), &agent_session_id);
     }

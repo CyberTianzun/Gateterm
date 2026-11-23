@@ -1,6 +1,17 @@
 //! 纯标题规范化、噪声过滤与东亚显示宽度智能截断。
 
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use gateterm_protocol::AgentState;
+use tokio::sync::broadcast::error::RecvError;
+
+use super::detect::DetectEnv;
+use super::store::AgentSession;
 use super::AgentAdapter;
+use crate::app::AppState;
+use crate::session::pty::SessionOutput;
 
 pub const SESSION_NAME_MAX_COLS: usize = 36;
 pub const FULL_TITLE_MAX_CHARS: usize = 200;
@@ -19,6 +30,7 @@ const SHELL_BINARIES: &[&str] = &[
     "pwsh.exe",
     "cmd",
     "cmd.exe",
+    "command prompt",
     "bash",
     "zsh",
     "sh",
@@ -502,7 +514,7 @@ fn is_user_at_host_prompt(s: &str) -> bool {
         || rhs_t.starts_with("..\\")
 }
 
-fn is_osc_noise(s: &str) -> bool {
+fn is_shell_or_path_noise(s: &str) -> bool {
     if is_bare_fs_path(s) || is_user_at_host_prompt(s) {
         return true;
     }
@@ -520,6 +532,27 @@ fn is_osc_noise(s: &str) -> bool {
             return true;
         }
     }
+    false
+}
+
+fn is_osc_noise(s: &str) -> bool {
+    let mut cur = s.trim();
+    loop {
+        if is_shell_or_path_noise(cur) {
+            return true;
+        }
+        if let Some(rest) = strip_ci_prefix(cur, "select ") {
+            cur = rest.trim_start();
+            continue;
+        }
+        if let Some(rest) = strip_ci_prefix(cur, "administrator:")
+            .or_else(|| strip_ci_prefix(cur, "管理员:"))
+        {
+            cur = rest.trim_start();
+            continue;
+        }
+        break;
+    }
     let status_norm = s.trim_end_matches(['.', '…', ' ']);
     GENERIC_STATUS.iter().any(|g| eq_ci(status_norm, g))
 }
@@ -534,6 +567,180 @@ fn cap_full_title(s: &str) -> String {
     }
     out.push('…');
     out
+}
+
+pub fn ensure_osc_watcher(state: &AppState, session_id: u64) -> bool {
+    let Some(session) = state.manager.get(session_id) else {
+        return false;
+    };
+    if session.has_exited() {
+        return false;
+    }
+    if !state.agent_sessions.claim_title_watcher(session_id) {
+        return false;
+    }
+    let mut rx = session.subscribe();
+    if session.has_exited() {
+        state.agent_sessions.release_title_watcher(session_id);
+        return false;
+    }
+
+    let manager_weak = Arc::downgrade(&state.manager);
+    let store_weak = Arc::downgrade(&state.agent_sessions);
+    tokio::spawn(async move {
+        loop {
+            let raw = match rx.recv().await {
+                Ok(SessionOutput::Title { seq, title }) => {
+                    let Some(store) = store_weak.upgrade() else {
+                        break;
+                    };
+                    if !store.record_osc_seq(session_id, seq) {
+                        continue;
+                    }
+                    let Some(raw) = title else {
+                        continue;
+                    };
+                    raw
+                }
+                Ok(SessionOutput::Exited) | Err(RecvError::Closed) => break,
+                Ok(_) => continue,
+                Err(RecvError::Lagged(_)) => {
+                    if session.has_exited() {
+                        break;
+                    }
+                    let Some(ts) = session.terminal_title_state() else {
+                        continue;
+                    };
+                    let Some(store) = store_weak.upgrade() else {
+                        break;
+                    };
+                    if !store.record_osc_seq(session_id, ts.seq) {
+                        continue;
+                    }
+                    let Some(raw) = ts.title else {
+                        continue;
+                    };
+                    raw
+                }
+            };
+            let (Some(manager), Some(store)) = (manager_weak.upgrade(), store_weak.upgrade()) else {
+                break;
+            };
+            let Some((agent_id, agent_session_id)) = store.active_agent_for_session(session_id)
+            else {
+                continue;
+            };
+            store.apply_auto_title(
+                &manager,
+                session_id,
+                &agent_id,
+                &agent_session_id,
+                &raw,
+                TitleRank::OscTitle,
+            );
+        }
+        if let Some(store) = store_weak.upgrade() {
+            store.release_title_watcher(session_id);
+        }
+    });
+    true
+}
+
+pub fn on_hook_event(
+    state: &AppState,
+    adapter: &'static dyn AgentAdapter,
+    snapshot: &AgentSession,
+    event: &str,
+    payload: &serde_json::Value,
+    explicit_hook_title: Option<&str>,
+) {
+    if snapshot.state == AgentState::Done {
+        return;
+    }
+    let Some(session_id) = snapshot.session else {
+        return;
+    };
+    let newly_started = ensure_osc_watcher(state, session_id);
+    if let Some(raw) = explicit_hook_title {
+        state.agent_sessions.apply_auto_title(
+            &state.manager,
+            session_id,
+            adapter.id(),
+            &snapshot.agent_session_id,
+            raw,
+            TitleRank::ExplicitSummary,
+        );
+    }
+    if newly_started
+        && let Some(ts) = state
+            .manager
+            .get(session_id)
+            .and_then(|s| s.terminal_title_state())
+    {
+        let fresh = ts.updated_at.elapsed() <= Duration::from_secs(5);
+        if state.agent_sessions.record_osc_seq(session_id, ts.seq)
+            && fresh
+            && let Some(raw) = ts.title
+        {
+            state.agent_sessions.apply_auto_title(
+                &state.manager,
+                session_id,
+                adapter.id(),
+                &snapshot.agent_session_id,
+                &raw,
+                TitleRank::OscTitle,
+            );
+        }
+    }
+    if state.agents.transcript_enabled {
+        if let Some(raw_prompt) = adapter.extract_prompt(event, payload) {
+            state.agent_sessions.apply_auto_title(
+                &state.manager,
+                session_id,
+                adapter.id(),
+                &snapshot.agent_session_id,
+                &raw_prompt,
+                TitleRank::FirstPrompt,
+            );
+        }
+        if matches!(
+            event,
+            "Stop" | "SessionStart" | "UserPromptSubmit" | "PreInvocation"
+        ) && (event == "Stop"
+            || !state.agent_sessions.has_explicit_summary(
+                session_id,
+                adapter.id(),
+                &snapshot.agent_session_id,
+            ))
+        {
+            let manager = state.manager.clone();
+            let store = state.agent_sessions.clone();
+            let agent_session_id = snapshot.agent_session_id.clone();
+            let transcript_path = snapshot.transcript.as_ref().map(PathBuf::from);
+            let home = DetectEnv::current_home();
+            tokio::spawn(async move {
+                let lookup_id = agent_session_id.clone();
+                let resolved = tokio::task::spawn_blocking(move || {
+                    adapter.resolve_live_title(
+                        &home,
+                        &lookup_id,
+                        transcript_path.as_deref(),
+                    )
+                })
+                .await;
+                if let Ok(Some(summary)) = resolved {
+                    store.apply_auto_title(
+                        &manager,
+                        session_id,
+                        adapter.id(),
+                        &agent_session_id,
+                        &summary,
+                        TitleRank::ExplicitSummary,
+                    );
+                }
+            });
+        }
+    }
 }
 
 #[cfg(test)]
@@ -637,6 +844,9 @@ mod tests {
             "✳",
             "powershell.exe",
             "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "Administrator: C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+            "Select Administrator: C:\\WINDOWS\\System32\\cmd.exe",
             "Administrator: Windows PowerShell",
             "bash",
             "/usr/bin/zsh",
