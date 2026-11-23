@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
 use gateterm_server::app::{serve, AppState};
-use gateterm_server::config::{LauncherSpec, WindowSize};
+use gateterm_server::config::{ClipboardConfig, LauncherSpec, WindowSize};
 use gateterm_server::launcher::LauncherProvider;
 use gateterm_server::session::manager::SessionManager;
 use tokio::net::TcpListener;
@@ -54,8 +54,28 @@ impl Supervisor {
         web_title: Option<String>,
         mcp: gateterm_server::config::McpConfig,
     ) -> Self {
+        Self::with_clipboard(
+            buffer_cap,
+            window_size,
+            specs,
+            agents,
+            web_title,
+            mcp,
+            ClipboardConfig::default(),
+        )
+    }
+
+    pub fn with_clipboard(
+        buffer_cap: usize,
+        window_size: WindowSize,
+        specs: &[LauncherSpec],
+        agents: gateterm_server::config::AgentsConfig,
+        web_title: Option<String>,
+        mcp: gateterm_server::config::McpConfig,
+        clipboard: ClipboardConfig,
+    ) -> Self {
         Self {
-            manager: SessionManager::new(buffer_cap, window_size),
+            manager: SessionManager::with_clipboard(buffer_cap, window_size, clipboard),
             launchers: Arc::new(gateterm_server::launcher::providers(specs)),
             agents,
             agent_sessions: Arc::new(gateterm_server::agent::store::AgentSessionStore::new()),

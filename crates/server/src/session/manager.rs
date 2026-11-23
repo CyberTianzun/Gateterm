@@ -6,7 +6,7 @@ use anyhow::Result;
 use gateterm_protocol::{ServerMsg, SessionEventKind, SessionInfo};
 use tokio::sync::broadcast;
 
-use crate::config::WindowSize;
+use crate::config::{ClipboardConfig, WindowSize};
 
 use super::pty::{Launch, Session, SessionOutput};
 
@@ -20,6 +20,7 @@ pub(crate) enum AgentNotice {
 pub struct SessionManager {
     buffer_cap: usize,
     window_size: WindowSize,
+    clipboard: ClipboardConfig,
     next_id: AtomicU64,
     sessions: Mutex<HashMap<u64, Arc<Session>>>,
     events: broadcast::Sender<ServerMsg>,
@@ -28,11 +29,20 @@ pub struct SessionManager {
 
 impl SessionManager {
     pub fn new(buffer_cap: usize, window_size: WindowSize) -> Arc<Self> {
+        Self::with_clipboard(buffer_cap, window_size, ClipboardConfig::default())
+    }
+
+    pub fn with_clipboard(
+        buffer_cap: usize,
+        window_size: WindowSize,
+        clipboard: ClipboardConfig,
+    ) -> Arc<Self> {
         let (events, _) = broadcast::channel(64);
         let (agent_notices, _) = broadcast::channel(64);
         Arc::new(Self {
             buffer_cap,
             window_size,
+            clipboard,
             next_id: AtomicU64::new(1),
             sessions: Mutex::new(HashMap::new()),
             events,
@@ -76,8 +86,16 @@ impl SessionManager {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let name = name.unwrap_or_else(|| format!("gateterm-{id}"));
         let launch = Launch { command, cwd };
-        let session =
-            match Session::spawn(id, name, 80, 24, launch, self.buffer_cap, self.window_size) {
+        let session = match Session::spawn_with_clipboard(
+            id,
+            name,
+            80,
+            24,
+            launch,
+            self.buffer_cap,
+            self.window_size,
+            self.clipboard,
+        ) {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!(session = id, error = %e, "session spawn failed");

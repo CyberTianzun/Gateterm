@@ -12,7 +12,7 @@ use gateterm_protocol::{SessionInfo, TermColors};
 use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tokio::sync::broadcast;
 
-use crate::config::WindowSize;
+use crate::config::{ClipboardConfig, WindowSize};
 
 use super::buffer::SeqBuffer;
 use super::grid::{CursorPos, InputModes, SessionGrid};
@@ -273,6 +273,23 @@ pub struct Launch {
     pub cwd: Option<String>,
 }
 
+/// Returns clipboard-trigger env overrides to inject into a spawned PTY without overwriting
+/// variables already inherited from the host environment.
+pub(crate) fn clipboard_env_overrides(
+    cfg: ClipboardConfig,
+    has_ssh: bool,
+    has_pi_osc52: bool,
+) -> Vec<(&'static str, &'static str)> {
+    let mut vars = Vec::new();
+    if !has_pi_osc52 {
+        vars.push(("PI_CLIPBOARD_OSC52", "1"));
+    }
+    if cfg.osc52_env && !has_ssh {
+        vars.push(("SSH_CONNECTION", "127.0.0.1 0 127.0.0.1 0"));
+    }
+    vars
+}
+
 impl Session {
     pub fn spawn(
         id: u64,
@@ -282,6 +299,29 @@ impl Session {
         launch: Launch,
         buffer_cap: usize,
         window_size: WindowSize,
+    ) -> Result<Arc<Session>> {
+        Self::spawn_with_clipboard(
+            id,
+            name,
+            cols,
+            rows,
+            launch,
+            buffer_cap,
+            window_size,
+            ClipboardConfig::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_with_clipboard(
+        id: u64,
+        name: String,
+        cols: u16,
+        rows: u16,
+        launch: Launch,
+        buffer_cap: usize,
+        window_size: WindowSize,
+        clipboard: ClipboardConfig,
     ) -> Result<Arc<Session>> {
         // 只有 Windows 分支会改写 argv
         #[allow(unused_mut)]
@@ -344,6 +384,11 @@ impl Session {
         cmd.env("COLORTERM", "truecolor");
         if let Some(path) = crate::agent::detect::DetectEnv::current().path {
             cmd.env("PATH", path);
+        }
+        let has_ssh = std::env::var_os("SSH_CONNECTION").is_some();
+        let has_pi_osc52 = std::env::var_os("PI_CLIPBOARD_OSC52").is_some();
+        for (k, v) in clipboard_env_overrides(clipboard, has_ssh, has_pi_osc52) {
+            cmd.env(k, v);
         }
         // agent 集成的两把钥匙。装进 settings.json 的 hook 里写的是字面量
         // `$GATETERM_SESSION_ID` / `$GATETERM_HOOK_TOKEN`,Claude Code 在 hook 触发时
@@ -1142,6 +1187,66 @@ mod tests {
 
         session.mark_exited();
         assert!(session.plain_text_screen(0).exited);
+    }
+
+    #[test]
+    fn clipboard_env_overrides_respects_config_and_existing_host_vars() {
+        let all = clipboard_env_overrides(
+            ClipboardConfig {
+                host_watch: true,
+                osc52_env: true,
+            },
+            false,
+            false,
+        );
+        assert_eq!(
+            all,
+            vec![
+                ("PI_CLIPBOARD_OSC52", "1"),
+                ("SSH_CONNECTION", "127.0.0.1 0 127.0.0.1 0")
+            ]
+        );
+
+        let no_ssh = clipboard_env_overrides(
+            ClipboardConfig {
+                host_watch: true,
+                osc52_env: false,
+            },
+            false,
+            false,
+        );
+        assert_eq!(no_ssh, vec![("PI_CLIPBOARD_OSC52", "1")]);
+
+        // Review Focus #1: do not overwrite inherited host SSH_CONNECTION or PI_CLIPBOARD_OSC52.
+        let inherited = clipboard_env_overrides(
+            ClipboardConfig {
+                host_watch: true,
+                osc52_env: true,
+            },
+            true,
+            true,
+        );
+        assert!(inherited.is_empty());
+
+        let only_ssh = clipboard_env_overrides(
+            ClipboardConfig {
+                host_watch: true,
+                osc52_env: true,
+            },
+            false,
+            true,
+        );
+        assert_eq!(only_ssh, vec![("SSH_CONNECTION", "127.0.0.1 0 127.0.0.1 0")]);
+
+        let only_pi = clipboard_env_overrides(
+            ClipboardConfig {
+                host_watch: true,
+                osc52_env: true,
+            },
+            true,
+            false,
+        );
+        assert_eq!(only_pi, vec![("PI_CLIPBOARD_OSC52", "1")]);
     }
 }
 

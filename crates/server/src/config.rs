@@ -140,11 +140,17 @@ pub struct CloudConfig {
 pub struct ClipboardConfig {
     #[serde(default = "default_true")]
     pub host_watch: bool,
+    /// 启动 PTY 时按需注入 `PI_CLIPBOARD_OSC52=1` 与 `SSH_CONNECTION`,触发兼容终端应用发送 OSC 52。
+    #[serde(default = "default_true")]
+    pub osc52_env: bool,
 }
 
 impl Default for ClipboardConfig {
     fn default() -> Self {
-        Self { host_watch: true }
+        Self {
+            host_watch: true,
+            osc52_env: true,
+        }
     }
 }
 
@@ -505,5 +511,17 @@ mod tests {
 
         let disabled_cfg: Config = toml::from_str("[mcp]\nenabled = false\n").unwrap();
         assert!(!disabled_cfg.mcp.enabled);
+    }
+
+    #[test]
+    fn clipboard_config_defaults_and_overrides() {
+        let default_cfg: Config = toml::from_str("").unwrap();
+        assert!(default_cfg.clipboard.host_watch);
+        assert!(default_cfg.clipboard.osc52_env);
+
+        let custom: Config =
+            toml::from_str("[clipboard]\nhost_watch = false\nosc52_env = false\n").unwrap();
+        assert!(!custom.clipboard.host_watch);
+        assert!(!custom.clipboard.osc52_env);
     }
 }

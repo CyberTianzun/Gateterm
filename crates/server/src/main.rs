@@ -88,7 +88,11 @@ async fn run_server() -> anyhow::Result<()> {
     gateterm_server::agent::store::init_hook_token(
         gateterm_server::agent::store::default_hook_token_path().as_deref(),
     );
-    let manager = SessionManager::new(1 << 20, args.window_size.unwrap_or(config.window_size));
+    let manager = SessionManager::with_clipboard(
+        1 << 20,
+        args.window_size.unwrap_or(config.window_size),
+        config.clipboard,
+    );
     if config.clipboard.host_watch {
         gateterm_server::clipboard::start_host_watch(manager.clone());
     }

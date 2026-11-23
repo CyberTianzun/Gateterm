@@ -53,7 +53,10 @@ impl LocalServerSupervisor {
         );
         let cfg = ServerConfig::load(None).unwrap_or_default();
         let window_size = cfg.window_size;
-        let manager = SessionManager::new(DEFAULT_BUFFER_CAP, window_size);
+        let manager = SessionManager::with_clipboard(DEFAULT_BUFFER_CAP, window_size, cfg.clipboard);
+        if cfg.clipboard.host_watch {
+            gateterm_server::clipboard::start_host_watch(manager.clone());
+        }
         let agent_sessions = Arc::new(gateterm_server::agent::store::AgentSessionStore::new());
         let cloud = gateterm_server::cloud::creds::SharedCreds::new(
             gateterm_cloud_client::credentials::default_path(),
