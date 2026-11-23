@@ -176,4 +176,62 @@ impl SessionManager {
             None => false,
         }
     }
+
+    /// Auto-rename a session if it exists, is not manually locked, and the name changes.
+    pub fn auto_rename(&self, id: u64, name: &str) -> bool {
+        let Some(s) = self.get(id) else {
+            return false;
+        };
+        if s.auto_rename(name) {
+            self.emit(SessionEventKind::Renamed, s.info());
+            true
+        } else {
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::pty::test_support;
+
+    #[test]
+    fn auto_rename_emits_renamed_event_only_when_name_changes_and_not_locked() {
+        let mgr = SessionManager::new(1 << 20, WindowSize::default());
+        let mut events = mgr.events();
+        let session = test_support::session();
+        mgr.sessions
+            .lock()
+            .unwrap()
+            .insert(session.id, session.clone());
+
+        assert!(mgr.auto_rename(session.id, "Fix auth"));
+        match events.try_recv().unwrap() {
+            ServerMsg::SessionEvent {
+                event: SessionEventKind::Renamed,
+                session: info,
+            } => assert_eq!(info.name, "Fix auth"),
+            other => panic!("expected Renamed event, got {other:?}"),
+        }
+
+        // Idempotent, empty, and unknown session calls must not emit events.
+        assert!(!mgr.auto_rename(session.id, "Fix auth"));
+        assert!(!mgr.auto_rename(session.id, ""));
+        assert!(!mgr.auto_rename(999, "Missing"));
+        assert!(events.try_recv().is_err());
+
+        // Manual rename locks out subsequent auto_rename calls.
+        assert!(mgr.rename(session.id, "Pinned Tab"));
+        match events.try_recv().unwrap() {
+            ServerMsg::SessionEvent {
+                event: SessionEventKind::Renamed,
+                session: info,
+            } => assert_eq!(info.name, "Pinned Tab"),
+            other => panic!("expected Renamed event, got {other:?}"),
+        }
+        assert!(!mgr.auto_rename(session.id, "Overwrite Attempt"));
+        assert_eq!(session.info().name, "Pinned Tab");
+        assert!(events.try_recv().is_err());
+    }
 }

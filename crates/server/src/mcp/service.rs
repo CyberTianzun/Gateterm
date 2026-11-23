@@ -304,7 +304,11 @@ pub(crate) async fn send_input_to_session(
                             saw_output = true;
                             quiet_deadline = Some((tokio::time::Instant::now() + QUIET_WINDOW).min(deadline));
                         }
-                        Ok(SessionOutput::Resized { .. } | SessionOutput::Clipboard { .. }) => continue,
+                        Ok(
+                            SessionOutput::Resized { .. }
+                            | SessionOutput::Title { .. }
+                            | SessionOutput::Clipboard { .. },
+                        ) => continue,
                         Err(broadcast::error::RecvError::Lagged(_)) => {
                             if session.has_exited() {
                                 break;

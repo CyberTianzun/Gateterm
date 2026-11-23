@@ -35,9 +35,38 @@ impl Timeout for Immediate {
 ///
 /// 颜色查询(OSC 4/10/11/12 的 `?`)alacritty 只给 `Event::ColorRequest`,
 /// 颜色由我们来查,见 [`SessionGrid::take_pty_replies`]。
+/// Latest terminal title captured from OSC 0/2 sequences along with a monotonic sequence number.
+#[derive(Debug, Clone)]
+pub struct TitleState {
+    pub seq: u64,
+    pub title: Option<String>,
+    pub updated_at: std::time::Instant,
+}
+
+#[derive(Default)]
+struct TitleTracker {
+    seq: u64,
+    current: Option<TitleState>,
+    pending: Option<(u64, Option<String>)>,
+}
+
+impl TitleTracker {
+    fn record(&mut self, title: Option<String>) {
+        self.seq += 1;
+        let seq = self.seq;
+        self.current = Some(TitleState {
+            seq,
+            title: title.clone(),
+            updated_at: std::time::Instant::now(),
+        });
+        self.pending = Some((seq, title));
+    }
+}
+
 #[derive(Clone)]
 struct ReplyListener {
     pending: Arc<Mutex<Vec<PendingReply>>>,
+    title: Arc<Mutex<TitleTracker>>,
 }
 
 enum PendingReply {
@@ -53,6 +82,14 @@ impl EventListener for ReplyListener {
             }
             Event::PtyWrite(text) => PendingReply::Text(text),
             Event::ColorRequest(index, format) => PendingReply::Color(index, format),
+            Event::Title(title) => {
+                self.title.lock().unwrap().record(Some(title));
+                return;
+            }
+            Event::ResetTitle => {
+                self.title.lock().unwrap().record(None);
+                return;
+            }
             _ => return,
         };
         self.pending.lock().unwrap().push(reply);
@@ -269,6 +306,7 @@ pub struct SessionGrid {
     cols: u16,
     rows: u16,
     pty_replies: Arc<Mutex<Vec<PendingReply>>>,
+    title: Arc<Mutex<TitleTracker>>,
     /// 客户端报来的默认前景/背景色;没报过就不回答 OSC 10/11,让程序自己超时。
     default_colors: Option<(Rgb, Rgb)>,
 }
@@ -277,6 +315,7 @@ impl SessionGrid {
     pub fn new(cols: u16, rows: u16) -> Self {
         let size = TermSize::new(cols as usize, rows as usize);
         let pty_replies = Arc::new(Mutex::new(Vec::new()));
+        let title = Arc::new(Mutex::new(TitleTracker::default()));
         let term = Term::new(
             Config {
                 kitty_keyboard: true,
@@ -285,6 +324,7 @@ impl SessionGrid {
             &size,
             ReplyListener {
                 pending: pty_replies.clone(),
+                title: title.clone(),
             },
         );
         Self {
@@ -299,6 +339,7 @@ impl SessionGrid {
             cols,
             rows,
             pty_replies,
+            title,
             default_colors: None,
         }
     }
@@ -413,6 +454,14 @@ impl SessionGrid {
 
     pub fn set_default_colors(&mut self, fg: Rgb, bg: Rgb) {
         self.default_colors = Some((fg, bg));
+    }
+
+    pub fn take_title_update(&self) -> Option<(u64, Option<String>)> {
+        self.title.lock().unwrap().pending.take()
+    }
+
+    pub fn current_title_state(&self) -> Option<TitleState> {
+        self.title.lock().unwrap().current.clone()
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
@@ -1353,5 +1402,44 @@ mod tests {
             String::from_utf8(g.take_pty_replies()).unwrap(),
             format!("\x1b[?62;22;52c{expected_xt}")
         );
+    }
+
+    #[test]
+    fn osc0_and_osc2_titles_and_reset_update_title_state_with_monotonic_seq() {
+        let mut g = SessionGrid::new(80, 24);
+        assert!(g.take_title_update().is_none());
+        assert!(g.current_title_state().is_none());
+
+        g.advance(b"\x1b]2;Fix clipboard\x07");
+        assert_eq!(g.take_title_update(), Some((1, Some("Fix clipboard".into()))));
+        assert_eq!(g.take_title_update(), None);
+        let s1 = g.current_title_state().expect("title state 1");
+        assert_eq!(s1.seq, 1);
+        assert_eq!(s1.title.as_deref(), Some("Fix clipboard"));
+
+        g.advance(b"\x1b]0;Second title\x1b\\");
+        assert_eq!(g.take_title_update(), Some((2, Some("Second title".into()))));
+        let s2 = g.current_title_state().expect("title state 2");
+        assert_eq!(s2.seq, 2);
+        assert_eq!(s2.title.as_deref(), Some("Second title"));
+
+        // alacritty_terminal emits Event::Title("") for empty OSC 0/2 payloads.
+        g.advance(b"\x1b]2;\x07");
+        assert_eq!(g.take_title_update(), Some((3, Some(String::new()))));
+        let s3 = g.current_title_state().expect("title state 3");
+        assert_eq!(s3.seq, 3);
+        assert_eq!(s3.title.as_deref(), Some(""));
+
+        // Event::ResetTitle resets the title to None while keeping seq monotonic.
+        let listener = ReplyListener {
+            pending: g.pty_replies.clone(),
+            title: g.title.clone(),
+        };
+        listener.send_event(Event::ResetTitle);
+        assert_eq!(g.take_title_update(), Some((4, None)));
+        assert_eq!(g.take_title_update(), None);
+        let s4 = g.current_title_state().expect("title state 4");
+        assert_eq!(s4.seq, 4);
+        assert_eq!(s4.title, None);
     }
 }

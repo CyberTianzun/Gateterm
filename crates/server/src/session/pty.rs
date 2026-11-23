@@ -15,7 +15,7 @@ use tokio::sync::broadcast;
 use crate::config::{ClipboardConfig, WindowSize};
 
 use super::buffer::SeqBuffer;
-use super::grid::{CursorPos, InputModes, SessionGrid};
+use super::grid::{CursorPos, InputModes, SessionGrid, TitleState};
 use super::osc52::Osc52Filter;
 
 /// 同一段文本在这个时间内再次投递给同一个 attach 时视为重复(Claude Code 在
@@ -90,6 +90,11 @@ pub enum SessionOutput {
         rows: u16,
         revision: u64,
     },
+    /// Terminal title updated or reset via OSC 0/2.
+    Title {
+        seq: u64,
+        title: Option<String>,
+    },
     Exited,
     /// 待复制的文本,**只有** attach 席位号为 `target` 的那个泵会转发它(见
     /// `Session::deliver_clipboard`)。借用同一条广播只是为了少一套通道,语义上是点对点。
@@ -142,6 +147,7 @@ struct Desired {
 
 struct Shared {
     name: String,
+    manual_name: bool,
     cwd: Option<String>,
     grid: SessionGrid,
     buffer: SeqBuffer,
@@ -417,6 +423,7 @@ impl Session {
             window_size,
             shared: Mutex::new(Shared {
                 name,
+                manual_name: false,
                 cwd: cwd.as_ref().map(|p| p.to_string_lossy().into_owned()),
                 grid: SessionGrid::new(cols, rows),
                 buffer: SeqBuffer::new(buffer_cap),
@@ -525,6 +532,9 @@ impl Session {
                     end_seq: shared.buffer.end_seq(),
                     bytes: Bytes::from(filtered.bytes),
                 });
+                if let Some((seq, title)) = shared.grid.take_title_update() {
+                    let _ = self.tx.send(SessionOutput::Title { seq, title });
+                }
             }
             let mut replies = Vec::new();
             for reply in filtered.replies {
@@ -779,7 +789,27 @@ impl Session {
     }
 
     pub fn rename(&self, name: &str) {
-        self.shared.lock().unwrap().name = name.to_string();
+        let mut shared = self.shared.lock().unwrap();
+        shared.name = name.to_string();
+        shared.manual_name = true;
+    }
+
+    /// Update the session name from an automatic source unless a manual rename has locked it.
+    pub fn auto_rename(&self, name: &str) -> bool {
+        let mut shared = self.shared.lock().unwrap();
+        if shared.manual_name || name.is_empty() || shared.name == name {
+            return false;
+        }
+        shared.name = name.to_string();
+        true
+    }
+
+    pub fn is_manually_renamed(&self) -> bool {
+        self.shared.lock().unwrap().manual_name
+    }
+
+    pub fn terminal_title_state(&self) -> Option<TitleState> {
+        self.shared.lock().unwrap().grid.current_title_state()
     }
 
     pub fn kill(&self) {
@@ -852,6 +882,7 @@ pub(crate) mod test_support {
             window_size: WindowSize::Latest,
             shared: Mutex::new(Shared {
                 name: "test".into(),
+                manual_name: false,
                 cwd: None,
                 grid: SessionGrid::new(80, 24),
                 buffer: SeqBuffer::new(1 << 20),
@@ -1302,6 +1333,56 @@ mod tests {
 
         drop(a);
         drop(b);
+    }
+
+    #[test]
+    fn auto_rename_respects_manual_rename_lock() {
+        let session = test_support::session();
+        session.shared.lock().unwrap().name = "PowerShell".into();
+
+        assert!(!session.is_manually_renamed());
+        assert!(session.auto_rename("Fix bug"));
+        assert_eq!(session.info().name, "Fix bug");
+        assert!(!session.is_manually_renamed());
+
+        assert!(!session.auto_rename("Fix bug"));
+        assert!(!session.auto_rename(""));
+        assert_eq!(session.info().name, "Fix bug");
+
+        session.rename("My Custom Tab");
+        assert!(session.is_manually_renamed());
+        assert_eq!(session.info().name, "My Custom Tab");
+
+        assert!(!session.auto_rename("Other Title"));
+        assert_eq!(session.info().name, "My Custom Tab");
+    }
+
+    #[test]
+    fn process_output_emits_session_output_title_and_updates_title_state() {
+        let session = test_support::session();
+        let mut rx = session.subscribe();
+        assert!(session.terminal_title_state().is_none());
+
+        session.process_output(b"\x1b]2;Refactor auth\x07");
+
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionOutput::Data { .. }
+        ));
+        match rx.try_recv().unwrap() {
+            SessionOutput::Title { seq, title } => {
+                assert_eq!(seq, 1);
+                assert_eq!(title.as_deref(), Some("Refactor auth"));
+            }
+            other => panic!("expected SessionOutput::Title, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+
+        let state = session
+            .terminal_title_state()
+            .expect("terminal_title_state should be populated");
+        assert_eq!(state.seq, 1);
+        assert_eq!(state.title.as_deref(), Some("Refactor auth"));
     }
 }
 

@@ -490,6 +490,7 @@ async fn pump_output(
                                 clips.push(text);
                             }
                         }
+                        Ok(SessionOutput::Title { .. }) => {}
                         Ok(SessionOutput::Data { end_seq, bytes }) => {
                             let Some(trimmed) =
                                 trim_by_watermark(&mut watermark.seq, end_seq, &bytes)
@@ -582,6 +583,7 @@ async fn pump_output(
                             // 丢了就丢了:迟到的复制比没复制更让人困惑。
                             Ok(SessionOutput::Data { .. })
                             | Ok(SessionOutput::Resized { .. })
+                            | Ok(SessionOutput::Title { .. })
                             | Ok(SessionOutput::Clipboard { .. }) => {
                                 continue;
                             }
@@ -612,6 +614,7 @@ async fn pump_output(
                     return;
                 }
             }
+            Ok(SessionOutput::Title { .. }) => {}
             Ok(SessionOutput::Exited) => {
                 let _ = out
                     .send(control_frame(&ServerMsg::SessionExited {
@@ -640,6 +643,7 @@ async fn pump_output(
                         Ok(
                             SessionOutput::Data { .. }
                             | SessionOutput::Resized { .. }
+                            | SessionOutput::Title { .. }
                             | SessionOutput::Clipboard { .. },
                         ) => continue,
                         Err(TryRecvError::Lagged(_)) => continue,
