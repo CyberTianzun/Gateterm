@@ -28,6 +28,8 @@ export interface AgentSession {
   pending: string | null;
   /** 这家 agent 的对话记录能不能读(聊天视图靠它) */
   supports_transcript?: boolean;
+  /** 完整 agent 会话标题(用于悬停提示) */
+  title?: string | null;
 }
 
 export type AgentMap = Map<string, AgentSession>;
@@ -78,6 +80,33 @@ export function forSession(map: AgentMap, sessionId: number): AgentSession | nul
     if (!best || PRIORITY[s.state] > PRIORITY[best.state]) best = s;
   }
   return best;
+}
+
+/**
+ * 解析会话悬停提示文本:当会话名由某条 agent 标题衍生或截断而来时返回完整标题,
+ * 否则(如用户手动改名或无匹配标题)回退到当前会话名。
+ */
+export function sessionTooltip(sessionName: string, agents: AgentMap, sessionId: number): string {
+  const primary = forSession(agents, sessionId);
+  const candidates: AgentSession[] = primary ? [primary] : [];
+  for (const s of agents.values()) {
+    if (s.session === sessionId && s !== primary) candidates.push(s);
+  }
+  const truncatedPrefix =
+    sessionName.endsWith("…") && sessionName.length > 1
+      ? sessionName.slice(0, -1).trimEnd()
+      : null;
+  for (const s of candidates) {
+    if (!s.title?.trim()) continue;
+    if (
+      s.title === sessionName ||
+      (truncatedPrefix !== null && truncatedPrefix.length > 0 && s.title.startsWith(truncatedPrefix)) ||
+      (s.title.length > sessionName.length && sessionName.length > 0 && s.title.startsWith(sessionName))
+    ) {
+      return s.title;
+    }
+  }
+  return sessionName;
 }
 
 /**

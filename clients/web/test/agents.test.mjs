@@ -12,7 +12,7 @@ execSync("npx esbuild src/agents.ts --bundle --format=esm --outfile=test/.agents
 const {
   applyEvent, replaceAll, forSession, waitingList, keyOf, answerPending, fetchAgentSessions,
   describeToolInput, secondsLeft, stateText, fetchPending,
-  parseChoice, buildChoiceAnswer, chatAvailable,
+  parseChoice, buildChoiceAnswer, chatAvailable, sessionTooltip,
 } = await import("./.agents.build.mjs");
 
 const ev = (over = {}) => ({
@@ -225,4 +225,30 @@ test("agentBrandLabel and agentBrandIconSvg return official brand icons and colo
   assert.ok(agySvg.includes("#FBBC04"));
   assert.ok(agySvg.includes("#FC413D"));
   assert.ok(agySvg.includes("#749BFF"));
+});
+
+test("sessionTooltip returns full agent title when session name is derived or truncated from it", () => {
+  const m = new Map();
+  const full = "Implement multi-source session auto-naming across all seven adapters";
+  applyEvent(m, ev({ session: 1, title: full }));
+  assert.equal(sessionTooltip("Implement multi-source session…", m, 1), full);
+  assert.equal(sessionTooltip(full, m, 1), full);
+  // agent-event without title preserves previous title from HTTP snapshot
+  applyEvent(m, ev({ session: 1, state: "idle" }));
+  assert.equal(sessionTooltip("Implement multi-source session…", m, 1), full);
+});
+
+test("sessionTooltip falls back to sessionName when manually renamed or no agent title exists", () => {
+  const m = new Map();
+  applyEvent(m, ev({ session: 1, title: "Fix WebSocket reconnect sizing bug across tabs" }));
+  assert.equal(sessionTooltip("My Deploy Tab", m, 1), "My Deploy Tab");
+  assert.equal(sessionTooltip("PowerShell", new Map(), 1), "PowerShell");
+});
+
+test("sessionTooltip resolves matching full title on multi-agent terminals even when another agent wins forSession", () => {
+  const m = new Map();
+  applyEvent(m, ev({ agent_id: "antigravity", agent_session_id: "old", session: 1, state: "error", title: "Old failed investigation" }));
+  applyEvent(m, ev({ agent_id: "claude-code", agent_session_id: "new", session: 1, state: "working", title: "Fix WebSocket reconnect sizing bug across tabs" }));
+  assert.equal(forSession(m, 1).agent_id, "antigravity");
+  assert.equal(sessionTooltip("Fix WebSocket reconnect sizing…", m, 1), "Fix WebSocket reconnect sizing bug across tabs");
 });

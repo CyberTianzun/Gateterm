@@ -59,6 +59,7 @@ import {
   keyOf,
   forSession,
   replaceAll,
+  sessionTooltip,
   stateText,
   waitingList,
   createAgentBrandIcon,
@@ -317,6 +318,7 @@ function renderSidebar() {
     const titleSpan = document.createElement("span");
     titleSpan.className = "sname-title";
     titleSpan.textContent = s.name;
+    titleSpan.title = sessionTooltip(s.name, agents, s.id);
     snameEl.appendChild(titleSpan);
     const agent = forSession(agents, s.id);
     const sstatusEl = row.querySelector<HTMLElement>(".sstatus")!;
@@ -1062,6 +1064,7 @@ function renderSessionList() {
     const name = document.createElement("span");
     name.className = "scard-name";
     name.textContent = s.name;
+    name.title = sessionTooltip(s.name, agents, s.id);
     head.appendChild(name);
     const meta = document.createElement("div");
     meta.className = "scard-meta";
@@ -1437,6 +1440,9 @@ client.onControl = (msg) => {
     case "session-event":
       if (msg.event === "closed" && attachedId === msg.session?.id) {
         closeTerminal();
+      }
+      if (msg.event === "renamed" && msg.session?.id != null && forSession(agents, msg.session.id) !== null) {
+        void refreshAgents();
       }
       client.send({ type: "list-sessions" });
       break;
