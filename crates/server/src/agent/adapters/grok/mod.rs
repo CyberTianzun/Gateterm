@@ -265,6 +265,10 @@ impl AgentAdapter for Grok {
             target: ResumeTarget::SessionId,
         })
     }
+
+    fn title_prefixes(&self) -> &'static [&'static str] {
+        &["Grok"]
+    }
 }
 
 fn decode_project(name: &str) -> Option<String> {

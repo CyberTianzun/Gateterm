@@ -190,6 +190,10 @@ impl AgentAdapter for Pi {
             target: ResumeTarget::TranscriptPath,
         })
     }
+
+    fn title_prefixes(&self) -> &'static [&'static str] {
+        &["pi", "π"]
+    }
 }
 
 #[cfg(test)]

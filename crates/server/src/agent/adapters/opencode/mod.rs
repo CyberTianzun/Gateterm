@@ -246,6 +246,10 @@ impl AgentAdapter for OpenCode {
             target: ResumeTarget::SessionId,
         })
     }
+
+    fn title_prefixes(&self) -> &'static [&'static str] {
+        &["OpenCode", "OC"]
+    }
 }
 
 #[cfg(test)]

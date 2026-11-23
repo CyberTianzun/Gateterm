@@ -24,6 +24,7 @@ pub mod ops;
 pub mod process;
 pub mod routes;
 pub mod store;
+pub mod title;
 pub mod transcript;
 
 // 向后兼容模块重导出(供外部测试与既有调用路径透明访问)
@@ -236,6 +237,36 @@ pub trait AgentAdapter: Send + Sync {
     fn resume_spec(&self) -> Option<history::ResumeSpec> {
         None
     }
+
+    /// 剥离冗余前缀时使用的额外展示前缀。
+    fn title_prefixes(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// 从 hook payload 中提取用户输入的 prompt 文本。
+    fn extract_prompt(&self, event: &str, body: &serde_json::Value) -> Option<String> {
+        if event != "UserPromptSubmit" {
+            return None;
+        }
+        ["prompt", "user_prompt", "userPrompt", "message"]
+            .iter()
+            .find_map(|key| {
+                body.get(*key)
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                    .map(str::to_string)
+            })
+    }
+
+    /// 仅从显式命名源解析实时会话标题,绝不回退到原始 prompt。
+    fn resolve_live_title(
+        &self,
+        _home: &std::path::Path,
+        _agent_session_id: &str,
+        _transcript: Option<&std::path::Path>,
+    ) -> Option<String> {
+        None
+    }
 }
 
 impl<'a> AsRef<dyn AgentAdapter + 'a> for dyn AgentAdapter + 'a {
@@ -402,6 +433,7 @@ mod tests {
             "hook_cli.rs",
             "process.rs",
             "history.rs",
+            "title.rs",
             "transcript.rs",
         ] {
             let src = std::fs::read_to_string(agent_dir.join(file)).unwrap();
@@ -413,5 +445,34 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn default_extract_prompt_and_adapter_title_prefixes_match_contract() {
+        let codex = find("codex").unwrap();
+        assert_eq!(
+            codex
+                .extract_prompt("UserPromptSubmit", &serde_json::json!({ "prompt": "  ", "userPrompt": "Use camel" }))
+                .as_deref(),
+            Some("Use camel")
+        );
+        assert_eq!(
+            codex
+                .extract_prompt("UserPromptSubmit", &serde_json::json!({ "message": "From message" }))
+                .as_deref(),
+            Some("From message")
+        );
+        assert_eq!(
+            codex.extract_prompt("Stop", &serde_json::json!({ "prompt": "Ignored" })),
+            None
+        );
+
+        assert_eq!(find("claude-code").unwrap().title_prefixes(), &["Claude Code", "Claude"]);
+        assert_eq!(find("codex").unwrap().title_prefixes(), &["Codex"]);
+        assert_eq!(find("antigravity").unwrap().title_prefixes(), &["Antigravity", "AGY"]);
+        assert_eq!(find("opencode").unwrap().title_prefixes(), &["OpenCode", "OC"]);
+        assert_eq!(find("pi").unwrap().title_prefixes(), &["pi", "π"]);
+        assert_eq!(find("grok").unwrap().title_prefixes(), &["Grok"]);
+        assert_eq!(find("copilot").unwrap().title_prefixes(), &["GitHub Copilot", "Copilot"]);
     }
 }

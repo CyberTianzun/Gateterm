@@ -37,6 +37,8 @@ pub struct Entry {
     pub can_resume: bool,
     pub unavailable_reason: Option<String>,
     #[serde(skip)]
+    pub(crate) has_explicit_title: bool,
+    #[serde(skip)]
     path: PathBuf,
 }
 
@@ -160,7 +162,7 @@ pub(crate) fn short(value: &str) -> String {
         .collect()
 }
 
-pub(crate) fn prompt(value: &str) -> Option<String> {
+pub(crate) fn prompt_body(value: &str) -> Option<&str> {
     let value = value.trim();
     // Harness context is sometimes stored with role=user. It is not a session title.
     if value.starts_with("# AGENTS.md instructions")
@@ -176,8 +178,13 @@ pub(crate) fn prompt(value: &str) -> Option<String> {
     }
     let value = value
         .split_once("## My request for Codex:")
-        .map_or(value, |(_, p)| p);
-    let value = short(value);
+        .map_or(value, |(_, p)| p)
+        .trim();
+    (!value.is_empty()).then_some(value)
+}
+
+pub(crate) fn prompt(value: &str) -> Option<String> {
+    let value = short(prompt_body(value)?);
     (!value.is_empty()).then_some(value)
 }
 
@@ -265,6 +272,7 @@ fn parse(candidate: Candidate, env: &DetectEnv) -> Option<Entry> {
     if !safe_id(&id) {
         return None;
     }
+    let has_explicit_title = meta.title.as_deref().is_some_and(|s| !short(s).is_empty());
     let title = meta
         .title
         .or(meta.first_prompt)
@@ -283,6 +291,7 @@ fn parse(candidate: Candidate, env: &DetectEnv) -> Option<Entry> {
         terminal_session: None,
         can_resume: false,
         unavailable_reason: None,
+        has_explicit_title,
         path: candidate.path,
     };
     entry.unavailable_reason = resume_command(&entry, env).err().map(str::to_string);
@@ -1248,6 +1257,7 @@ mod tests {
             terminal_session: None,
             can_resume: false,
             unavailable_reason: None,
+            has_explicit_title: false,
             path: PathBuf::new(),
         };
         state
@@ -1503,5 +1513,57 @@ mod tests {
             }
         });
         assert_eq!(skipped_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn has_explicit_title_tracks_explicit_sources_and_is_skipped_in_json() {
+        let home = tempfile::tempdir().unwrap();
+        fixture(
+            home.path(),
+            ".claude/projects/p/prompt.jsonl",
+            "{\"sessionId\":\"c-prompt\",\"type\":\"user\",\"message\":{\"content\":\"First prompt\"}}\n",
+        );
+        fixture(
+            home.path(),
+            ".claude/projects/p/named.jsonl",
+            "{\"sessionId\":\"c-named\",\"type\":\"user\",\"message\":{\"content\":\"First prompt\"}}\n{\"type\":\"custom-title\",\"customTitle\":\"Explicit Claude\"}\n",
+        );
+        fixture(
+            home.path(),
+            ".codex/sessions/2026/11/23/rollout-codex.jsonl",
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"codex-idx\",\"cwd\":\"/repo\"}}\n{\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"Fallback prompt\"}}\n",
+        );
+        fixture(
+            home.path(),
+            ".codex/session_index.jsonl",
+            "{\"id\":\"codex-idx\",\"thread_name\":\"Codex Index Title\"}\n",
+        );
+
+        let catalog = scan(&DetectEnv {
+            home: home.path().into(),
+            path: None,
+        });
+        let c_prompt = catalog
+            .entries
+            .iter()
+            .find(|e| e.agent_session_id == "c-prompt")
+            .unwrap();
+        assert!(!c_prompt.has_explicit_title);
+        let serialized = serde_json::to_value(c_prompt).unwrap();
+        assert!(serialized.get("has_explicit_title").is_none());
+
+        let c_named = catalog
+            .entries
+            .iter()
+            .find(|e| e.agent_session_id == "c-named")
+            .unwrap();
+        assert!(c_named.has_explicit_title);
+
+        let codex_idx = catalog
+            .entries
+            .iter()
+            .find(|e| e.agent_session_id == "codex-idx")
+            .unwrap();
+        assert!(codex_idx.has_explicit_title);
     }
 }

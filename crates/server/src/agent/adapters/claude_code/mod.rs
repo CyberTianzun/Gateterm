@@ -255,6 +255,31 @@ impl AgentAdapter for ClaudeCode {
             target: ResumeTarget::SessionId,
         })
     }
+
+    fn title_prefixes(&self) -> &'static [&'static str] {
+        &["Claude Code", "Claude"]
+    }
+
+    fn resolve_live_title(
+        &self,
+        _home: &std::path::Path,
+        _agent_session_id: &str,
+        transcript: Option<&std::path::Path>,
+    ) -> Option<String> {
+        let path = transcript?;
+        let tail = history::sample_with_limits(path, 0, 64 * 1024).ok()?;
+        for line in tail.lines().rev() {
+            let Ok(row) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            if row.get("type").and_then(Value::as_str) == Some("custom-title")
+                && let Some(title) = history::text(&row, "customTitle")
+            {
+                return Some(title);
+            }
+        }
+        None
+    }
 }
 
 /// 事件 → 状态。
@@ -309,4 +334,45 @@ fn has_foreign_content(doc: &Value) -> bool {
             .flatten()
             .any(|h| !is_our_shape(h))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn resolve_live_title_reads_latest_custom_title_from_transcript_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("claude.jsonl");
+        let pad = "x".repeat(70 * 1024);
+        let body = format!(
+            "{{\"type\":\"user\",\"message\":{{\"content\":\"{pad}\"}}}}\n\
+             {{\"type\":\"custom-title\",\"customTitle\":\"Old Title\"}}\n\
+             {{\"type\":\"user\",\"message\":{{\"content\":\"Later prompt\"}}}}\n\
+             {{\"type\":\"custom-title\",\"customTitle\":\"Latest Claude Title\"}}\n"
+        );
+        fs::write(&transcript, body).unwrap();
+
+        let adapter = ClaudeCode;
+        assert_eq!(adapter.title_prefixes(), &["Claude Code", "Claude"]);
+        assert_eq!(
+            adapter
+                .resolve_live_title(dir.path(), "s1", Some(&transcript))
+                .as_deref(),
+            Some("Latest Claude Title")
+        );
+
+        let prompt_only = dir.path().join("prompt_only.jsonl");
+        fs::write(
+            &prompt_only,
+            "{\"type\":\"user\",\"message\":{\"content\":\"Raw prompt\"}}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            adapter.resolve_live_title(dir.path(), "s2", Some(&prompt_only)),
+            None
+        );
+        assert_eq!(adapter.resolve_live_title(dir.path(), "s2", None), None);
+    }
 }

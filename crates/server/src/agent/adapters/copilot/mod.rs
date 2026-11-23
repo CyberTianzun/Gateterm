@@ -351,6 +351,10 @@ impl AgentAdapter for Copilot {
             target: ResumeTarget::SessionId,
         })
     }
+
+    fn title_prefixes(&self) -> &'static [&'static str] {
+        &["GitHub Copilot", "Copilot"]
+    }
 }
 
 fn is_our_shape(hook: &Value) -> bool {

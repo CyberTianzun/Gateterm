@@ -323,6 +323,7 @@ impl AgentAdapter for Antigravity {
                 }
                 if let Some(title) = &summary.title {
                     entry.title = short(title);
+                    entry.has_explicit_title = true;
                 }
             }
             if entry.cwd.is_none()
@@ -348,6 +349,58 @@ impl AgentAdapter for Antigravity {
             flag: "--conversation",
             target: ResumeTarget::SessionId,
         })
+    }
+
+    fn title_prefixes(&self) -> &'static [&'static str] {
+        &["Antigravity", "AGY"]
+    }
+
+    fn extract_prompt(&self, event: &str, body: &Value) -> Option<String> {
+        if event != "PreInvocation" {
+            return None;
+        }
+        ["prompt", "userPrompt", "userMessage", "user_prompt"]
+            .iter()
+            .find_map(|key| {
+                body.get(*key)
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                    .map(str::to_string)
+            })
+    }
+
+    fn resolve_live_title(
+        &self,
+        home: &Path,
+        agent_session_id: &str,
+        _transcript: Option<&Path>,
+    ) -> Option<String> {
+        if !transcript::is_valid_session_id(agent_session_id) {
+            return None;
+        }
+        let dir = cli_dir(home);
+        let pbtxt_path = dir
+            .join("annotations")
+            .join(format!("{agent_session_id}.pbtxt"));
+        if let Ok(text) = std::fs::read_to_string(pbtxt_path)
+            && let Some(title) = parse_pbtxt_title(&text)
+        {
+            return Some(title);
+        }
+        if let Ok(f) = std::fs::File::open(dir.join("jetbox_summaries_proto.pb")) {
+            use std::io::Read;
+            let mut buf = Vec::new();
+            if f.take(16 * 1024 * 1024).read_to_end(&mut buf).is_ok() {
+                let summaries = parse_jetbox_summaries(&buf);
+                if let Some(summary) = summaries.get(agent_session_id)
+                    && !summary.is_subagent
+                    && let Some(title) = &summary.title
+                {
+                    return Some(title.clone());
+                }
+            }
+        }
+        None
     }
 }
 
@@ -753,6 +806,7 @@ mod tests {
         let entry = agy_entries[0];
         assert_eq!(entry.agent_session_id, "main-1");
         assert_eq!(entry.title, "Antigravity Resume Fix");
+        assert!(entry.has_explicit_title);
         assert_eq!(entry.model.as_deref(), Some("Gemini 4 Argon (High)"));
         assert_eq!(entry.description.as_deref(), Some("Fixed it."));
         assert_eq!(
@@ -763,6 +817,78 @@ mod tests {
             entry.can_resume,
             "expected can_resume=true, got unavailable_reason={:?}",
             entry.unavailable_reason
+        );
+    }
+
+    #[test]
+    fn resolve_live_title_prefers_pbtxt_over_summary_and_rejects_traversal_and_raw_prompts() {
+        let home = tempfile::tempdir().unwrap();
+        let agy_dir = cli_dir(home.path());
+        let annotations = agy_dir.join("annotations");
+        fs::create_dir_all(&annotations).unwrap();
+        fs::write(agy_dir.join("escape.pbtxt"), "title: \"Should Not Escape\"\n").unwrap();
+        fs::write(
+            agy_dir.join("history.jsonl"),
+            "{\"conversationId\":\"conv-1\",\"display\":\"Raw history prompt\"}\n",
+        )
+        .unwrap();
+
+        let adapter = Antigravity;
+        assert_eq!(adapter.title_prefixes(), &["Antigravity", "AGY"]);
+        assert_eq!(adapter.resolve_live_title(home.path(), "../escape", None), None);
+        assert_eq!(adapter.resolve_live_title(home.path(), "..\\escape", None), None);
+        assert_eq!(adapter.resolve_live_title(home.path(), "conv-1", None), None);
+
+        let pb = build_jetbox_entry("conv-1", "Summary Title", "file:///repo", "", 0);
+        fs::write(agy_dir.join("jetbox_summaries_proto.pb"), pb).unwrap();
+        assert_eq!(
+            adapter
+                .resolve_live_title(home.path(), "conv-1", None)
+                .as_deref(),
+            Some("Summary Title")
+        );
+
+        fs::write(
+            annotations.join("conv-1.pbtxt"),
+            "title: \"Pbtxt Title\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            adapter
+                .resolve_live_title(home.path(), "conv-1", None)
+                .as_deref(),
+            Some("Pbtxt Title")
+        );
+    }
+
+    #[test]
+    fn extract_prompt_reads_pre_invocation_fields() {
+        let adapter = Antigravity;
+        assert_eq!(
+            adapter
+                .extract_prompt("PreInvocation", &json!({ "prompt": "Fix bug" }))
+                .as_deref(),
+            Some("Fix bug")
+        );
+        assert_eq!(
+            adapter
+                .extract_prompt("PreInvocation", &json!({ "userPrompt": "Camel prompt" }))
+                .as_deref(),
+            Some("Camel prompt")
+        );
+        assert_eq!(
+            adapter
+                .extract_prompt("PreInvocation", &json!({ "userMessage": "Msg prompt" }))
+                .as_deref(),
+            Some("Msg prompt")
+        );
+        assert_eq!(
+            adapter.extract_prompt("Stop", &json!({ "prompt": "Ignored" })),
+            None
+        );
+        assert_eq!(
+            adapter.extract_prompt("UserPromptSubmit", &json!({ "prompt": "Ignored" })),
+            None
         );
     }
 }

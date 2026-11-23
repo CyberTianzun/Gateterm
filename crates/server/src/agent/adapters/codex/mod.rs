@@ -306,6 +306,7 @@ impl AgentAdapter for Codex {
             for entry in entries.iter_mut().filter(|e| e.agent_id == "codex") {
                 if let Some(title) = titles.get(&entry.agent_session_id) {
                     entry.title = short(title);
+                    entry.has_explicit_title = true;
                 }
             }
         }
@@ -346,6 +347,57 @@ impl AgentAdapter for Codex {
             flag: "resume",
             target: ResumeTarget::SessionId,
         })
+    }
+
+    fn title_prefixes(&self) -> &'static [&'static str] {
+        &["Codex"]
+    }
+
+    fn resolve_live_title(
+        &self,
+        home: &Path,
+        agent_session_id: &str,
+        transcript: Option<&Path>,
+    ) -> Option<String> {
+        if let Ok(index) = history::sample_with_limits(
+            &home.join(".codex/session_index.jsonl"),
+            1024 * 1024,
+            1024 * 1024,
+        ) {
+            for line in index.lines().rev() {
+                let Ok(row) = serde_json::from_str::<Value>(line) else {
+                    continue;
+                };
+                if history::text(&row, "id").as_deref() == Some(agent_session_id)
+                    && let Some(title) = history::text(&row, "thread_name")
+                {
+                    return Some(title);
+                }
+            }
+        }
+        let located;
+        let path = match transcript {
+            Some(p) => p,
+            None => {
+                located = self.locate_transcript(home, agent_session_id)?;
+                &located
+            }
+        };
+        let head = history::sample_with_limits(path, 64 * 1024, 0).ok()?;
+        for line in head.lines() {
+            let Ok(row) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            if row.get("type").and_then(Value::as_str) == Some("session_meta") {
+                let payload = &row["payload"];
+                if let Some(title) = history::text(payload, "title")
+                    .or_else(|| history::text(payload, "thread_name"))
+                {
+                    return Some(title);
+                }
+            }
+        }
+        None
     }
 }
 
@@ -413,4 +465,67 @@ fn read_trusted_keys(config: &Path) -> Vec<String> {
         .filter(|(_, v)| v.get("trusted_hash").is_some())
         .map(|(k, _)| k.clone())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn resolve_live_title_reads_session_index_then_session_meta_and_ignores_raw_prompts() {
+        let home = tempfile::tempdir().unwrap();
+        let session_dir = home.path().join(".codex/sessions/2026/11/23");
+        fs::create_dir_all(&session_dir).unwrap();
+        let transcript = session_dir.join("rollout-2026-11-23-codex-1.jsonl");
+        fs::write(
+            &transcript,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"codex-1\",\"cwd\":\"/repo\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"Raw prompt must be ignored\"}}\n"
+            ),
+        )
+        .unwrap();
+
+        let adapter = Codex;
+        assert_eq!(adapter.title_prefixes(), &["Codex"]);
+        assert_eq!(
+            adapter.resolve_live_title(home.path(), "codex-1", Some(&transcript)),
+            None
+        );
+
+        let meta_titled = session_dir.join("rollout-2026-11-23-codex-2.jsonl");
+        fs::write(
+            &meta_titled,
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"codex-2\",\"title\":\"Meta Title\"}}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            adapter
+                .resolve_live_title(home.path(), "codex-2", Some(&meta_titled))
+                .as_deref(),
+            Some("Meta Title")
+        );
+
+        fs::write(
+            home.path().join(".codex/session_index.jsonl"),
+            concat!(
+                "{\"id\":\"codex-2\",\"thread_name\":\"First Name\"}\n",
+                "{\"id\":\"codex-2\",\"thread_name\":\"Renamed Codex\"}\n"
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            adapter
+                .resolve_live_title(home.path(), "codex-2", Some(&meta_titled))
+                .as_deref(),
+            Some("Renamed Codex")
+        );
+        assert_eq!(
+            adapter
+                .resolve_live_title(home.path(), "codex-2", None)
+                .as_deref(),
+            Some("Renamed Codex")
+        );
+    }
 }
