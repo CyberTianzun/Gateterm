@@ -686,3 +686,43 @@ async fn resolve_live_title_upgrades_from_transcript_when_enabled() {
 
     ws.kill_session(id).await;
 }
+
+#[tokio::test]
+async fn stop_with_explicit_session_title_skips_stale_disk_resolve_live_title() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("s-stop-fresh.jsonl");
+    std::fs::write(
+        &transcript,
+        "{\"sessionId\":\"s-stop-fresh\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Initial prompt\"}}\n\
+         {\"type\":\"custom-title\",\"customTitle\":\"Stale Disk Custom Title\"}\n",
+    )
+    .unwrap();
+
+    let addr = common::start_test_server_at("t", 1 << 20, Default::default(), vec![]).await;
+    let mut ws = WsHarness::connect(addr).await;
+    let id = ws.create_osc_session("osc-shell").await;
+
+    post_hook(
+        addr,
+        "/hook/claude-code/stop",
+        id,
+        serde_json::json!({
+            "session_id": "s-stop-fresh",
+            "session_title": "Fresh Stop Summary",
+            "transcript_path": transcript,
+        }),
+    )
+    .await;
+
+    ws.wait_renamed(id, "Fresh Stop Summary").await;
+    // Allow any background resolve_live_title task time to run if it were mistakenly spawned.
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert_eq!(ws.session_name(id).await, "Fresh Stop Summary");
+    let agents = agent_sessions(addr).await;
+    assert_eq!(
+        find_agent_session(&agents, "claude-code", "s-stop-fresh")["title"].as_str(),
+        Some("Fresh Stop Summary")
+    );
+
+    ws.kill_session(id).await;
+}

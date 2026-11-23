@@ -189,6 +189,11 @@ impl SessionManager {
             false
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn insert_test_session(&self, session: Arc<Session>) {
+        self.sessions.lock().unwrap().insert(session.id, session);
+    }
 }
 
 #[cfg(test)]

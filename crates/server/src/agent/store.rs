@@ -487,33 +487,45 @@ impl AgentSessionStore {
         );
 
         let mut titles = self.auto_titles.lock().unwrap();
-        if let Some(record) = titles.get(&session_id)
-            && record.agent_id == agent_id
-            && record.agent_session_id == agent_session_id
-        {
-            if rank < record.rank {
-                return false;
-            }
-            if rank == super::title::TitleRank::FirstPrompt
-                && record.rank >= super::title::TitleRank::FirstPrompt
-            {
-                return false;
-            }
-            if rank == record.rank && record.full_title == full_title {
-                return false;
-            }
-        }
-
         {
             let mut sessions = self.sessions.lock().unwrap();
             let key = (agent_id.to_string(), agent_session_id.to_string());
-            let Some(agent) = sessions.get_mut(&key) else {
+            let Some(caller_rev) = sessions
+                .get(&key)
+                .filter(|a| a.session == Some(session_id) && a.state != AgentState::Done)
+                .map(|a| a.revision)
+            else {
                 return false;
             };
-            if agent.session != Some(session_id) || agent.state == AgentState::Done {
-                return false;
+
+            if let Some(record) = titles.get(&session_id) {
+                if record.agent_id == agent_id && record.agent_session_id == agent_session_id {
+                    if rank < record.rank {
+                        return false;
+                    }
+                    if rank == super::title::TitleRank::FirstPrompt
+                        && record.rank >= super::title::TitleRank::FirstPrompt
+                    {
+                        return false;
+                    }
+                    if rank == record.rank && record.full_title == full_title {
+                        return false;
+                    }
+                } else {
+                    let prev_key = (record.agent_id.clone(), record.agent_session_id.clone());
+                    if let Some(prev_owner) = sessions.get(&prev_key)
+                        && prev_owner.session == Some(session_id)
+                        && prev_owner.state != AgentState::Done
+                        && caller_rev < prev_owner.revision
+                    {
+                        return false;
+                    }
+                }
             }
-            agent.title = Some(full_title.clone());
+
+            if let Some(agent) = sessions.get_mut(&key) {
+                agent.title = Some(full_title.clone());
+            }
         }
 
         titles.insert(
@@ -525,6 +537,7 @@ impl AgentSessionStore {
                 full_title,
             },
         );
+        drop(titles);
         let _ = manager.auto_rename(session_id, &concise);
         true
     }
@@ -1091,5 +1104,90 @@ mod tests {
         assert_eq!(changed.len(), 1);
         assert_eq!(changed[0].state, AgentState::Working);
         assert_eq!(changed[0].detail, None);
+    }
+
+    #[test]
+    fn lower_revision_adapter_cannot_override_newer_active_owner_title() {
+        use crate::agent::title::TitleRank;
+
+        let mgr = crate::session::manager::SessionManager::new(
+            1 << 20,
+            crate::config::WindowSize::default(),
+        );
+        let session = crate::session::pty::test_support::session();
+        let sid = session.id;
+        mgr.insert_test_session(session);
+
+        let store = AgentSessionStore::new();
+        // Agent A starts first (lower revision), then Agent B starts on the same PTY (higher revision).
+        let snap_a = store.apply(
+            "claude-code",
+            "a1",
+            Some(sid),
+            Update { state: Some(AgentState::Working), ..Default::default() },
+        );
+        let snap_b = store.apply(
+            "codex",
+            "b1",
+            Some(sid),
+            Update { state: Some(AgentState::Idle), ..Default::default() },
+        );
+        assert!(snap_a.revision < snap_b.revision);
+
+        // Newer Agent B claims session title ownership.
+        assert!(store.apply_auto_title(
+            &mgr,
+            sid,
+            "codex",
+            "b1",
+            "Codex Active Task",
+            TitleRank::OscTitle,
+        ));
+        assert_eq!(mgr.get(sid).unwrap().info().name, "Codex Active Task");
+
+        // Older Agent A finishing a late ExplicitSummary must NOT overwrite B or SessionInfo.name.
+        assert!(!store.apply_auto_title(
+            &mgr,
+            sid,
+            "claude-code",
+            "a1",
+            "Stale Claude Summary",
+            TitleRank::ExplicitSummary,
+        ));
+        assert_eq!(mgr.get(sid).unwrap().info().name, "Codex Active Task");
+        {
+            let titles = store.auto_titles.lock().unwrap();
+            let rec = titles.get(&sid).expect("auto_titles record should remain");
+            assert_eq!(rec.agent_id, "codex");
+            assert_eq!(rec.agent_session_id, "b1");
+            assert_eq!(rec.rank, TitleRank::OscTitle);
+            assert_eq!(rec.full_title, "Codex Active Task");
+        }
+        assert_eq!(store.snapshot("claude-code", "a1").unwrap().title, None);
+        assert_eq!(
+            store.snapshot("codex", "b1").unwrap().title.as_deref(),
+            Some("Codex Active Task")
+        );
+
+        // Once Agent B finishes (Done), still-active Agent A can take ownership again.
+        store.apply(
+            "codex",
+            "b1",
+            Some(sid),
+            Update { state: Some(AgentState::Done), ..Default::default() },
+        );
+        assert!(store.apply_auto_title(
+            &mgr,
+            sid,
+            "claude-code",
+            "a1",
+            "Resumed Claude Summary",
+            TitleRank::ExplicitSummary,
+        ));
+        assert_eq!(mgr.get(sid).unwrap().info().name, "Resumed Claude Summary");
+        assert_eq!(
+            store.auto_titles.lock().unwrap().get(&sid).unwrap().agent_id,
+            "claude-code"
+        );
     }
 }

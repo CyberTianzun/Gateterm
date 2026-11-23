@@ -469,7 +469,18 @@ fn strip_brand_prefix<'a>(s: &'a str, prefixes: &[&str]) -> &'a str {
         if let Some(sep) = after_ws.chars().next()
             && is_separator(sep)
         {
-            return after_ws[sep.len_utf8()..].trim_start();
+            let rest = &after_ws[sep.len_utf8()..];
+            // Hyphens and slashes also appear inside ordinary compound tokens;
+            // require whitespace on at least one side (or end of string) before
+            // treating them as a brand delimiter.
+            if matches!(sep, '-' | '/')
+                && after_prefix.len() == after_ws.len()
+                && !rest.is_empty()
+                && !rest.chars().next().is_some_and(char::is_whitespace)
+            {
+                continue;
+            }
+            return rest.trim_start();
         }
     }
     trimmed
@@ -538,7 +549,10 @@ fn is_shell_or_path_noise(s: &str) -> bool {
 fn is_osc_noise(s: &str) -> bool {
     let mut cur = s.trim();
     loop {
-        if is_shell_or_path_noise(cur) {
+        if !cur.chars().any(char::is_alphanumeric) || is_shell_or_path_noise(cur) {
+            return true;
+        }
+        if eq_ci(cur, "select") {
             return true;
         }
         if let Some(rest) = strip_ci_prefix(cur, "select ") {
@@ -547,13 +561,14 @@ fn is_osc_noise(s: &str) -> bool {
         }
         if let Some(rest) = strip_ci_prefix(cur, "administrator:")
             .or_else(|| strip_ci_prefix(cur, "管理员:"))
+            .or_else(|| strip_ci_prefix(cur, "管理员："))
         {
             cur = rest.trim_start();
             continue;
         }
         break;
     }
-    let status_norm = s.trim_end_matches(['.', '…', ' ']);
+    let status_norm = cur.trim_end_matches(['.', '…', ' ']);
     GENERIC_STATUS.iter().any(|g| eq_ci(status_norm, g))
 }
 
@@ -570,6 +585,14 @@ fn cap_full_title(s: &str) -> String {
 }
 
 pub fn ensure_osc_watcher(state: &AppState, session_id: u64) -> bool {
+    start_osc_watcher(state, session_id, None)
+}
+
+fn start_osc_watcher(
+    state: &AppState,
+    session_id: u64,
+    retro: Option<(&'static dyn AgentAdapter, &str)>,
+) -> bool {
     let Some(session) = state.manager.get(session_id) else {
         return false;
     };
@@ -580,9 +603,30 @@ pub fn ensure_osc_watcher(state: &AppState, session_id: u64) -> bool {
         return false;
     }
     let mut rx = session.subscribe();
-    if session.has_exited() {
+    if session.has_exited() || state.manager.get(session_id).is_none() {
         state.agent_sessions.release_title_watcher(session_id);
         return false;
+    }
+
+    // Apply any fresh pre-hook OSC title synchronously before spawning the live
+    // loop so a newer live event cannot be overwritten by a racing retro read.
+    if let Some((adapter, agent_session_id)) = retro
+        && let Some(ts) = session.terminal_title_state()
+    {
+        let fresh = ts.updated_at.elapsed() <= Duration::from_secs(5);
+        if state.agent_sessions.record_osc_seq(session_id, ts.seq)
+            && fresh
+            && let Some(raw) = ts.title
+        {
+            state.agent_sessions.apply_auto_title(
+                &state.manager,
+                session_id,
+                adapter.id(),
+                agent_session_id,
+                &raw,
+                TitleRank::OscTitle,
+            );
+        }
     }
 
     let manager_weak = Arc::downgrade(&state.manager);
@@ -660,7 +704,8 @@ pub fn on_hook_event(
     let Some(session_id) = snapshot.session else {
         return;
     };
-    let newly_started = ensure_osc_watcher(state, session_id);
+    let explicit_cleaned = explicit_hook_title
+        .is_some_and(|raw| clean_title(raw, TitleRank::ExplicitSummary, adapter).is_some());
     if let Some(raw) = explicit_hook_title {
         state.agent_sessions.apply_auto_title(
             &state.manager,
@@ -671,27 +716,11 @@ pub fn on_hook_event(
             TitleRank::ExplicitSummary,
         );
     }
-    if newly_started
-        && let Some(ts) = state
-            .manager
-            .get(session_id)
-            .and_then(|s| s.terminal_title_state())
-    {
-        let fresh = ts.updated_at.elapsed() <= Duration::from_secs(5);
-        if state.agent_sessions.record_osc_seq(session_id, ts.seq)
-            && fresh
-            && let Some(raw) = ts.title
-        {
-            state.agent_sessions.apply_auto_title(
-                &state.manager,
-                session_id,
-                adapter.id(),
-                &snapshot.agent_session_id,
-                &raw,
-                TitleRank::OscTitle,
-            );
-        }
-    }
+    let _ = start_osc_watcher(
+        state,
+        session_id,
+        Some((adapter, &snapshot.agent_session_id)),
+    );
     if state.agents.transcript_enabled {
         if let Some(raw_prompt) = adapter.extract_prompt(event, payload) {
             state.agent_sessions.apply_auto_title(
@@ -703,15 +732,17 @@ pub fn on_hook_event(
                 TitleRank::FirstPrompt,
             );
         }
-        if matches!(
-            event,
-            "Stop" | "SessionStart" | "UserPromptSubmit" | "PreInvocation"
-        ) && (event == "Stop"
-            || !state.agent_sessions.has_explicit_summary(
-                session_id,
-                adapter.id(),
-                &snapshot.agent_session_id,
-            ))
+        if !explicit_cleaned
+            && matches!(
+                event,
+                "Stop" | "SessionStart" | "UserPromptSubmit" | "PreInvocation"
+            )
+            && (event == "Stop"
+                || !state.agent_sessions.has_explicit_summary(
+                    session_id,
+                    adapter.id(),
+                    &snapshot.agent_session_id,
+                ))
         {
             let manager = state.manager.clone();
             let store = state.agent_sessions.clone();
@@ -834,6 +865,48 @@ mod tests {
     }
 
     #[test]
+    fn preserves_hyphenated_and_slash_tokens_while_stripping_delimited_brands() {
+        let claude = find("claude-code").unwrap();
+        let codex = find("codex").unwrap();
+        let pi = find("pi").unwrap();
+        let agy = find("antigravity").unwrap();
+
+        assert_eq!(
+            clean_title("claude-code: fix title", TitleRank::OscTitle, claude).as_deref(),
+            Some("claude-code: fix title")
+        );
+        assert_eq!(
+            clean_title("codex-rs workspace build", TitleRank::OscTitle, codex).as_deref(),
+            Some("codex-rs workspace build")
+        );
+        assert_eq!(
+            clean_title("pi-hole DNS filter", TitleRank::OscTitle, pi).as_deref(),
+            Some("pi-hole DNS filter")
+        );
+        assert_eq!(
+            clean_title("claude/sonnet prompt", TitleRank::OscTitle, claude).as_deref(),
+            Some("claude/sonnet prompt")
+        );
+
+        assert_eq!(
+            clean_title("Codex - Fix bug", TitleRank::OscTitle, codex).as_deref(),
+            Some("Fix bug")
+        );
+        assert_eq!(
+            clean_title("π - Add unit tests", TitleRank::OscTitle, pi).as_deref(),
+            Some("Add unit tests")
+        );
+        assert_eq!(
+            clean_title("AGY / Fix bug", TitleRank::OscTitle, agy).as_deref(),
+            Some("Fix bug")
+        );
+        assert_eq!(
+            clean_title("Claude: Fix", TitleRank::OscTitle, claude).as_deref(),
+            Some("Fix")
+        );
+    }
+
+    #[test]
     fn rejects_noise_bare_brands_shells_and_paths_for_osc() {
         let claude = find("claude-code").unwrap();
         let codex = find("codex").unwrap();
@@ -848,6 +921,12 @@ mod tests {
             "Administrator: C:\\Program Files\\PowerShell\\7\\pwsh.exe",
             "Select Administrator: C:\\WINDOWS\\System32\\cmd.exe",
             "Administrator: Windows PowerShell",
+            "Administrator:",
+            "管理员:",
+            "管理员：",
+            "Select ",
+            "Administrator: Ready",
+            "Select Thinking...",
             "bash",
             "/usr/bin/zsh",
             "user@host: ~/project",
@@ -975,5 +1054,79 @@ mod tests {
             clean_title(&exact200, TitleRank::FirstPrompt, codex).as_deref(),
             Some(exact200.as_str())
         );
+    }
+
+    #[tokio::test]
+    async fn osc_watcher_cleans_up_exited_and_applies_retro_before_live() {
+        use crate::agent::store::{AgentSessionStore, Update};
+        use crate::config::WindowSize;
+        use crate::session::manager::SessionManager;
+        use crate::session::pty::test_support;
+
+        let state = AppState {
+            manager: SessionManager::new(1 << 20, WindowSize::default()),
+            token: "test".into(),
+            launchers: Arc::new(Vec::new()),
+            listen_port: 0,
+            agents: Default::default(),
+            agent_sessions: Arc::new(AgentSessionStore::new()),
+            cloud: Default::default(),
+            web_title: Default::default(),
+            mcp: Default::default(),
+        };
+
+        // Already-exited PTY must not leak a claimed watcher.
+        let exited = test_support::session();
+        let exited_id = exited.id;
+        test_support::mark_exited(&exited);
+        state.manager.insert_test_session(exited);
+        assert!(!ensure_osc_watcher(&state, exited_id));
+        assert!(
+            state.agent_sessions.claim_title_watcher(exited_id),
+            "exited PTY must not keep title_watchers claimed"
+        );
+        state.agent_sessions.release_title_watcher(exited_id);
+        state.manager.kill(exited_id);
+
+        // Live PTY: retro OSC title applies synchronously before live watcher runs.
+        let session = test_support::session();
+        let sid = session.id;
+        state.manager.insert_test_session(session.clone());
+        test_support::output(&session, b"\x1b]2;Pre-Hook OSC\x07");
+
+        let claude = find("claude-code").unwrap();
+        let snap = state.agent_sessions.apply(
+            claude.id(),
+            "s-retro",
+            Some(sid),
+            Update {
+                state: Some(AgentState::Idle),
+                ..Default::default()
+            },
+        );
+        on_hook_event(
+            &state,
+            claude,
+            &snap,
+            "SessionStart",
+            &serde_json::json!({}),
+            None,
+        );
+        assert_eq!(
+            state.manager.get(sid).unwrap().info().name,
+            "Pre-Hook OSC",
+            "retroactive OSC check must apply synchronously before spawning live loop"
+        );
+
+        test_support::output(&session, b"\x1b]2;Live OSC Two\x07");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            if state.manager.get(sid).unwrap().info().name == "Live OSC Two" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(state.manager.get(sid).unwrap().info().name, "Live OSC Two");
+        test_support::mark_exited(&session);
     }
 }
