@@ -17,6 +17,7 @@ pub struct Form {
     pub web_title: String,
     pub autostart: bool,
     pub language: LanguagePref,
+    pub web_host: Option<IpAddr>,
 }
 
 /// 保存之后给用户看的一句话。定义在这里而不是 ui.rs:保存流程
@@ -53,6 +54,7 @@ impl Form {
             web_title: String::new(),
             autostart,
             language: LanguagePref::Auto,
+            web_host: None,
         }
     }
 
@@ -78,6 +80,7 @@ impl Form {
             token: (!token.is_empty()).then(|| token.to_string()),
             web_title,
             language: self.language,
+            web_host: self.web_host,
         })
     }
 }

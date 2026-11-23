@@ -39,20 +39,6 @@ pub enum UserEvent {
     UpdateAvailable(gateterm_server::update::ReleaseUpdate),
 }
 
-/// 把监听地址的 IP 部分整理成用户能直接用的样子:`0.0.0.0` / `::` 这类「监听所有
-/// 网卡」的地址,人是没法拿它当访问地址敲进浏览器的,换成 `127.0.0.1`;IPv6 地址
-/// 拼进 URL 需要方括号包起来。`status_text()` 和 `url()` 共用这一份,保证状态行
-/// 显示的 host 和「复制访问链接」给出的 host 永远一致。
-fn display_host(ip: IpAddr) -> String {
-    if ip.is_unspecified() {
-        "127.0.0.1".to_string()
-    } else if ip.is_ipv6() {
-        format!("[{ip}]")
-    } else {
-        ip.to_string()
-    }
-}
-
 /// 托盘第 `failures` 次创建失败之后,隔多久再试一次;`None` 表示不再试了。
 ///
 /// 会重试是因为这个失败有明确的成因和明确的时间窗口:Windows 上 `Shell_NotifyIcon`
@@ -73,6 +59,7 @@ pub fn tray_retry_delay(failures: u32) -> Option<Duration> {
 #[derive(Debug, Clone)]
 pub struct Startup {
     pub language: LanguagePref,
+    pub web_host: Option<IpAddr>,
     pub config: Config,
     /// `Config::load` 失败的原因;此时 `config` 是默认值。
     pub config_error: Option<String>,
@@ -82,6 +69,7 @@ pub struct Startup {
 
 pub struct App {
     locale: Locale,
+    resolved_web_host: Option<IpAddr>,
     cloud_task: Option<tokio::task::JoinHandle<()>>,
     cloud_generation: u64,
     rt: Runtime,
@@ -114,8 +102,12 @@ impl App {
         log_path: PathBuf,
         startup: Startup,
     ) -> Self {
+        let resolved_web_host = sup
+            .listen()
+            .map(|listen| crate::settings::web_addr::resolve_live_web_host(listen, startup.web_host));
         Self {
             locale: startup.language.resolve(Locale::system()),
+            resolved_web_host,
             cloud_task: None,
             cloud_generation: 0,
             rt,
@@ -153,6 +145,7 @@ impl App {
         let autostart = crate::autostart::is_enabled().unwrap_or(false);
         let mut form = Form::from_current(listen, autostart);
         form.language = self.startup.language;
+        form.web_host = self.startup.web_host;
         form.web_title = self.sup.web_title().unwrap_or_default();
         // token 回填当前生效值:用户多半是来看它、复制它的,展示为空反而费解。
         // 没在监听时压根没有「当前生效的 token」,框里就是空的(= 不固定)——
@@ -164,7 +157,7 @@ impl App {
         let banner = self.banner();
         View {
             form,
-            pairing: crate::settings::pairing::Pairing::new(self.sup.listen(), self.sup.token()),
+            web_addr: crate::settings::web_addr::WebAddrPicker::new(self.sup.listen()),
             // WindowSize 只有 Smallest / Largest / Latest 三个单词,和 config.toml
             // 里写的小写形式一一对应。
             window_size: format!("{:?}", self.startup.config.window_size).to_lowercase(),
@@ -259,6 +252,7 @@ impl App {
         // Updating labels in place preserves the tray, window and PTY sessions.
         if matches!(&applied.message, crate::settings::ui::Message::Ok(_)) {
             self.startup.language = form.language;
+            self.startup.web_host = form.web_host;
             self.locale = locale;
             self.sup.set_web_title(Some(form.web_title.clone()));
             if let Some(tray) = self.tray.as_mut() { tray.set_language(locale); }
@@ -278,12 +272,6 @@ impl App {
         if applied.restarted {
             self.startup.listen_error = None;
         }
-
-        // 无条件刷新,不看 `applied.restarted`:restart 失败时它是 false,而
-        // 「同地址只换 token」那条失败路径恰恰会让服务停在未监听状态(supervisor
-        // 已经先 stop() 了)——只在成功时刷新的话,状态行会一直挂着已经失效的
-        // 旧地址和会话数。刷新本身只是重读一次当前状态,多调用没有代价。
-        self.refresh_status();
 
         // 把**实际生效**的 token 写回表单。「表单留空 + 服务没在监听」时 save.rs 会
         // 当场生成一个新 token,不写回的话用户在这个窗口里根本看不到它是什么 ——
@@ -306,8 +294,20 @@ impl App {
         if let Some(view) = self.view.as_mut() {
             view.banner = banner;
             view.message = Some(applied.message);
-            view.pairing.refresh(self.sup.listen(), self.sup.token());
+            view.web_addr.refresh(self.sup.listen());
+            self.resolved_web_host = self
+                .sup
+                .listen()
+                .map(|listen| view.web_addr.resolved(listen, self.startup.web_host));
+        } else {
+            self.refresh_resolved_web_host();
         }
+
+        // 无条件刷新,不看 `applied.restarted`:restart 失败时它是 false,而
+        // 「同地址只换 token」那条失败路径恰恰会让服务停在未监听状态(supervisor
+        // 已经先 stop() 了)——只在成功时刷新的话,状态行会一直挂着已经失效的
+        // 旧地址和会话数。刷新本身只是重读一次当前状态,多调用没有代价。
+        self.refresh_status();
     }
 
     /// 关掉设置窗口:GPU 资源随 `EguiWindow` 的 Drop 当场还回去,界面状态一并
@@ -317,21 +317,40 @@ impl App {
         self.view = None;
     }
 
-    /// 带 token 的访问 URL,和 CLI 启动时打印的那一行是同一格式。
-    fn url(&self) -> Option<String> {
-        let listen = self.sup.listen()?;
-        let token = self.sup.token()?;
-        Some(format!("http://{}:{}/#token={token}", display_host(listen.ip()), listen.port()))
+    fn refresh_resolved_web_host(&mut self) {
+        self.resolved_web_host = self
+            .sup
+            .listen()
+            .map(|listen| crate::settings::web_addr::resolve_live_web_host(listen, self.startup.web_host));
     }
 
-    /// 状态行里能实际打开的 host。和 `url()` 用同一个 `display_host`,不然配置成
-    /// `0.0.0.0` 时状态行显示 `0.0.0.0:7683`,用户照着敲进浏览器却打不开——
-    /// 「复制访问链接」给的却是 `127.0.0.1`,两处得说一样的话。
+    /// 带 token 的访问 URL,动态解析当前可达 host 并保持状态行同步。
+    fn url(&mut self) -> Option<String> {
+        let listen = self.sup.listen()?;
+        let token = self.sup.token()?;
+        let host = crate::settings::web_addr::resolve_live_web_host(listen, self.startup.web_host);
+        let url = crate::settings::web_addr::format_access_url(host, listen.port(), token);
+        if self.resolved_web_host != Some(host) {
+            self.resolved_web_host = Some(host);
+            self.refresh_status();
+        }
+        Some(url)
+    }
+
+    /// 状态行里能实际打开的 host。使用缓存的 `resolved_web_host` 避免每次
+    /// `SessionsChanged` 事件都扫描本机网卡。
     fn status_text(&self) -> String {
         match self.sup.listen() {
             Some(addr) => {
                 let n = self.sup.manager().list().len();
-                tr!(self.locale, "gateterm · {}:{} · {n} 个会话", "gateterm · {}:{} · {n} sessions", display_host(addr.ip()), addr.port())
+                let host = if addr.ip().is_unspecified() {
+                    self.resolved_web_host
+                        .unwrap_or_else(|| crate::settings::web_addr::loopback_for(addr.ip()))
+                } else {
+                    addr.ip()
+                };
+                let endpoint = SocketAddr::new(host, addr.port());
+                tr!(self.locale, "gateterm · {endpoint} · {n} 个会话", "gateterm · {endpoint} · {n} sessions")
             }
             // 带上原因:托盘状态行是用户第一眼看到的东西,只说「未监听」等于
             // 让他去翻日志。
@@ -705,10 +724,17 @@ impl ApplicationHandler<UserEvent> for App {
                             view.form.token = uuid::Uuid::new_v4().simple().to_string();
                         }
                     }
-                    Outcome::RefreshPairing => {
+                    Outcome::RefreshWebAddrs => {
                         if let Some(view) = self.view.as_mut() {
-                            view.pairing.refresh(self.sup.listen(), self.sup.token());
+                            view.web_addr.refresh(self.sup.listen());
+                            self.resolved_web_host = self
+                                .sup
+                                .listen()
+                                .map(|listen| view.web_addr.resolved(listen, self.startup.web_host));
+                        } else {
+                            self.refresh_resolved_web_host();
                         }
+                        self.refresh_status();
                     }
                     Outcome::Cloud(action) => self.start_cloud(action),
                 }

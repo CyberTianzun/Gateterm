@@ -37,6 +37,7 @@ fn main() -> Result<()> {
     }
 
     let language = configfile::language();
+    let web_host = configfile::web_host();
     let locale = language.resolve(Locale::system());
     let failed_to_start = locale.text("gateterm 无法启动", "gateterm could not start");
     let log_path = or_report(failed_to_start, locale.text("日志初始化失败。", "Could not initialize logging."), logs::init())?;
@@ -153,7 +154,7 @@ fn main() -> Result<()> {
     let proxy = event_loop.create_proxy();
     // config 在 Supervisor::new 里只是被借用,这里把整份连同两条启动失败原因
     // 一起交给 App:配置做只读展示,错误做横幅 + 状态行。
-    let startup = Startup { language, config, config_error, listen_error };
+    let startup = Startup { language, web_host, config, config_error, listen_error };
     let mut app = App::new(rt, sup, proxy, log_path, startup);
     // 事件循环异常退出时托盘也跟着没了,同样得说一声 —— 否则用户看到的是图标凭空消失。
     let ran = event_loop.run_app(&mut app).map_err(Into::into);

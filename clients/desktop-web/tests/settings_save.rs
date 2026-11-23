@@ -129,7 +129,7 @@ fn not_listening() -> Current {
 }
 
 fn form(host: &str, port: &str, token: &str) -> Form {
-    Form { host: host.into(), port: port.into(), token: token.into(), web_title: String::new(), autostart: false, language: Default::default() }
+    Form { host: host.into(), port: port.into(), token: token.into(), web_title: String::new(), autostart: false, language: Default::default(), web_host: None }
 }
 
 fn err_text(applied: &Applied) -> &str {
@@ -181,7 +181,7 @@ fn no_rebind_needed_means_only_writing_the_file() {
     assert!(!applied.restarted);
     assert_eq!(fx.calls, vec!["autostart", "config_path", "save_config"]);
     assert!(fx.restarts.is_empty(), "只改配置不该把用户踢下线");
-    assert_eq!(fx.saved, vec![Editable { listen: addr("127.0.0.1:7683"), token: None, web_title: None, language: Default::default() }]);
+    assert_eq!(fx.saved, vec![Editable { listen: addr("127.0.0.1:7683"), token: None, web_title: None, language: Default::default(), web_host: None }]);
 }
 
 #[test]
@@ -209,7 +209,7 @@ fn a_changed_address_restarts_first_then_writes() {
     assert_eq!(fx.restarts, vec![(addr("127.0.0.1:9000"), "tok".to_string())]);
     assert_eq!(
         fx.saved,
-        vec![Editable { listen: addr("127.0.0.1:9000"), token: Some("tok".into()), web_title: None, language: Default::default() }]
+        vec![Editable { listen: addr("127.0.0.1:9000"), token: Some("tok".into()), web_title: None, language: Default::default(), web_host: None }]
     );
     assert_eq!(fx.listening, Some(addr("127.0.0.1:9000")), "成功之后应当跑在新地址上");
 }
@@ -230,7 +230,7 @@ fn an_empty_token_restarts_with_the_current_one() {
     assert!(applied.restarted);
     // 本次运行继续用旧 token(不然保存一下自己就被踢下线),只是不再写进文件
     assert_eq!(fx.restarts, vec![(addr("127.0.0.1:9000"), "tok".to_string())]);
-    assert_eq!(fx.saved, vec![Editable { listen: addr("127.0.0.1:9000"), token: None, web_title: None, language: Default::default() }]);
+    assert_eq!(fx.saved, vec![Editable { listen: addr("127.0.0.1:9000"), token: None, web_title: None, language: Default::default(), web_host: None }]);
     assert!(!fx.calls.contains(&"new_token"), "有现行 token 就别乱换");
 }
 
@@ -301,7 +301,7 @@ fn a_blank_token_while_not_listening_never_yields_an_empty_one() {
     assert_eq!(token, FRESH_TOKEN, "没有现行 token 时必须现场生成一个");
     assert!(fx.calls.contains(&"new_token"));
     // 生成出来的这个只作用于本次运行:表单说了「不固定」,文件里就不该有 token
-    assert_eq!(fx.saved, vec![Editable { listen: addr("0.0.0.0:7683"), token: None, web_title: None, language: Default::default() }]);
+    assert_eq!(fx.saved, vec![Editable { listen: addr("0.0.0.0:7683"), token: None, web_title: None, language: Default::default(), web_host: None }]);
 }
 
 /// 同一条路径的另一种表现形式:快照里 token 是空串(而不是 `None`)也不能漏过去。
@@ -335,7 +335,7 @@ fn a_running_empty_token_forces_a_rebind_at_the_same_address() {
     assert_eq!(token, FRESH_TOKEN, "空串不是 token,得现场生成一个");
     assert!(fx.calls.contains(&"new_token"));
     // 表单说了「不固定」,新生成的这个只作用于本次运行,不落盘
-    assert_eq!(fx.saved, vec![Editable { listen: addr("127.0.0.1:7683"), token: None, web_title: None, language: Default::default() }]);
+    assert_eq!(fx.saved, vec![Editable { listen: addr("127.0.0.1:7683"), token: None, web_title: None, language: Default::default(), web_host: None }]);
 }
 
 #[test]
@@ -397,6 +397,22 @@ fn changing_only_web_title_persists_without_restarting_sessions() {
     assert_eq!(result.message, Message::Ok("Saved".into()));
     assert!(!result.restarted);
     assert_eq!(fx.saved[0].web_title.as_deref(), Some("edge-node-02"));
+    assert_eq!(fx.listening, live.listen);
+    assert!(!fx.calls.iter().any(|call| call == &"restart"));
+}
+
+#[test]
+fn changing_only_web_host_persists_without_restarting_sessions() {
+    use gateterm_desktop_web::i18n::Locale;
+    let mut fx = fx_running();
+    let live = current();
+    let mut next = Form::from_current(live.listen.unwrap(), false);
+    next.token = live.token.clone().unwrap();
+    next.web_host = Some("192.168.1.5".parse().unwrap());
+    let result = apply_in(&next, &live, &mut fx, Locale::En);
+    assert_eq!(result.message, Message::Ok("Saved".into()));
+    assert!(!result.restarted);
+    assert_eq!(fx.saved[0].web_host, Some("192.168.1.5".parse().unwrap()));
     assert_eq!(fx.listening, live.listen);
     assert!(!fx.calls.iter().any(|call| call == &"restart"));
 }

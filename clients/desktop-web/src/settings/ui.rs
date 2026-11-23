@@ -23,14 +23,14 @@ pub enum Outcome {
     Cancel,
     OpenConfigFile,
     RegenerateToken,
-    RefreshPairing,
+    RefreshWebAddrs,
     Cloud(CloudAction),
 }
 
 /// 设置窗口的全部可见状态。窗口开着的时候由 app.rs 持有,关窗时一起丢掉。
 pub struct View {
     pub form: Form,
-    pub pairing: crate::settings::pairing::Pairing,
+    pub web_addr: crate::settings::web_addr::WebAddrPicker,
     /// 只读展示,v1 不提供修改。
     pub window_size: String,
     /// (名称, 命令) —— 只读列表。
@@ -112,6 +112,20 @@ pub fn draw(ui: &mut egui::Ui, view: &mut View, locale: Locale) -> Outcome {
                     });
                     ui.end_row();
 
+                    let effective_listen_ip = view.form.host.trim().parse::<std::net::IpAddr>().ok();
+                    ui.label(locale.text("打开 Web 客户端", "Open web client"));
+                    let (web_edited, refresh_web_addrs) = view.web_addr.draw_selector(
+                        ui,
+                        effective_listen_ip,
+                        &mut view.form.web_host,
+                        locale,
+                    );
+                    edited |= web_edited;
+                    if refresh_web_addrs {
+                        outcome = Outcome::RefreshWebAddrs;
+                    }
+                    ui.end_row();
+
                     ui.label(locale.text("访问 token", "Access token"));
                     ui.horizontal(|ui| {
                         edited |= ui
@@ -164,8 +178,6 @@ pub fn draw(ui: &mut egui::Ui, view: &mut View, locale: Locale) -> Outcome {
                     ui.end_row();
                 });
 
-            ui.add_space(8.0);
-            if view.pairing.draw(ui, locale) { outcome = Outcome::RefreshPairing; }
             ui.add_space(8.0);
             ui.separator();
             ui.horizontal(|ui| {

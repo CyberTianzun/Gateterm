@@ -1,9 +1,8 @@
-use gateterm_desktop_web::configfile::{save, Editable};
-use gateterm_desktop_web::configfile::load_language;
+use gateterm_desktop_web::configfile::{load_language, load_web_host, save, Editable};
 use gateterm_desktop_web::i18n::LanguagePref;
 
 fn edit(listen: &str, token: Option<&str>) -> Editable {
-    Editable { listen: listen.parse().unwrap(), token: token.map(String::from), web_title: None, language: Default::default() }
+    Editable { listen: listen.parse().unwrap(), token: token.map(String::from), web_title: None, language: Default::default(), web_host: None }
 }
 
 #[test]
@@ -178,4 +177,42 @@ fn web_title_round_trips_and_can_be_cleared_without_losing_comments() {
     assert!(!cleared.contains("web_title"), "{cleared}");
     let cfg = gateterm_server::config::Config::load(Some(path)).unwrap();
     assert_eq!(cfg.web_title, None);
+}
+
+#[test]
+fn web_host_round_trips_and_auto_removes_key_without_losing_comments() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        "# header comment\nlisten = \"0.0.0.0:7683\"\n\n[desktop]\n# keep this too\nlanguage = \"en\"\nfuture_option = true\n",
+    )
+    .unwrap();
+
+    let mut next = edit("0.0.0.0:7683", Some("tok"));
+    next.language = LanguagePref::En;
+    next.web_host = Some("192.168.1.5".parse().unwrap());
+    save(&path, &next).unwrap();
+
+    assert_eq!(load_web_host(&path), Some("192.168.1.5".parse().unwrap()));
+    let saved_text = std::fs::read_to_string(&path).unwrap();
+    assert!(saved_text.contains("# header comment"), "{saved_text}");
+    assert!(saved_text.contains("# keep this too"), "{saved_text}");
+    assert!(saved_text.contains("future_option = true"), "{saved_text}");
+    assert!(saved_text.contains(r#"web_host = "192.168.1.5""#), "{saved_text}");
+    assert_eq!(load_language(&path), LanguagePref::En);
+    gateterm_server::config::Config::load(Some(path.clone())).unwrap();
+
+    next.web_host = None;
+    save(&path, &next).unwrap();
+
+    assert_eq!(load_web_host(&path), None);
+    let cleared_text = std::fs::read_to_string(&path).unwrap();
+    assert!(!cleared_text.contains("web_host"), "{cleared_text}");
+    assert!(cleared_text.contains("# keep this too"), "{cleared_text}");
+    assert!(cleared_text.contains("future_option = true"), "{cleared_text}");
+    assert_eq!(load_language(&path), LanguagePref::En);
+
+    std::fs::write(&path, "[desktop]\nweb_host = \"not-an-ip\"\n").unwrap();
+    assert_eq!(load_web_host(&path), None);
 }

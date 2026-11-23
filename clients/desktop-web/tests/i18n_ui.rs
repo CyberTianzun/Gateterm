@@ -2,9 +2,9 @@
 use gateterm_desktop_web::i18n::Locale;
 use gateterm_desktop_web::settings::{
     cloud::{CloudForm, CloudStatus},
-    pairing::Pairing,
     state::Form,
     ui::{View, draw},
+    web_addr::WebAddrPicker,
 };
 
 fn collect_text(shape: &egui::Shape, texts: &mut Vec<String>) {
@@ -26,63 +26,72 @@ fn collect_text(shape: &egui::Shape, texts: &mut Vec<String>) {
 fn settings_switch_language_in_place_and_fit_the_window() {
     let ctx = egui::Context::default();
     gateterm_desktop_web::fonts::install(&ctx);
-    let mut view = View {
-        form: Form::from_current("127.0.0.1:7683".parse().unwrap(), false),
-        pairing: Pairing::new(None, None),
-        window_size: "smallest".into(),
-        launchers: vec![],
-        banner: None,
-        message: None,
-        cloud: CloudForm::default(),
-        cloud_status: CloudStatus::LoggedOut,
-        cloud_busy: false,
-        cloud_message: None,
-    };
-    for locale in [Locale::En, Locale::ZhCn, Locale::En] {
-        let mut texts = vec![];
-        for _ in 0..2 {
-            let input = egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(560.0, 680.0),
-                )),
-                ..Default::default()
-            };
-            let mut output = ctx.run_ui(input, |ui| {
-                draw(ui, &mut view, locale);
-            });
-            // No renderer consumes this in a headless test.
-            output.textures_delta.clear();
-            texts.clear();
-            for shape in &output.shapes {
-                collect_text(&shape.shape, &mut texts);
+    for listen_str in ["127.0.0.1:7683", "0.0.0.0:7683"] {
+        let listen = listen_str.parse().unwrap();
+        let mut view = View {
+            form: Form::from_current(listen, false),
+            web_addr: WebAddrPicker::new(Some(listen)),
+            window_size: "smallest".into(),
+            launchers: vec![],
+            banner: None,
+            message: None,
+            cloud: CloudForm::default(),
+            cloud_status: CloudStatus::LoggedOut,
+            cloud_busy: false,
+            cloud_message: None,
+        };
+        for locale in [Locale::En, Locale::ZhCn, Locale::En] {
+            let mut texts = vec![];
+            for _ in 0..2 {
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(560.0, 680.0),
+                    )),
+                    ..Default::default()
+                };
+                let mut output = ctx.run_ui(input, |ui| {
+                    draw(ui, &mut view, locale);
+                });
+                // No renderer consumes this in a headless test.
+                output.textures_delta.clear();
+                texts.clear();
+                for shape in &output.shapes {
+                    collect_text(&shape.shape, &mut texts);
+                }
             }
-        }
-        assert!(
-            texts
-                .iter()
-                .any(|text| text == locale.text("界面语言", "Language")),
-            "{texts:?}"
-        );
-        assert!(
-            texts
-                .iter()
-                .any(|text| text == locale.text("监听地址", "Listen address")),
-            "{texts:?}"
-        );
-        assert!(
-            texts
-                .iter()
-                .any(|text| text == locale.text("网页标题", "Web title")),
-            "{texts:?}"
-        );
-        if locale == Locale::En {
             assert!(
-                !texts
+                texts
                     .iter()
-                    .any(|text| text.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))),
+                    .any(|text| text == locale.text("界面语言", "Language")),
                 "{texts:?}"
             );
+            assert!(
+                texts
+                    .iter()
+                    .any(|text| text == locale.text("监听地址", "Listen address")),
+                "{texts:?}"
+            );
+            assert!(
+                texts
+                    .iter()
+                    .any(|text| text == locale.text("打开 Web 客户端", "Open web client")),
+                "{texts:?}"
+            );
+            assert!(
+                texts
+                    .iter()
+                    .any(|text| text == locale.text("网页标题", "Web title")),
+                "{texts:?}"
+            );
+            if locale == Locale::En {
+                assert!(
+                    !texts
+                        .iter()
+                        .any(|text| text.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))),
+                    "{texts:?}"
+                );
+            }
         }
     }
 }

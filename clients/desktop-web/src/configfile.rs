@@ -4,7 +4,7 @@
 //! 写是 desktop 的职责。用 toml_edit 而不是 serde 序列化整个 Config:配置文件
 //! 是鼓励用户手写的,把注释、顺序、空行碾掉换不来任何好处。
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -19,6 +19,7 @@ pub struct Editable {
     pub token: Option<String>,
     pub web_title: Option<String>,
     pub language: LanguagePref,
+    pub web_host: Option<IpAddr>,
 }
 
 /// 与 server 用同一个平台配置目录(`gateterm_server::config` 里的私有 `default_path`
@@ -40,6 +41,25 @@ pub fn load_language(path: &Path) -> LanguagePref {
 
 pub fn language() -> LanguagePref {
     default_path().map(|path| load_language(&path)).unwrap_or_default()
+}
+
+pub fn load_web_host(path: &Path) -> Option<IpAddr> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| text.parse::<DocumentMut>().ok())
+        .and_then(|doc| {
+            doc.get("desktop")?
+                .get("web_host")?
+                .as_str()?
+                .trim()
+                .parse::<IpAddr>()
+                .ok()
+                .filter(|ip| !ip.is_unspecified())
+        })
+}
+
+pub fn web_host() -> Option<IpAddr> {
+    default_path().ok().and_then(|path| load_web_host(&path))
 }
 
 /// 就地写回。文件不存在时连同父目录一起创建。
@@ -72,9 +92,24 @@ pub fn save(path: &Path, edit: &Editable) -> Result<()> {
 
     let desktop = doc.entry("desktop").or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
     let desktop = desktop.as_table_like_mut().context("[desktop] must be a table")?;
-    desktop.insert("language", value(edit.language.code()));
+    set_table_value(desktop, "language", edit.language.code());
+    match edit.web_host.filter(|ip| !ip.is_unspecified()) {
+        Some(ip) => set_table_value(desktop, "web_host", ip.to_string()),
+        None => {
+            desktop.remove("web_host");
+        }
+    }
 
     write_atomic(path, doc.to_string().as_bytes())
+}
+
+fn set_table_value(table: &mut dyn toml_edit::TableLike, key: &str, val: impl Into<toml_edit::Value>) {
+    let val = value(val);
+    if let Some(slot) = table.get_mut(key) {
+        *slot = val;
+    } else {
+        table.insert(key, val);
+    }
 }
 
 /// 先写同目录的 .tmp 再 rename:写到一半失败不会留下半个配置文件。
