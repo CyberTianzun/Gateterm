@@ -48,11 +48,120 @@ enum PendingReply {
 impl EventListener for ReplyListener {
     fn send_event(&self, event: Event) {
         let reply = match event {
+            Event::PtyWrite(text) if text == "\x1b[?6c" => {
+                PendingReply::Text("\x1b[?62;22;52c".to_string())
+            }
             Event::PtyWrite(text) => PendingReply::Text(text),
             Event::ColorRequest(index, format) => PendingReply::Color(index, format),
             _ => return,
         };
         self.pending.lock().unwrap().push(reply);
+    }
+}
+
+/// Stateful byte-at-a-time matcher for `XTVERSION` (`CSI > q` / `CSI > 0 q`).
+#[derive(Default)]
+struct XtVersionScanner {
+    state: XtVersionState,
+}
+
+#[derive(Default, Clone, Copy)]
+enum XtVersionState {
+    #[default]
+    Ground,
+    Esc,
+    Csi,
+    Gt,
+    GtZero,
+    IgnoreCsi,
+}
+
+impl XtVersionScanner {
+    fn push(&mut self, byte: u8) -> bool {
+        match byte {
+            0x1b => {
+                self.state = XtVersionState::Esc;
+                return false;
+            }
+            0x18 | 0x1a => {
+                self.state = XtVersionState::Ground;
+                return false;
+            }
+            _ => {}
+        }
+
+        match self.state {
+            XtVersionState::Ground => false,
+            XtVersionState::Esc => {
+                self.state = if byte == b'[' {
+                    XtVersionState::Csi
+                } else {
+                    XtVersionState::Ground
+                };
+                false
+            }
+            XtVersionState::Csi => {
+                self.state = match byte {
+                    b'>' => XtVersionState::Gt,
+                    0x40..=0x7e | 0x80..=0xff => XtVersionState::Ground,
+                    0x20..=0x3f => XtVersionState::IgnoreCsi,
+                    _ => XtVersionState::Csi,
+                };
+                false
+            }
+            XtVersionState::Gt => match byte {
+                b'0' => {
+                    self.state = XtVersionState::GtZero;
+                    false
+                }
+                b'q' => {
+                    self.state = XtVersionState::Ground;
+                    true
+                }
+                0x40..=0x7e | 0x80..=0xff => {
+                    self.state = XtVersionState::Ground;
+                    false
+                }
+                0x20..=0x3f => {
+                    self.state = XtVersionState::IgnoreCsi;
+                    false
+                }
+                _ => false,
+            },
+            XtVersionState::GtZero => match byte {
+                b'0' => false,
+                b'q' => {
+                    self.state = XtVersionState::Ground;
+                    true
+                }
+                0x40..=0x7e | 0x80..=0xff => {
+                    self.state = XtVersionState::Ground;
+                    false
+                }
+                0x20..=0x3f => {
+                    self.state = XtVersionState::IgnoreCsi;
+                    false
+                }
+                _ => false,
+            },
+            XtVersionState::IgnoreCsi => {
+                if matches!(byte, 0x40..=0x7e | 0x80..=0xff) {
+                    self.state = XtVersionState::Ground;
+                }
+                false
+            }
+        }
+    }
+
+    fn feed(&mut self, bytes: &[u8], replies: &Mutex<Vec<PendingReply>>) {
+        for &byte in bytes {
+            if self.push(byte) {
+                replies.lock().unwrap().push(PendingReply::Text(format!(
+                    "\x1bP>|gateterm {}\x1b\\",
+                    env!("CARGO_PKG_VERSION")
+                )));
+            }
+        }
     }
 }
 
@@ -151,6 +260,7 @@ pub struct SessionGrid {
     /// A small second handler tracks metadata without forwarding every Term operation.
     snapshot_modes: SnapshotModes,
     snapshot_modes_parser: Processor<Immediate>,
+    xtversion: XtVersionScanner,
     stream_tail: StreamTail,
     graphics: KittyGraphicsState,
     /// Primary screen saved on entry to the alternate screen. Keep its history
@@ -182,6 +292,7 @@ impl SessionGrid {
             parser: Processor::new(),
             snapshot_modes: SnapshotModes::default(),
             snapshot_modes_parser: Processor::new(),
+            xtversion: XtVersionScanner::default(),
             stream_tail: StreamTail::new(),
             graphics: KittyGraphicsState::new(),
             primary_grid: None,
@@ -198,6 +309,7 @@ impl SessionGrid {
             parser,
             snapshot_modes,
             snapshot_modes_parser,
+            xtversion,
             stream_tail,
             graphics,
             primary_grid,
@@ -213,14 +325,21 @@ impl SessionGrid {
             bytes,
             |chunk| {
                 if !chunk.is_empty() {
-                    // Split only at screen switches, so we can retain the primary screen
-                    // immediately before Term switches to its otherwise inaccessible grid.
+                    // Split only at screen switches (so we can retain the primary screen
+                    // immediately before Term switches grids) and `q` for XTVERSION
+                    // (so query replies preserve exact stream order).
                     let mut start = 0;
                     let mut metadata_start = 0;
+                    let mut xt_start = 0;
                     for (i, byte) in chunk.iter().enumerate() {
-                        // These are the only final bytes which can switch/reset screens.
-                        // Feed the metadata parser in chunks rather than one byte at a time.
-                        if !matches!(byte, b'h' | b'l' | b'c') {
+                        if !matches!(byte, b'h' | b'l' | b'c' | b'q') {
+                            continue;
+                        }
+                        if *byte == b'q' {
+                            parser.advance(term, &chunk[start..=i]);
+                            start = i + 1;
+                            xtversion.feed(&chunk[xt_start..=i], pty_replies);
+                            xt_start = i + 1;
                             continue;
                         }
                         let was_alt = snapshot_modes.alt_screen;
@@ -240,6 +359,7 @@ impl SessionGrid {
                     }
                     snapshot_modes_parser.advance(snapshot_modes, &chunk[metadata_start..]);
                     parser.advance(term, &chunk[start..]);
+                    xtversion.feed(&chunk[xt_start..], pty_replies);
                 }
                 let grid = term.grid();
                 let cursor = grid.cursor.point;
@@ -1189,6 +1309,49 @@ mod tests {
                 modify_other_keys: 2,
                 bracketed_paste: true,
             }
+        );
+    }
+
+    #[test]
+    fn da1_advertises_osc52_clipboard_capability() {
+        let mut g = SessionGrid::new(80, 24);
+        g.advance(b"\x1b[c");
+        assert_eq!(String::from_utf8(g.take_pty_replies()).unwrap(), "\x1b[?62;22;52c");
+        g.advance(b"\x1b[0c");
+        assert_eq!(String::from_utf8(g.take_pty_replies()).unwrap(), "\x1b[?62;22;52c");
+    }
+
+    #[test]
+    fn xtversion_replies_with_gateterm_version_even_across_byte_splits() {
+        let expected = format!("\x1bP>|gateterm {}\x1b\\", env!("CARGO_PKG_VERSION"));
+        let mut g = SessionGrid::new(80, 24);
+        for seq in [b"\x1b[>q".as_slice(), b"\x1b[>0q".as_slice()] {
+            for byte in seq {
+                g.advance(&[*byte]);
+            }
+            assert_eq!(String::from_utf8(g.take_pty_replies()).unwrap(), expected);
+        }
+        // Non-zero param (CSI > 1 q), multi-param, plain CSI q, and CAN/SUB cancels must not trigger XTVERSION.
+        g.advance(b"\x1b[>1q\x1b[>0;1q\x1b[q\x1b[>\x18q\x1b[>\x1aq");
+        assert!(g.take_pty_replies().is_empty());
+        // ESC restarts the sequence cleanly.
+        g.advance(b"\x1b[>\x1b[>q");
+        assert_eq!(String::from_utf8(g.take_pty_replies()).unwrap(), expected);
+    }
+
+    #[test]
+    fn xtversion_and_da1_preserve_query_reply_order() {
+        let expected_xt = format!("\x1bP>|gateterm {}\x1b\\", env!("CARGO_PKG_VERSION"));
+        let mut g = SessionGrid::new(80, 24);
+        g.advance(b"\x1b[>q\x1b[c");
+        assert_eq!(
+            String::from_utf8(g.take_pty_replies()).unwrap(),
+            format!("{expected_xt}\x1b[?62;22;52c")
+        );
+        g.advance(b"\x1b[c\x1b[>0q");
+        assert_eq!(
+            String::from_utf8(g.take_pty_replies()).unwrap(),
+            format!("\x1b[?62;22;52c{expected_xt}")
         );
     }
 }
