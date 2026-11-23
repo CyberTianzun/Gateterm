@@ -155,7 +155,7 @@ fn osc5522_echo_cmd() -> Option<Vec<String>> {
     return Some(vec![
         "/bin/sh".into(),
         "-c".into(),
-        r#"while IFS= read -r line; do case "$line" in *COPY:*) b="${line##*COPY:}"; b="${b%$'\r'}"; printf 'BEGIN_%s\033]5522;type=write:id=k1\033\\\033]5522;type=wdata:mime=dGV4dC9wbGFpbg==;%s\033\\\033]5522;type=wdata\033\\END_%s\n' "$b" "$b" "$b";; esac; done"#
+        r#"stty -echo; while IFS= read -r line; do case "$line" in *COPY:*) b=$(printf '%s' "${line##*COPY:}" | tr -d '\r'); printf 'BEGIN_%s\033]5522;type=write:id=k1\033\\\033]5522;type=wdata:mime=dGV4dC9wbGFpbg==;%s\033\\\033]5522;type=wdata\033\\END_%s\n' "$b" "$b" "$b";; esac; done"#
             .into(),
     ]);
     #[cfg(windows)]
