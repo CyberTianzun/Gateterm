@@ -14,9 +14,10 @@ use std::net::SocketAddr;
 
 use axum::extract::{ConnectInfo, Path, Query, RawQuery};
 
-use crate::agent::apply::{apply, default_backup_dir, ApplyError, ApplyOpts};
+use crate::agent::apply::ApplyError;
 use crate::agent::detect::DetectEnv;
-use crate::agent::edit::{ConfigEdit, EditOp, InstallCtx};
+use crate::agent::edit::{ConfigEdit, InstallCtx};
+use crate::agent::ops::{self, MutateResult};
 use crate::agent::store::{AgentSessionStore, AnswerResult, Decision, PendingRequest, Update};
 use crate::app::{bearer_ok, AppState};
 
@@ -40,21 +41,7 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response
 /// 一条编辑的对外投影。不直接序列化 `EditOp` —— 那是内部结构,客户端不该依赖它
 /// (R13:客户端中立)。
 fn describe(e: &ConfigEdit) -> serde_json::Value {
-    let (action, event, spec) = match &e.op {
-        EditOp::EnsureHook { event, group } => ("ensure", event.clone(), Some(group.clone())),
-        EditOp::RemoveOurs { event } => ("remove", event.clone(), None),
-        EditOp::PurgeOurs => ("purge", "*".into(), None),
-        // 整文件托管没有「事件」,预演里显示成一个文件级动作
-        EditOp::WriteOwnedFile { .. } => ("ensure", "(extension file)".into(), None),
-        EditOp::RemoveOwnedFile => ("remove", "(extension file)".into(), None),
-        // 整键托管:一条编辑就装齐所有事件,预演里把事件名列出来
-        EditOp::SetOwnedKey { key, value } => {
-            let events: Vec<&str> =
-                value.as_object().into_iter().flat_map(|o| o.keys()).map(String::as_str).collect();
-            ("ensure", format!("{key}: {}", events.join(", ")), Some(value.clone()))
-        }
-        EditOp::RemoveOwnedKey { key } => ("remove", format!("{key}: *"), None),
-    };
+    let (action, event, spec) = ops::describe_edit(e);
     serde_json::json!({
         "path": e.path.to_string_lossy(),
         "action": action,
@@ -82,12 +69,9 @@ fn wants_blocking(state: &AppState, id: &str, explicit: Option<bool>) -> bool {
     if let Some(v) = explicit {
         return v;
     }
-    let ctx = InstallCtx {
-        home: DetectEnv::current_home(),
-        port: state.listen_port,
-        include_blocking: true,
-    };
-    crate::agent::find(id).map(|a| a.integration(&ctx).1.is_empty()).unwrap_or(false)
+    crate::agent::find(id)
+        .map(|a| ops::wants_blocking(a, &DetectEnv::current_home(), state.listen_port))
+        .unwrap_or(false)
 }
 
 /// `GET /api/agents/{id}/plan` —— 预演。只读,返回将要做的编辑。
@@ -105,7 +89,8 @@ pub async fn plan(
     let Some((adapter, ctx)) = ctx_for(&state, &id, blocking) else {
         return (StatusCode::NOT_FOUND, "no such agent").into_response();
     };
-    match (adapter.plan_install(&ctx), adapter.plan_uninstall(&ctx)) {
+    let uninstall_ctx = InstallCtx { include_blocking: true, ..ctx.clone() };
+    match (adapter.plan_install(&ctx), adapter.plan_uninstall(&uninstall_ctx)) {
         (Ok(install), Ok(uninstall)) => Json(serde_json::json!({
             "install": install.iter().map(describe).collect::<Vec<_>>(),
             "uninstall": uninstall.iter().map(describe).collect::<Vec<_>>(),
@@ -148,42 +133,46 @@ pub async fn purge(
     if !bearer_ok(&headers, &state.token) {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
-    let Some((adapter, ctx)) = ctx_for(&state, &id, true) else {
+    let Some(adapter) = crate::agent::find(&id) else {
         return (StatusCode::NOT_FOUND, "no such agent").into_response();
     };
-    let Ok(plan) = crate::agent::plan_purge(adapter, &ctx) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "plan failed").into_response();
-    };
-    run_plan(plan, true, true).await
+    let home = DetectEnv::current_home();
+    run_mutate(move || {
+        ops::purge(adapter, &home).map(|outcomes| MutateResult { include_blocking: true, outcomes })
+    })
+    .await
 }
 
 async fn mutate(state: AppState, id: String, headers: HeaderMap, installing: bool) -> Response {
     if !bearer_ok(&headers, &state.token) {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
-    // 卸载永远覆盖全部事件,否则关掉开关再卸载会留下残留
-    let blocking = if installing { wants_blocking(&state, &id, None) } else { true };
-    let Some((adapter, ctx)) = ctx_for(&state, &id, blocking) else {
+    let Some(adapter) = crate::agent::find(&id) else {
         return (StatusCode::NOT_FOUND, "no such agent").into_response();
     };
-    let plan = if installing { adapter.plan_install(&ctx) } else { adapter.plan_uninstall(&ctx) };
-    let Ok(plan) = plan else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "plan failed").into_response();
-    };
-    run_plan(plan, state.agents.install_enabled, blocking).await
+    let home = DetectEnv::current_home();
+    let port = state.listen_port;
+    let enabled = state.agents.install_enabled;
+    run_mutate(move || {
+        if installing {
+            ops::install(adapter, &home, port, enabled)
+        } else {
+            ops::uninstall(adapter, &home, port, enabled)
+        }
+    })
+    .await
 }
 
-async fn run_plan(plan: Vec<ConfigEdit>, enabled: bool, blocking: bool) -> Response {
-    let Some(backup_dir) = default_backup_dir() else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "cannot resolve backup dir").into_response();
-    };
-    let opts = ApplyOpts { enabled, backup_dir, backup_keep: 5 };
+async fn run_mutate<F>(op: F) -> Response
+where
+    F: FnOnce() -> Result<MutateResult, ApplyError> + Send + 'static,
+{
     // 落盘是阻塞 IO
-    match tokio::task::spawn_blocking(move || apply(&plan, &opts)).await {
-        Ok(Ok(outcomes)) => Json(serde_json::json!({
-            "changed": outcomes.iter().any(|o| o.changed),
-            "include_blocking": blocking,
-            "files": outcomes.iter().map(|o| serde_json::json!({
+    match tokio::task::spawn_blocking(op).await {
+        Ok(Ok(res)) => Json(serde_json::json!({
+            "changed": res.outcomes.iter().any(|o| o.changed),
+            "include_blocking": res.include_blocking,
+            "files": res.outcomes.iter().map(|o| serde_json::json!({
                 "path": o.path.to_string_lossy(),
                 "changed": o.changed,
                 "backup": o.backup.as_ref().map(|p| p.to_string_lossy()),

@@ -19,6 +19,7 @@ pub mod edit;
 pub mod history;
 pub mod hook_cli;
 pub mod kit;
+pub mod ops;
 pub mod process;
 pub mod routes;
 pub mod store;
@@ -303,7 +304,7 @@ pub fn scan(env: &detect::DetectEnv, port: u16) -> Vec<AgentStatus> {
         .map(|a| {
             let (mut integration, conflicts) = a.integration(&ctx);
             if integration == Integration::Installed {
-                // 和安装走同一个「带不带决策类」的取舍(见 routes::wants_blocking),
+                // 和安装走同一个「带不带决策类」的取舍(见 ops::wants_blocking),
                 // 否则有冲突时只装了遥测的用户会被永远报成不一致。
                 let ctx = edit::InstallCtx { include_blocking: conflicts.is_empty(), ..ctx.clone() };
                 if !install_is_current(a, &ctx) {
@@ -344,7 +345,7 @@ pub fn startup_warnings(env: &detect::DetectEnv, port: u16) -> Vec<String> {
                 Integration::NeedsActivation => {
                     let hint = find(a.id)
                         .and_then(|ad| ad.activation_hint())
-                        .unwrap_or("按设置页「AI 集成」里的提示完成最后一步");
+                        .unwrap_or("在桌面托盘「设置 → AI 集成」或运行 `gateterm-server agents status` 查看激活步骤");
                     return Some(format!(
                         "{name}: hook 已装好,但还没在 {name} 里放行,不会被调用(会话识别、聊天视图都不生效)。\
                          {path}\n      {hint}",
@@ -355,7 +356,8 @@ pub fn startup_warnings(env: &detect::DetectEnv, port: u16) -> Vec<String> {
             };
             Some(format!(
                 "{name}: {why},远程接管 / 通知不会完全生效。{path}\n      \
-                 在「设置 → AI 集成」里重新安装;若有残留,先用「清空」或 `gateterm-server purge-hooks`",
+                 在桌面托盘「设置 → AI 集成」或运行 `gateterm-server agents setup` / `gateterm-server agents install` 重新安装;\
+                 若有残留,先用 `gateterm-server agents purge` 或 `gateterm-server purge-hooks`",
                 name = a.name,
             ))
         })
@@ -389,6 +391,7 @@ mod tests {
         );
         for file in [
             "mod.rs",
+            "ops.rs",
             "routes.rs",
             "store.rs",
             "edit.rs",
