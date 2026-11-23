@@ -214,17 +214,20 @@ impl App {
     }
 
     fn start_agents_scan(&mut self, refresh_shell_path: bool) {
-        self.agents_generation = self.agents_generation.wrapping_add(1);
-        let generation = self.agents_generation;
         let listen_port = self.sup.listen().map(|a| a.port());
         let scan_port = self.agents_scan_port();
-        if let Some(view) = self.view.as_mut() {
-            view.agents.loading = true;
-            view.agents.listen_port = listen_port;
-            view.agents.install_enabled = self.startup.config.agents.install_enabled;
-            view.agents.previews.clear();
-            view.agents.expanded_preview = None;
-        }
+        let install_enabled = self.startup.config.agents.install_enabled;
+        let generation = if let Some(view) = self.view.as_mut() {
+            prepare_agents_scan(
+                &mut view.agents,
+                &mut self.agents_generation,
+                listen_port,
+                install_enabled,
+            )
+        } else {
+            self.agents_generation = self.agents_generation.wrapping_add(1);
+            self.agents_generation
+        };
         let proxy = self.proxy.clone();
         self.rt.spawn(async move {
             let items = tokio::task::spawn_blocking(move || {
@@ -410,7 +413,9 @@ impl App {
         let applied = apply(&form, &current, &mut fx, locale);
         // Language changes only become active after the preference was saved.
         // Updating labels in place preserves the tray, window and PTY sessions.
-        if matches!(&applied.message, crate::settings::ui::Message::Ok(_)) {
+        let saved_ok = matches!(&applied.message, crate::settings::ui::Message::Ok(_));
+        let locale_changed = saved_ok && locale != self.locale;
+        if saved_ok {
             self.startup.language = form.language;
             self.startup.web_host = form.web_host;
             self.locale = locale;
@@ -451,19 +456,28 @@ impl App {
         }
 
         let banner = self.banner();
-        if let Some(view) = self.view.as_mut() {
+        let listen_port = self.sup.listen().map(|a| a.port());
+        let rescan_agents = if let Some(view) = self.view.as_mut() {
             view.banner = banner;
             view.message = Some(applied.message);
             view.web_addr.refresh(self.sup.listen());
-            view.agents.listen_port = self.sup.listen().map(|a| a.port());
+            let rescan = apply_agents_on_save(
+                &mut view.agents,
+                saved_ok,
+                locale_changed,
+                applied.restarted,
+                listen_port,
+            );
             self.resolved_web_host = self
                 .sup
                 .listen()
                 .map(|listen| view.web_addr.resolved(listen, self.startup.web_host));
+            rescan
         } else {
             self.refresh_resolved_web_host();
-        }
-        if applied.restarted {
+            applied.restarted || locale_changed
+        };
+        if rescan_agents {
             self.start_agents_scan(false);
         }
 
@@ -781,43 +795,57 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             UserEvent::AgentsScanned(generation, listen_port, items) => {
-                if generation != self.agents_generation {
-                    return;
-                }
+                let current_generation = self.agents_generation;
                 if let Some(view) = self.view.as_mut() {
-                    view.agents.loading = false;
-                    view.agents.busy_id = None;
-                    view.agents.listen_port = listen_port;
-                    view.agents.items = items;
+                    if !apply_agents_scanned(
+                        &mut view.agents,
+                        current_generation,
+                        generation,
+                        listen_port,
+                        items,
+                    ) {
+                        return;
+                    }
+                } else if generation != current_generation {
+                    return;
                 }
                 if let Some(w) = &self.settings_window {
                     w.request_redraw();
                 }
             }
             UserEvent::AgentPreviewReady(generation, id, result) => {
-                if generation != self.agents_generation {
-                    return;
-                }
+                let current_generation = self.agents_generation;
                 if let Some(view) = self.view.as_mut() {
-                    view.agents.previews.insert(id, result);
+                    if !apply_agent_preview_ready(
+                        &mut view.agents,
+                        current_generation,
+                        generation,
+                        id,
+                        result,
+                    ) {
+                        return;
+                    }
+                } else if generation != current_generation {
+                    return;
                 }
                 if let Some(w) = &self.settings_window {
                     w.request_redraw();
                 }
             }
             UserEvent::AgentActionDone(generation, id, _kind, result) => {
-                if generation != self.agents_generation {
-                    return;
-                }
+                let current_generation = self.agents_generation;
                 if let Some(view) = self.view.as_mut() {
-                    view.agents.busy_id = None;
-                    view.agents.messages.insert(
+                    if !apply_agent_action_done(
+                        &mut view.agents,
+                        current_generation,
+                        generation,
                         id,
-                        match result {
-                            Ok(m) => crate::settings::state::Message::Ok(m),
-                            Err(m) => crate::settings::state::Message::Err(m),
-                        },
-                    );
+                        result,
+                    ) {
+                        return;
+                    }
+                } else if generation != current_generation {
+                    return;
                 }
                 self.start_agents_scan(false);
                 if let Some(w) = &self.settings_window {
@@ -1097,5 +1125,205 @@ fn run_agent_mutation(
                     .into())
             }
         }
+    }
+}
+
+fn prepare_agents_scan(
+    agents: &mut crate::settings::agents::AgentsView,
+    agents_generation: &mut u64,
+    listen_port: Option<u16>,
+    install_enabled: bool,
+) -> u64 {
+    *agents_generation = agents_generation.wrapping_add(1);
+    agents.loading = true;
+    agents.listen_port = listen_port;
+    agents.install_enabled = install_enabled;
+    agents.previews.clear();
+    agents.expanded_preview = None;
+    *agents_generation
+}
+
+fn apply_agents_on_save(
+    agents: &mut crate::settings::agents::AgentsView,
+    saved_ok: bool,
+    locale_changed: bool,
+    restarted: bool,
+    listen_port: Option<u16>,
+) -> bool {
+    agents.listen_port = listen_port;
+    if saved_ok {
+        agents.clear_localized_feedback();
+    }
+    restarted || locale_changed
+}
+
+fn apply_agents_scanned(
+    agents: &mut crate::settings::agents::AgentsView,
+    current_generation: u64,
+    event_generation: u64,
+    listen_port: Option<u16>,
+    items: Vec<gateterm_server::agent::AgentStatus>,
+) -> bool {
+    if event_generation != current_generation {
+        return false;
+    }
+    agents.loading = false;
+    agents.busy_id = None;
+    agents.listen_port = listen_port;
+    agents.items = items;
+    true
+}
+
+fn apply_agent_preview_ready(
+    agents: &mut crate::settings::agents::AgentsView,
+    current_generation: u64,
+    event_generation: u64,
+    id: String,
+    result: Result<gateterm_server::agent::ops::AgentPlanSummary, String>,
+) -> bool {
+    if event_generation != current_generation {
+        return false;
+    }
+    agents.previews.insert(id, result);
+    true
+}
+
+fn apply_agent_action_done(
+    agents: &mut crate::settings::agents::AgentsView,
+    current_generation: u64,
+    event_generation: u64,
+    id: String,
+    result: Result<String, String>,
+) -> bool {
+    if event_generation != current_generation {
+        return false;
+    }
+    agents.busy_id = None;
+    agents.messages.insert(
+        id,
+        match result {
+            Ok(m) => crate::settings::state::Message::Ok(m),
+            Err(m) => crate::settings::state::Message::Err(m),
+        },
+    );
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::{agents::AgentsView, state::Message};
+
+    #[test]
+    fn locale_change_clears_stale_agent_feedback_and_discards_old_generation_events() {
+        let mut generation = 1u64;
+        let mut agents = AgentsView {
+            listen_port: Some(7683),
+            install_enabled: true,
+            busy_id: Some("codex".into()),
+            expanded_preview: Some("pi".into()),
+            ..Default::default()
+        };
+        agents
+            .messages
+            .insert("codex".into(), Message::Err("已安装，但有中文提示".into()));
+        agents
+            .previews
+            .insert("pi".into(), Err("未知的 Agent：pi".into()));
+
+        let rescan = apply_agents_on_save(&mut agents, true, true, false, Some(7683));
+        assert!(rescan, "locale change must schedule a fresh scan");
+        assert!(agents.messages.is_empty());
+        assert!(agents.previews.is_empty());
+        assert_eq!(agents.expanded_preview, None);
+
+        let next_gen = prepare_agents_scan(&mut agents, &mut generation, Some(7683), true);
+        assert_eq!(next_gen, 2);
+        assert!(agents.loading);
+
+        // Stale old-locale events from generation 1 must be ignored after the switch.
+        assert!(!apply_agent_action_done(
+            &mut agents,
+            generation,
+            1,
+            "codex".into(),
+            Err("旧语言错误".into()),
+        ));
+        assert!(!apply_agent_preview_ready(
+            &mut agents,
+            generation,
+            1,
+            "pi".into(),
+            Err("旧语言预览失败".into()),
+        ));
+        assert!(agents.messages.is_empty());
+        assert!(agents.previews.is_empty());
+
+        // Matching generation 2 scan finishes cleanly and clears loading/busy_id.
+        assert!(apply_agents_scanned(
+            &mut agents,
+            generation,
+            next_gen,
+            Some(7683),
+            Vec::new(),
+        ));
+        assert!(!agents.loading);
+        assert_eq!(agents.busy_id, None);
+    }
+
+    #[test]
+    fn failed_save_without_restart_preserves_agent_state_and_generation() {
+        let generation = 5u64;
+        let mut agents = AgentsView {
+            listen_port: Some(7683),
+            install_enabled: true,
+            expanded_preview: Some("claude-code".into()),
+            ..Default::default()
+        };
+        agents
+            .messages
+            .insert("claude-code".into(), Message::Ok("Saved".into()));
+
+        let rescan = apply_agents_on_save(&mut agents, false, false, false, Some(7683));
+        assert!(!rescan);
+        assert_eq!(generation, 5);
+        assert_eq!(agents.expanded_preview.as_deref(), Some("claude-code"));
+        assert!(agents.messages.contains_key("claude-code"));
+    }
+
+    #[test]
+    fn same_locale_ok_save_clears_feedback_and_only_restarted_requests_rescan() {
+        let mut agents = AgentsView {
+            listen_port: Some(7683),
+            install_enabled: true,
+            expanded_preview: Some("claude-code".into()),
+            ..Default::default()
+        };
+        agents
+            .messages
+            .insert("claude-code".into(), Message::Ok("Installed".into()));
+        agents
+            .previews
+            .insert("claude-code".into(), Err("old preview error".into()));
+
+        assert!(!apply_agents_on_save(
+            &mut agents,
+            true,
+            false,
+            false,
+            Some(7683)
+        ));
+        assert!(agents.messages.is_empty());
+        assert!(agents.previews.is_empty());
+        assert_eq!(agents.expanded_preview, None);
+
+        assert!(apply_agents_on_save(
+            &mut agents,
+            true,
+            false,
+            true,
+            Some(9000)
+        ));
+        assert_eq!(agents.listen_port, Some(9000));
     }
 }

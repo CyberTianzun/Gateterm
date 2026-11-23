@@ -53,6 +53,12 @@ impl AgentsView {
             )
         })
     }
+
+    pub fn clear_localized_feedback(&mut self) {
+        self.messages.clear();
+        self.previews.clear();
+        self.expanded_preview = None;
+    }
 }
 
 fn is_primary(item: &AgentStatus) -> bool {
@@ -559,5 +565,21 @@ mod tests {
             );
         }
         assert_eq!(activation_text("unknown-key", Locale::En), None);
+    }
+
+    #[test]
+    fn clear_localized_feedback_empties_messages_previews_and_expanded_preview() {
+        let mut view = AgentsView {
+            expanded_preview: Some("pi".into()),
+            ..Default::default()
+        };
+        view.messages.insert("codex".into(), Message::Err("未知的 Agent".into()));
+        view.previews.insert("pi".into(), Err("后台任务失败".into()));
+
+        view.clear_localized_feedback();
+
+        assert!(view.messages.is_empty());
+        assert!(view.previews.is_empty());
+        assert_eq!(view.expanded_preview, None);
     }
 }

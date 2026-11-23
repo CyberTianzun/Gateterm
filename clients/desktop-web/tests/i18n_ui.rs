@@ -341,3 +341,40 @@ fn agents_tab_warnings_fit_without_chinese_in_english() {
         );
     }
 }
+
+#[test]
+fn agents_tab_clearing_feedback_on_locale_switch_removes_prior_chinese_text() {
+    let ctx = egui::Context::default();
+    gateterm_desktop_web::fonts::install(&ctx);
+    let listen = "127.0.0.1:7683".parse().unwrap();
+    let mut agents = mock_agents_view();
+    agents.messages.insert(
+        "claude-code".into(),
+        Message::Err("读写配置失败：permission denied".into()),
+    );
+    agents
+        .previews
+        .insert("pi".into(), Err("未知的 Agent：pi".into()));
+    agents.expanded_preview = Some("pi".into());
+
+    let mut view = View {
+        tab: SettingsTab::Agents,
+        form: Form::from_current(listen, false),
+        web_addr: WebAddrPicker::new(Some(listen)),
+        window_size: "smallest".into(),
+        launchers: vec![],
+        banner: None,
+        message: None,
+        agents,
+        cloud: CloudForm::default(),
+        cloud_status: CloudStatus::LoggedOut,
+        cloud_busy: false,
+        cloud_message: None,
+    };
+
+    let _zh_texts = render_view(&ctx, &mut view, Locale::ZhCn, 1800.0);
+    view.agents.clear_localized_feedback();
+    let en_texts = render_view(&ctx, &mut view, Locale::En, 1800.0);
+    assert!(!en_texts.iter().any(|t| t.contains("permission denied")));
+    assert!(!en_texts.iter().any(|t| t.contains("未知")));
+}
