@@ -122,9 +122,16 @@ fn unix_from_rfc3339(s: &str) -> Option<u64> {
     u64::try_from(days * 86_400 + hh * 3600 + mm * 60 + ss).ok()
 }
 
-/// 校验会话 id 不会跳出 brain 目录。
+/// 校验会话 id 是单个普通路径段,不会跳出 brain 目录。
 pub(crate) fn is_valid_session_id(session_id: &str) -> bool {
-    !session_id.is_empty() && !session_id.contains(['/', '\\']) && !session_id.contains("..")
+    if session_id.is_empty()
+        || session_id.contains(['/', '\\', ':'])
+        || session_id.contains("..")
+    {
+        return false;
+    }
+    let mut comps = std::path::Path::new(session_id).components();
+    matches!(comps.next(), Some(std::path::Component::Normal(_))) && comps.next().is_none()
 }
 
 /// 由会话 id 找到记录文件。hook 事件里通常直接带着 `transcriptPath`,这里是它缺席时的退路。

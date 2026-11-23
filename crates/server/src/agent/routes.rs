@@ -611,7 +611,7 @@ fn is_transient_read_error(e: &std::io::Error) -> bool {
         std::io::ErrorKind::NotFound
             | std::io::ErrorKind::PermissionDenied
             | std::io::ErrorKind::Interrupted
-    ) || e.raw_os_error() == Some(32)
+    ) || (cfg!(windows) && e.raw_os_error() == Some(32))
 }
 
 fn read_with_retry<F>(mut op: F) -> std::io::Result<crate::agent::transcript::Window>
@@ -793,25 +793,63 @@ mod tests {
     fn read_with_retry_handles_transient_and_permanent_errors() {
         use std::io::ErrorKind;
 
+        let empty_window = || crate::agent::transcript::Window {
+            messages: Vec::new(),
+            cursor: "0.0".into(),
+            reset: false,
+            more: false,
+            older_cursor: None,
+        };
+
         let mut attempts = 0usize;
         let ok = read_with_retry(|| {
             attempts += 1;
-            if attempts == 1 {
-                Err(std::io::Error::from_raw_os_error(32))
-            } else if attempts == 2 {
-                Err(std::io::Error::new(ErrorKind::PermissionDenied, "locked"))
-            } else {
-                Ok(crate::agent::transcript::Window {
-                    messages: Vec::new(),
-                    cursor: "0.0".into(),
-                    reset: false,
-                    more: false,
-                    older_cursor: None,
-                })
+            match attempts {
+                1 => Err(std::io::Error::new(ErrorKind::NotFound, "not flushed yet")),
+                2 => Err(std::io::Error::new(ErrorKind::PermissionDenied, "locked")),
+                _ => Ok(empty_window()),
             }
         });
         assert!(ok.is_ok());
         assert_eq!(attempts, 3);
+
+        let mut intr_attempts = 0usize;
+        let intr_ok = read_with_retry(|| {
+            intr_attempts += 1;
+            if intr_attempts == 1 {
+                Err(std::io::Error::new(ErrorKind::Interrupted, "eintr"))
+            } else {
+                Ok(empty_window())
+            }
+        });
+        assert!(intr_ok.is_ok());
+        assert_eq!(intr_attempts, 2);
+
+        #[cfg(windows)]
+        {
+            let mut win_attempts = 0usize;
+            let win_ok = read_with_retry(|| {
+                win_attempts += 1;
+                if win_attempts == 1 {
+                    Err(std::io::Error::from_raw_os_error(32))
+                } else {
+                    Ok(empty_window())
+                }
+            });
+            assert!(win_ok.is_ok());
+            assert_eq!(win_attempts, 2);
+        }
+
+        #[cfg(unix)]
+        {
+            let mut unix_attempts = 0usize;
+            let unix_epipe = read_with_retry(|| {
+                unix_attempts += 1;
+                Err(std::io::Error::from_raw_os_error(32))
+            });
+            assert_eq!(unix_epipe.unwrap_err().raw_os_error(), Some(32));
+            assert_eq!(unix_attempts, 1);
+        }
 
         let mut perm_attempts = 0usize;
         let perm = read_with_retry(|| {

@@ -332,8 +332,13 @@ fn locate_by_conversation_id() {
     let logs = home.path().join(".gemini/antigravity-cli/brain/c-1/.system_generated/logs");
     fs::create_dir_all(&logs).unwrap();
     fs::write(logs.join("transcript_full.jsonl"), "").unwrap();
+    let brain_logs = home.path().join(".gemini/antigravity-cli/brain/.system_generated/logs");
+    fs::create_dir_all(&brain_logs).unwrap();
+    fs::write(brain_logs.join("transcript_full.jsonl"), "").unwrap();
     assert_eq!(locate(home.path(), "c-1"), Some(logs.join("transcript_full.jsonl")));
-    assert_eq!(locate(home.path(), "../c-1"), None);
+    for bad in ["", ".", "..", "../c-1", "C:", "D:foo", "c-1/sub", "c-1\\sub"] {
+        assert_eq!(locate(home.path(), bad), None, "expected None for {bad:?}");
+    }
 }
 
 #[tokio::test]
@@ -462,7 +467,12 @@ fn pending_transcript_and_full_sibling_upgrade() {
 
     assert!(a.is_pending_transcript(e.home.path(), "c-fresh", &missing_log));
     assert!(!a.is_pending_transcript(e.home.path(), "c-missing", &missing_log));
-    assert!(!a.is_pending_transcript(e.home.path(), "../escape", &missing_log));
+    for bad in ["", ".", "..", "../escape", "C:", "D:foo"] {
+        assert!(
+            !a.is_pending_transcript(e.home.path(), bad, &missing_log),
+            "expected is_pending_transcript=false for {bad:?}"
+        );
+    }
 
     let only_dir = e.home.path().join("only");
     fs::create_dir_all(&only_dir).unwrap();
