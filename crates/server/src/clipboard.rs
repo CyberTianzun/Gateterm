@@ -40,15 +40,22 @@ pub(crate) struct Candidate {
     pub since_input: Option<Duration>,
 }
 
+/// 判断进程名是否为 Windows ConPTY 控制台宿主(`conhost.exe` / `OpenConsole.exe`)。
+pub(crate) fn is_conhost_exe(name: &str) -> bool {
+    name.eq_ignore_ascii_case("conhost.exe") || name.eq_ignore_ascii_case("OpenConsole.exe")
+}
+
 /// 判断一次系统剪贴板写入属于哪个会话。
 ///
 /// - `ancestors(pid)`:进程存在时返回 `[pid, 父, 祖父, …]`,不存在返回 `None`;
+/// - `is_conhost(pid)`:判断进程是否为 ConPTY 控制台宿主(`conhost.exe` / `OpenConsole.exe`);
 /// - `local_idle`:服务端电脑本机键鼠空闲了多久(拿不到为 `None`)。
 pub(crate) fn attribute(
     owner_pid: Option<u32>,
     self_pid: u32,
     sessions: &[Candidate],
     ancestors: impl Fn(u32) -> Option<Vec<u32>>,
+    is_conhost: impl Fn(u32) -> bool,
     local_idle: Option<Duration>,
 ) -> Attribution {
     if let Some(pid) = owner_pid {
@@ -56,15 +63,19 @@ pub(crate) fn attribute(
             return Attribution::Drop("written by gateterm itself");
         }
         if let Some(chain) = ancestors(pid) {
-            return match sessions
+            if let Some(s) = sessions
                 .iter()
                 .find(|s| s.root_pid.is_some_and(|root| chain.contains(&root)))
             {
-                Some(s) => Attribution::Session(s.id),
-                None => Attribution::Drop("owner process is outside every session"),
-            };
+                return Attribution::Session(s.id);
+            }
+            if !(chain.len() >= 2 && chain[1] == self_pid && is_conhost(pid)) {
+                return Attribution::Drop("owner process is outside every session");
+            }
+            // ConPTY (conhost.exe / OpenConsole.exe) 作为 gateterm 的直接子进程存在,
+            // 不在某个 session.root_pid 子进程树下;退回到按输入时间判断。
         }
-        // owner 进程已经退出:退回到按输入时间判断
+        // owner 进程已经退出(或为本服务的 ConPTY 宿主):退回到按输入时间判断
     }
     let Some((id, since)) = sessions
         .iter()
@@ -224,6 +235,23 @@ mod win {
         }
     }
 
+    #[derive(Debug, PartialEq, Eq)]
+    enum ReadOutcome {
+        Ok(String),
+        Empty,
+        NoTextFormat,
+        Busy,
+    }
+
+    impl ReadOutcome {
+        fn should_advance_seq(&self) -> bool {
+            !matches!(self, Self::Busy)
+        }
+    }
+
+    const OPEN_CLIPBOARD_RETRIES: usize = 20;
+    const OPEN_CLIPBOARD_RETRY_DELAY: Duration = Duration::from_millis(15);
+
     fn route_loop(manager: Arc<SessionManager>, rx: mpsc::Receiver<Change>) {
         let mut last_seq = 0u32;
         let mut system = System::new();
@@ -232,9 +260,9 @@ mod win {
             if change.seq == last_seq {
                 continue;
             }
-            last_seq = change.seq;
             let sessions = candidates(&manager);
             if sessions.is_empty() {
+                last_seq = change.seq;
                 continue;
             }
             let list: Vec<_> = sessions.iter().map(|(c, _)| c.clone()).collect();
@@ -261,16 +289,44 @@ mod win {
                 }
                 Some(chain)
             };
-            let verdict = attribute(change.owner_pid, self_pid, &list, ancestors, local_idle());
+            let is_conhost = |pid: u32| -> bool {
+                system
+                    .process(Pid::from_u32(pid))
+                    .is_some_and(|p| super::is_conhost_exe(&p.name().to_string_lossy()))
+            };
+            let verdict = attribute(
+                change.owner_pid,
+                self_pid,
+                &list,
+                ancestors,
+                is_conhost,
+                local_idle(),
+            );
             let Attribution::Session(id) = verdict else {
+                last_seq = change.seq;
                 if let Attribution::Drop(why) = verdict {
                     tracing::debug!(owner = ?change.owner_pid, why, "host clipboard change ignored");
                 }
                 continue;
             };
-            let Some(text) = read_text() else { continue };
-            if let Some((_, session)) = sessions.iter().find(|(c, _)| c.id == id) {
-                session.deliver_clipboard(text);
+            let outcome = read_text();
+            if outcome.should_advance_seq() {
+                last_seq = change.seq;
+            }
+            match outcome {
+                ReadOutcome::Ok(text) => {
+                    if let Some((_, session)) = sessions.iter().find(|(c, _)| c.id == id) {
+                        session.deliver_clipboard(text);
+                    }
+                }
+                other => {
+                    tracing::debug!(
+                        seq = change.seq,
+                        owner = ?change.owner_pid,
+                        outcome = ?other,
+                        "host clipboard read skipped"
+                    );
+                }
             }
         }
     }
@@ -291,44 +347,63 @@ mod win {
         }
     }
 
-    fn read_text() -> Option<String> {
+    fn read_text() -> ReadOutcome {
         unsafe {
             if IsClipboardFormatAvailable(CF_UNICODETEXT as u32) == 0 {
-                return None;
+                return ReadOutcome::NoTextFormat;
             }
-            // 刚写完的程序可能还没放手,重试几次
+            // 刚写完的程序可能还没放手,重试几次(最多 20 × 15ms = 300ms)
             let mut opened = false;
-            for _ in 0..10 {
+            for attempt in 0..OPEN_CLIPBOARD_RETRIES {
                 if OpenClipboard(std::ptr::null_mut()) != 0 {
                     opened = true;
                     break;
                 }
-                std::thread::sleep(Duration::from_millis(10));
+                if attempt + 1 < OPEN_CLIPBOARD_RETRIES {
+                    std::thread::sleep(OPEN_CLIPBOARD_RETRY_DELAY);
+                }
             }
             if !opened {
-                return None;
+                return ReadOutcome::Busy;
             }
-            let text = (|| {
+            let outcome = (|| {
                 let handle = GetClipboardData(CF_UNICODETEXT as u32);
                 if handle.is_null() {
-                    return None;
+                    return ReadOutcome::NoTextFormat;
                 }
                 let size = GlobalSize(handle);
                 if size == 0 || size > MAX_TEXT_BYTES {
-                    return None;
+                    return ReadOutcome::Empty;
                 }
                 let ptr = GlobalLock(handle) as *const u16;
                 if ptr.is_null() {
-                    return None;
+                    return ReadOutcome::Empty;
                 }
                 let units = std::slice::from_raw_parts(ptr, size / 2);
                 let len = units.iter().position(|&u| u == 0).unwrap_or(units.len());
                 let s = String::from_utf16_lossy(&units[..len]);
                 GlobalUnlock(handle);
-                Some(s)
+                if s.is_empty() {
+                    ReadOutcome::Empty
+                } else {
+                    ReadOutcome::Ok(s)
+                }
             })();
             CloseClipboard();
-            text.filter(|s| !s.is_empty())
+            outcome
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn read_outcome_only_skips_last_seq_update_when_busy() {
+            assert!(!ReadOutcome::Busy.should_advance_seq());
+            assert!(ReadOutcome::Empty.should_advance_seq());
+            assert!(ReadOutcome::NoTextFormat.should_advance_seq());
+            assert!(ReadOutcome::Ok("text".into()).should_advance_seq());
         }
     }
 }
@@ -355,37 +430,101 @@ mod tests {
         }
     }
 
+    fn no_conhost(_: u32) -> bool {
+        false
+    }
+
     #[test]
     fn owner_inside_a_session_tree_goes_to_that_session_regardless_of_timing() {
         let sessions = [cand(1, 100, None), cand(2, 200, Some(10))];
-        assert_eq!(attribute(Some(102), 7, &sessions, tree, None), Attribution::Session(1));
-        assert_eq!(attribute(Some(201), 7, &sessions, tree, Some(Duration::ZERO)), Attribution::Session(2));
+        assert_eq!(attribute(Some(102), 7, &sessions, tree, no_conhost, None), Attribution::Session(1));
+        assert_eq!(attribute(Some(201), 7, &sessions, tree, no_conhost, Some(Duration::ZERO)), Attribution::Session(2));
     }
 
     #[test]
     fn owner_outside_every_session_is_never_forwarded() {
         let sessions = [cand(1, 100, Some(5))];
-        assert!(matches!(attribute(Some(900), 7, &sessions, tree, None), Attribution::Drop(_)));
-        assert!(matches!(attribute(Some(7), 7, &sessions, tree, None), Attribution::Drop(_)));
+        assert!(matches!(attribute(Some(900), 7, &sessions, tree, no_conhost, None), Attribution::Drop(_)));
+        assert!(matches!(attribute(Some(7), 7, &sessions, tree, no_conhost, None), Attribution::Drop(_)));
     }
 
     #[test]
     fn null_owner_goes_to_the_most_recent_remote_input_within_the_window() {
         let sessions = [cand(1, 100, Some(1500)), cand(2, 200, Some(300))];
-        assert_eq!(attribute(None, 7, &sessions, tree, None), Attribution::Session(2));
+        assert_eq!(attribute(None, 7, &sessions, tree, no_conhost, None), Attribution::Session(2));
         // 退出的 owner 进程同样按时间判断
-        assert_eq!(attribute(Some(555), 7, &sessions, tree, Some(Duration::from_secs(60))), Attribution::Session(2));
+        assert_eq!(attribute(Some(555), 7, &sessions, tree, no_conhost, Some(Duration::from_secs(60))), Attribution::Session(2));
     }
 
     #[test]
     fn null_owner_is_dropped_when_input_is_stale_or_local_user_is_more_recent() {
         let stale = [cand(1, 100, Some(5000))];
-        assert!(matches!(attribute(None, 7, &stale, tree, None), Attribution::Drop(_)));
+        assert!(matches!(attribute(None, 7, &stale, tree, no_conhost, None), Attribution::Drop(_)));
         let fresh = [cand(1, 100, Some(800))];
         assert!(matches!(
-            attribute(None, 7, &fresh, tree, Some(Duration::from_millis(100))),
+            attribute(None, 7, &fresh, tree, no_conhost, Some(Duration::from_millis(100))),
             Attribution::Drop(_)
         ));
-        assert!(matches!(attribute(None, 7, &[cand(1, 100, None)], tree, None), Attribution::Drop(_)));
+        assert!(matches!(attribute(None, 7, &[cand(1, 100, None)], tree, no_conhost, None), Attribution::Drop(_)));
+    }
+
+    #[test]
+    fn conhost_child_of_self_falls_back_to_input_window_while_external_process_stays_dropped() {
+        // 进程树: 50 是 self(7) 直接拉起的 conhost.exe / OpenConsole.exe;
+        // 51 是 self(7) 的非 conhost 子进程; 60 是外部终端的 conhost.exe; 900 是外部普通进程。
+        fn conhost_tree(pid: u32) -> Option<Vec<u32>> {
+            match pid {
+                50 => Some(vec![50, 7, 1]),
+                51 => Some(vec![51, 7, 1]),
+                60 => Some(vec![60, 999, 1]),
+                900 => Some(vec![900, 1]),
+                _ => None,
+            }
+        }
+        fn is_conhost(pid: u32) -> bool {
+            matches!(pid, 50 | 60)
+        }
+
+        let sessions = [cand(1, 100, Some(1500)), cand(2, 200, Some(300))];
+        // conhost 直接子进程 + local_idle > since_input -> 走 NULL_OWNER_WINDOW 路由到最近会话
+        assert_eq!(
+            attribute(Some(50), 7, &sessions, conhost_tree, is_conhost, Some(Duration::from_secs(60))),
+            Attribution::Session(2)
+        );
+        // 本机键鼠比远端输入更新 -> 丢弃
+        assert!(matches!(
+            attribute(Some(50), 7, &sessions, conhost_tree, is_conhost, Some(Duration::from_millis(100))),
+            Attribution::Drop(_)
+        ));
+        // 远端输入已超过 NULL_OWNER_WINDOW -> 丢弃
+        let stale = [cand(1, 100, Some(5000))];
+        assert!(matches!(
+            attribute(Some(50), 7, &stale, conhost_tree, is_conhost, None),
+            Attribution::Drop(_)
+        ));
+        // 外部进程 / 外部 conhost / 非 conhost 子进程一律严格丢弃
+        assert_eq!(
+            attribute(Some(900), 7, &sessions, conhost_tree, is_conhost, None),
+            Attribution::Drop("owner process is outside every session")
+        );
+        assert_eq!(
+            attribute(Some(60), 7, &sessions, conhost_tree, is_conhost, None),
+            Attribution::Drop("owner process is outside every session")
+        );
+        assert_eq!(
+            attribute(Some(51), 7, &sessions, conhost_tree, is_conhost, None),
+            Attribution::Drop("owner process is outside every session")
+        );
+    }
+
+    #[test]
+    fn is_conhost_exe_matches_console_hosts_case_insensitively() {
+        assert!(is_conhost_exe("conhost.exe"));
+        assert!(is_conhost_exe("CONHOST.EXE"));
+        assert!(is_conhost_exe("OpenConsole.exe"));
+        assert!(is_conhost_exe("openconsole.exe"));
+        assert!(!is_conhost_exe("notepad.exe"));
+        assert!(!is_conhost_exe("RustDesk.exe"));
+        assert!(!is_conhost_exe(""));
     }
 }
