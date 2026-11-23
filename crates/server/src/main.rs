@@ -1,3 +1,5 @@
+use std::io::IsTerminal;
+
 use clap::Parser;
 use gateterm_server::app::{serve, AppState};
 use gateterm_server::config::{Config, WindowSize};
@@ -24,6 +26,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: gateterm_server::cloud::cli::CloudCmd,
     },
+    /// 管理本机 AI Agent 的 Gateterm hook 集成
+    Agents {
+        #[command(subcommand)]
+        cmd: gateterm_server::agent::cli::AgentsCmd,
+    },
 }
 
 #[derive(Parser)]
@@ -49,28 +56,31 @@ struct Args {
     /// 自定义 Web 页面标题前缀(非空时网页标题显示为 `<标题> - gateterm`)
     #[arg(long)]
     web_title: Option<String>,
+    /// 禁用启动时的交互式 Agent 集成安装/更新提示
+    #[arg(long)]
+    no_agent_prompt: bool,
 }
 
 fn main() -> anyhow::Result<()> {
+    let mut args = Args::parse();
     // hook 子命令要在**一切之前**处理:它由 agent 在每个事件上同步调用,必须快、
     // 必须安静。初始化日志、读配置、起 runtime 对它都是纯负担,而任何一行多余的
     // stdout 输出都会被 agent 当成决策读走。
-    if let Some(Cmd::Hook { url }) = Args::parse().cmd {
-        std::process::exit(gateterm_server::agent::hook_cli::run(&url));
+    match args.cmd.take() {
+        Some(Cmd::Hook { url }) => std::process::exit(gateterm_server::agent::hook_cli::run(&url)),
+        Some(Cmd::PurgeHooks) => std::process::exit(purge_hooks()),
+        // `cloud` 子命令自己管理 tokio runtime(见 `cloud::cli::run`),不能跑在
+        // `#[tokio::main]` 已经起好的 runtime 里面 —— 嵌套 block_on 会 panic。所以
+        // main 本身不再是 async,真正 serve 的部分挪到下面手动起的 runtime 里。
+        Some(Cmd::Cloud { cmd }) => std::process::exit(gateterm_server::cloud::cli::run(cmd, args.config)),
+        Some(Cmd::Agents { cmd }) => {
+            std::process::exit(gateterm_server::agent::cli::run(cmd, args.config, args.port))
+        }
+        None => tokio::runtime::Runtime::new()?.block_on(run_server(args)),
     }
-    if let Some(Cmd::PurgeHooks) = Args::parse().cmd {
-        std::process::exit(purge_hooks());
-    }
-    // `cloud` 子命令自己管理 tokio runtime(见 `cloud::cli::run`),不能跑在
-    // `#[tokio::main]` 已经起好的 runtime 里面 —— 嵌套 block_on 会 panic。所以
-    // main 本身不再是 async,真正 serve 的部分挪到下面手动起的 runtime 里。
-    if let Some(Cmd::Cloud { cmd }) = Args::parse().cmd {
-        std::process::exit(gateterm_server::cloud::cli::run(cmd, Args::parse().config));
-    }
-    tokio::runtime::Runtime::new()?.block_on(run_server())
 }
 
-async fn run_server() -> anyhow::Result<()> {
+async fn run_server(args: Args) -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -78,7 +88,6 @@ async fn run_server() -> anyhow::Result<()> {
         )
         .with_writer(std::io::stderr)
         .init();
-    let args = Args::parse();
     let config = Config::load(args.config)?;
     // 无头服务端的默认是只回环;desktop 有它自己的默认(见 config::desktop_default_listen)
     let base = config.listen.unwrap_or_else(gateterm_server::config::default_listen);
@@ -109,15 +118,47 @@ async fn run_server() -> anyhow::Result<()> {
         eprintln!("    (token 为本次启动随机生成;用 --token 或配置文件可固定)");
     }
     let listen_port = listen.port();
-    // 端口一变,已装的 hook 就打不通了,而 agent 对此毫无症状 —— 只能在这里喊一声。
-    for w in tokio::task::spawn_blocking(move || {
-        let env = gateterm_server::agent::detect::DetectEnv::current();
-        gateterm_server::agent::startup_warnings(&env, listen_port)
-    })
+    let no_prompt_env = std::env::var("GATETERM_NO_AGENT_PROMPT").ok();
+    let prompt_on_startup = gateterm_server::agent::cli::should_prompt_on_startup(
+        args.no_agent_prompt,
+        no_prompt_env.as_deref(),
+        config.agents.install_enabled,
+        std::io::stdin().is_terminal(),
+        std::io::stderr().is_terminal(),
+    );
+    if prompt_on_startup {
+        let _ = tokio::task::spawn_blocking(move || {
+            let env = gateterm_server::agent::detect::DetectEnv::current();
+            let Some(backup_dir) = gateterm_server::agent::apply::default_backup_dir() else {
+                for w in gateterm_server::agent::startup_warnings(&env, listen_port) {
+                    eprintln!("warning: {w}");
+                }
+                return;
+            };
+            let stdin = std::io::stdin();
+            let stderr = std::io::stderr();
+            let mut reader = stdin.lock();
+            let mut writer = stderr.lock();
+            gateterm_server::agent::cli::run_startup_onboarding(
+                &env,
+                listen_port,
+                &backup_dir,
+                &mut reader,
+                &mut writer,
+            );
+        })
+        .await;
+    } else {
+        // 端口一变,已装的 hook 就打不通了,而 agent 对此毫无症状 —— 只能在这里喊一声。
+        for w in tokio::task::spawn_blocking(move || {
+            let env = gateterm_server::agent::detect::DetectEnv::current();
+            gateterm_server::agent::startup_warnings(&env, listen_port)
+        })
         .await
         .unwrap_or_default()
-    {
-        eprintln!("warning: {w}");
+        {
+            eprintln!("warning: {w}");
+        }
     }
     let agents = config.agents;
     let agent_sessions = std::sync::Arc::new(gateterm_server::agent::store::AgentSessionStore::new());
@@ -146,21 +187,15 @@ async fn run_server() -> anyhow::Result<()> {
 
 /// `purge-hooks` 子命令。逐家清,一家失败不影响其他家(局部失败原则),有失败则退出码 1。
 fn purge_hooks() -> i32 {
-    use gateterm_server::agent::{self, apply, detect::DetectEnv, edit::InstallCtx};
-    let Some(backup_dir) = apply::default_backup_dir() else {
+    use gateterm_server::agent::{self, apply, detect::DetectEnv, ops};
+    if apply::default_backup_dir().is_none() {
         eprintln!("无法确定备份目录,放弃清空");
         return 1;
-    };
-    // 显式敲命令就是显式动作,不看 `install_enabled`(和 HTTP 的 purge 同理)
-    let opts = apply::ApplyOpts { enabled: true, backup_dir, backup_keep: 5 };
-    // 端口只影响新写入的 URL,清空不看它,随便给一个
-    let ctx = InstallCtx { home: DetectEnv::current_home(), port: 0, include_blocking: true };
+    }
+    let home = DetectEnv::current_home();
     let mut failed = false;
     for &a in agent::registry() {
-        let result = agent::plan_purge(a, &ctx)
-            .map_err(|e| e.to_string())
-            .and_then(|plan| apply::apply(&plan, &opts).map_err(|e| e.to_string()));
-        match result {
+        match ops::purge(a, &home) {
             Ok(outcomes) => {
                 for o in outcomes {
                     match (o.changed, o.backup) {

@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 pub mod adapters;
 pub mod apply;
+pub mod cli;
 pub mod detect;
 pub mod edit;
 pub mod history;
@@ -392,6 +393,7 @@ mod tests {
         for file in [
             "mod.rs",
             "ops.rs",
+            "cli.rs",
             "routes.rs",
             "store.rs",
             "edit.rs",
