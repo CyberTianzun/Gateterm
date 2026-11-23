@@ -25,27 +25,19 @@ import { writeClipboard } from "./clipboard";
 import { buildMcpPresets, deriveEndpoints, fetchMcpStatus } from "./mcp";
 import { PROTO_VERSION } from "./protocol";
 import { WEB_VERSION, fetchVersionStatus } from "./update";
-import {
-  type AgentStatus,
-  type InstallOutcome,
-  fetchAgentPlan,
-  fetchAgents,
-  purgeAgentHooks,
-  setAgentIntegration,
-  summarizePlan,
-} from "./agents";
+import { buildPairingTarget, buildQrSvgModel, createQrSvgElement } from "./pairing";
 
 export interface SettingsHost {
   get(): GateConfig;
   /** 应用并持久化。 */
   set(cfg: GateConfig): void;
-  /** 打 `/api/` 时用的 bearer。AI 集成页与关于页用它请求服务端接口。 */
+  /** 打 `/api/` 时用的 bearer。扫码连接页、MCP 页与关于页用它。 */
   token(): string;
   /** 握手拿到的服务端系统标识("windows" / "macos" / "linux" / "")。 */
   serverOs?: () => string;
 }
 
-type Tab = "theme" | "font" | "terminal" | "ui" | "io" | "agents" | "mcp" | "about";
+type Tab = "theme" | "font" | "terminal" | "ui" | "io" | "pairing" | "mcp" | "about";
 
 const el = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -177,7 +169,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     ["terminal", "settings.tab.terminal"],
     ["ui", "settings.tab.ui"],
     ["io", "settings.tab.io"],
-    ["agents", "settings.tab.agents"],
+    ["pairing", "settings.tab.pairing"],
     ["mcp", "settings.tab.mcp"],
     ["about", "settings.tab.about"],
   ];
@@ -186,7 +178,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
   const patch = (fn: (c: GateConfig) => GateConfig) => host.set(fn(host.get()));
 
   function renderTabs() {
-    tabsBar.innerHTML = "";
+    tabsBar.replaceChildren();
     for (const [id, key] of TABS) {
       const b = el("button", "set-tab" + (id === tab ? " active" : ""), t(key));
       b.addEventListener("click", () => {
@@ -532,139 +524,100 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     return wrap;
   }
 
-  /* ---------- AI 集成 ---------- */
+  /* ---------- 扫码连接 ---------- */
 
-  /**
-   * 这一页是整个设置里唯一会**改别人的文件**的地方,所以要把话说在前面:
-   * 上方常驻一句说明(会备份、可还原),每个 agent 下方显示检测依据与冲突。
-   *
-   * 列表是异步拉的,拉之前先铺一个空壳 —— 打开设置不该等网络。
-   */
-  function renderAgents(): HTMLElement {
-    const wrap = el("div", "set-pane");
-    const note = el("div", "set-hint", t("agent.writeNote"));
-    const list = el("div", "agent-list");
-    wrap.append(note, list);
-    const outcomes = new Map<string, string>();
+  function pairingNoticeText(reason: Exclude<ReturnType<typeof buildPairingTarget>, { ok: true }>): string {
+    switch (reason.reason) {
+      case "loopback":
+        return t("pairing.notice.loopback", { host: reason.host ?? window.location.hostname });
+      case "missing-token":
+        return t("pairing.notice.missingToken");
+      case "unsupported-scheme":
+        return t("pairing.notice.unsupportedScheme");
+      case "userinfo-not-allowed":
+        return t("pairing.notice.userinfo");
+      case "invalid-url":
+        return t("pairing.notice.invalidUrl");
+    }
+  }
 
-    const paint = (agents: AgentStatus[]) => {
-      list.innerHTML = "";
-      if (agents.length === 0) {
-        list.appendChild(el("div", "empty", t("agent.notFound")));
-        return;
-      }
-      for (const a of agents) {
-        const card = el("div", "agent-card");
-        const head = el("div", "agent-head");
-        head.append(el("span", "agent-name", a.name));
-        const badge =
-          a.integration === "installed" ? t("agent.installed")
-          : a.integration === "stale-port" ? t("agent.stalePort")
-          : a.integration === "outdated" ? t("agent.outdated")
-          : a.integration === "needs-activation" ? t("agent.needsActivation")
-          : t("agent.notInstalled");
-        head.append(el("span", "agent-badge", badge));
-        card.append(head);
-        card.append(el("div", "set-hint", a.detected.detail));
-        // 「装完还要做一步」和「冲突」是两回事,分开显示 —— 前者是流程,后者是风险
-        if (a.activation === "codex-hooks-review") {
-          card.append(el("div", "agent-activation", t("agent.activation.codex-hooks-review")));
-        } else if (a.activation === "pi-reload") {
-          card.append(el("div", "agent-activation", t("agent.activation.pi-reload")));
-        } else if (a.activation === "grok-reload") {
-          card.append(el("div", "agent-activation", t("agent.activation.grok-reload")));
-        } else if (a.activation === "antigravity-restart") {
-          card.append(el("div", "agent-activation", t("agent.activation.antigravity-restart")));
+  function renderPairing(): HTMLElement {
+    const wrap = el("div", "set-pane pairing-pane");
+    const target = buildPairingTarget(window.location.href, host.token());
+
+    if (!target.ok) {
+      const notice = el("div", "pairing-notice");
+      notice.setAttribute("role", "status");
+      notice.append(
+        el("div", "pairing-notice-title", t("pairing.notice.title")),
+        el("p", "pairing-notice-body", pairingNoticeText(target)),
+      );
+      wrap.append(notice);
+      return wrap;
+    }
+
+    const model = buildQrSvgModel(target.url);
+    const card = el("section", "pairing-card");
+    const layout = el("div", "pairing-layout");
+
+    if (model.ok) {
+      const qrBox = el("div", "pairing-qr-box");
+      qrBox.appendChild(createQrSvgElement(model, t("pairing.qrAlt")));
+      layout.appendChild(qrBox);
+    } else {
+      layout.appendChild(el("div", "pairing-qr-fallback", t("pairing.tooLong")));
+    }
+
+    const info = el("div", "pairing-info");
+    info.append(
+      el("div", "pairing-title", t("pairing.title")),
+      el("div", "pairing-desc", t("pairing.desc")),
+    );
+
+    const urlField = el("div", "pairing-field");
+    urlField.append(el("span", "pairing-field-label", t("pairing.addressLabel")));
+    const urlRow = el("div", "pairing-url-row");
+    const urlCode = el("code", "pairing-url", target.displayUrl);
+
+    const copyBtn = el("button", "pairing-copy-btn", t("pairing.copyLink"));
+    copyBtn.type = "button";
+    const copyError = el("div", "pairing-copy-error");
+    copyError.hidden = true;
+    copyError.setAttribute("role", "status");
+
+    let resetTimer: ReturnType<typeof setTimeout> | undefined;
+    copyBtn.addEventListener("click", () => {
+      void writeClipboard(target.url).then((ok) => {
+        if (!ok) {
+          copyError.textContent = t("pairing.copyFailed");
+          copyError.hidden = false;
+          return;
         }
-        for (const c of a.conflicts) card.append(el("div", "agent-conflict", c));
-        if (a.conflicts.length > 0) card.append(el("div", "set-hint", t("agent.conflictNote")));
+        copyError.hidden = true;
+        clearTimeout(resetTimer);
+        copyBtn.textContent = t("pairing.copied");
+        copyBtn.classList.add("is-copied");
+        resetTimer = setTimeout(() => {
+          copyBtn.textContent = t("pairing.copyLink");
+          copyBtn.classList.remove("is-copied");
+        }, 1600);
+      });
+    });
 
-        const installed = a.integration !== "not-installed";
-        const btn = el("button", "agent-act", installed ? t("agent.uninstall") : t("agent.install"));
-        const status = el("span", "agent-status", outcomes.get(a.id) ?? "");
-        status.setAttribute("role", "status");
+    urlRow.append(urlCode, copyBtn);
+    urlField.append(urlRow, copyError);
 
-        // 预演。和 install 走的是**同一份计划**,只是不落盘 —— 「先看后装」不是
-        // 另一条代码路径,而是同一条路径的干跑,所以看到的就是将要发生的。
-        const preview = el("div", "agent-preview");
-        preview.hidden = true;
-        const previewBtn = el("button", "agent-preview-btn", t("agent.preview"));
-        previewBtn.addEventListener("click", async () => {
-          if (!preview.hidden) {
-            preview.hidden = true;
-            previewBtn.textContent = t("agent.preview");
-            return;
-          }
-          previewBtn.disabled = true;
-          const plan = await fetchAgentPlan(host.token(), a.id);
-          previewBtn.disabled = false;
-          preview.innerHTML = "";
-          if (!plan) {
-            preview.append(el("div", "agent-status", t("agent.previewFailed")));
-          } else {
-            const edits = installed ? plan.uninstall : plan.install;
-            const label = installed ? t("agent.previewRemove") : t("agent.previewAdd");
-            if (!installed && !plan.include_blocking) {
-              preview.append(el("div", "agent-conflict", t("agent.previewTelemetryOnly")));
-            }
-            for (const g of summarizePlan(edits)) {
-              preview.append(el("div", "agent-path", g.path));
-              preview.append(el("div", "agent-events", `${label} ${g.events.join(", ")}`));
-            }
-          }
-          preview.hidden = false;
-          previewBtn.textContent = t("agent.previewHide");
-        });
-        const run = async (b: HTMLButtonElement, action: () => Promise<InstallOutcome | "unchanged">, purging = false) => {
-          b.disabled = true;
-          const outcome = await action();
-          b.disabled = false;
-          if (outcome === "ok" || outcome === "unchanged") {
-            if (purging) outcomes.set(a.id, t(outcome === "unchanged" ? "agent.purgeUnchanged" : "agent.purged"));
-            else outcomes.delete(a.id);
-            await refreshAgents();
-            return;
-          }
-          status.textContent =
-            purging ? t("agent.purgeFailed") : outcome === "disabled" ? t("agent.disabledHint") : t("agent.installFailed");
-        };
-        btn.addEventListener("click", () =>
-          run(btn, () => setAgentIntegration(host.token(), a.id, !installed)),
-        );
-        const acts = el("div", "agent-acts");
-        acts.append(btn);
-        // 装了但对不上当前服务(端口变了 / 版本变了):安装是幂等的,重装一次就对齐
-        if (a.integration === "stale-port" || a.integration === "outdated") {
-          const reinstall = el("button", "agent-act", t("agent.reinstall"));
-          reinstall.addEventListener("click", () =>
-            run(reinstall, () => setAgentIntegration(host.token(), a.id, true)),
-          );
-          acts.append(reinstall);
-        }
-        // 清空对「没装」也开放:残留恰恰常出现在 UI 认为没装的时候(只剩不再托管的事件)
-        const purge = el("button", "agent-preview-btn agent-purge", t("agent.purge"));
-        purge.title = t("agent.purgeHint");
-        // Keep confirmation inside the settings panel: browser confirm() may be
-        // suppressed by browser policy, and previously gave no visible feedback.
-        const confirmation = el("div", "agent-purge-confirm");
-        confirmation.hidden = true;
-        const confirmPurge = el("button", "agent-purge", t("agent.purgeApply"));
-        const cancelPurge = el("button", "", t("agent.purgeCancel"));
-        confirmation.append(el("p", "", t("agent.purgeConfirm", { name: a.name })), confirmPurge, cancelPurge);
-        confirmPurge.onclick = () => { confirmation.hidden = true; void run(purge, () => purgeAgentHooks(host.token(), a.id), true); };
-        cancelPurge.onclick = () => { confirmation.hidden = true; purge.focus(); };
-        purge.addEventListener("click", () => {
-          confirmation.hidden = !confirmation.hidden;
-          if (!confirmation.hidden) cancelPurge.focus();
-        });
-        acts.append(previewBtn, purge, status);
-        card.append(acts, confirmation, preview);
-        list.appendChild(card);
-      }
-    };
+    const steps = el("ol", "pairing-steps");
+    steps.append(
+      el("li", undefined, t("pairing.step1")),
+      el("li", undefined, t("pairing.step2")),
+    );
 
-    const refreshAgents = async () => paint(await fetchAgents(host.token()));
-    void refreshAgents();
+    const security = el("div", "pairing-security", t("pairing.securityHint"));
+    info.append(urlField, steps, security);
+    layout.appendChild(info);
+    card.appendChild(layout);
+    wrap.appendChild(card);
     return wrap;
   }
 
@@ -948,7 +901,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
       : tab === "terminal" ? renderTerminal()
       : tab === "ui" ? renderUi()
       : tab === "io" ? renderIo()
-      : tab === "agents" ? renderAgents()
+      : tab === "pairing" ? renderPairing()
       : tab === "mcp" ? renderMcp()
       : renderAbout();
     body.replaceChildren(pane);
