@@ -122,13 +122,24 @@ impl AgentAdapter for Antigravity {
     }
 
     fn agent_session_id(&self, body: &Value) -> Option<String> {
-        str_field(body, "conversationId")
+        str_field(body, "conversationId").or_else(|| str_field(body, "conversation_id"))
     }
 
     fn parse(&self, event: &str, body: &Value) -> Option<Update> {
         // Gemini CLI's session_id payload is a different protocol. A real agy
         // hook carries conversationId on every event; never invent "default".
-        self.agent_session_id(body)?;
+        let cid = self.agent_session_id(body)?;
+        // Subagent hooks carry parentConversationId or a mismatched rootConversationId;
+        // ignore them so they cannot supersede or retire the parent conversation.
+        if str_field(body, "parentConversationId")
+            .or_else(|| str_field(body, "parent_conversation_id"))
+            .is_some()
+            || str_field(body, "rootConversationId")
+                .or_else(|| str_field(body, "root_conversation_id"))
+                .is_some_and(|r| r != cid)
+        {
+            return None;
+        }
         let (state, detail) = match event {
             "SessionStart" | "Stop" => (AgentState::Idle, None),
             "PreInvocation" => (AgentState::Thinking, None),
@@ -138,12 +149,20 @@ impl AgentAdapter for Antigravity {
             ),
             _ => return None,
         };
+        let cwd = body
+            .pointer("/workspacePaths/0")
+            .or_else(|| body.pointer("/workspace_paths/0"))
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or_else(|| str_field(body, "cwd"));
         Some(Update {
             state: Some(state),
             detail,
-            cwd: body.pointer("/workspacePaths/0").and_then(Value::as_str).map(str::to_string),
+            cwd,
             title: None,
-            transcript: str_field(body, "transcriptPath"),
+            transcript: str_field(body, "transcriptPath")
+                .or_else(|| str_field(body, "transcript_path")),
         })
     }
 
@@ -157,6 +176,23 @@ impl AgentAdapter for Antigravity {
 
     fn locate_transcript(&self, home: &Path, agent_session_id: &str) -> Option<PathBuf> {
         transcript::locate(home, agent_session_id)
+    }
+
+    fn is_pending_transcript(&self, home: &Path, agent_session_id: &str, reported: &Path) -> bool {
+        transcript::is_valid_session_id(agent_session_id)
+            && !reported.is_file()
+            && cli_dir(home).join("brain").join(agent_session_id).is_dir()
+            && self.locate_transcript(home, agent_session_id).is_none()
+    }
+
+    fn preferred_transcript_path(&self, reported: &Path) -> Option<PathBuf> {
+        if reported.file_name().and_then(|s| s.to_str()) == Some("transcript.jsonl") {
+            let sibling = reported.with_file_name("transcript_full.jsonl");
+            if sibling.is_file() {
+                return Some(sibling);
+            }
+        }
+        None
     }
 
     fn telemetry_reply(&self) -> Option<Value> {

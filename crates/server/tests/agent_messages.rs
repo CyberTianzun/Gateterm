@@ -178,3 +178,104 @@ async fn reads_and_resumes() {
     assert!(v2["messages"].as_array().unwrap().is_empty(), "没有新内容却返回了消息");
     assert_eq!(v2["reset"], false);
 }
+
+#[tokio::test]
+async fn antigravity_compact_transcript_upgrades_to_full_sibling_and_caches_it() {
+    use std::fmt::Write as _;
+
+    let dir = tempfile::tempdir().unwrap();
+    let compact = dir.path().join("transcript.jsonl");
+    std::fs::write(
+        &compact,
+        "{\"step_index\":0,\"type\":\"USER_INPUT\",\"content\":\"compact only\"}\n",
+    )
+    .unwrap();
+
+    let mut full_body = String::new();
+    for i in 0..204 {
+        writeln!(
+            full_body,
+            "{{\"step_index\":{i},\"type\":\"USER_INPUT\",\"content\":\"msg {i}\"}}"
+        )
+        .unwrap();
+    }
+    writeln!(
+        full_body,
+        "{{\"step_index\":204,\"type\":\"PLANNER_RESPONSE\",\"thinking\":\"Full log thinking\",\"content\":\"Full answer\"}}"
+    )
+    .unwrap();
+    let full = dir.path().join("transcript_full.jsonl");
+    std::fs::write(&full, &full_body).unwrap();
+
+    let addr = server(true).await;
+    let client = reqwest::Client::new();
+    client
+        .post(format!("http://{addr}/hook/antigravity/session-start"))
+        .header("Authorization", format!("Bearer {}", hook_token()))
+        .header("X-Gateterm-Session", "1")
+        .json(&serde_json::json!({
+            "conversationId": "s1",
+            "transcriptPath": compact,
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let (status, v) = messages(addr, "antigravity", "tok").await;
+    assert_eq!(status, 200);
+    assert_eq!(v["source"], "transcript");
+    let msgs = v["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 200);
+    assert_eq!(msgs[199]["id"], "step-204");
+    assert_eq!(msgs[199]["blocks"][0]["kind"], "thinking");
+    assert_eq!(msgs[199]["blocks"][0]["text"], "Full log thinking");
+
+    let sessions: serde_json::Value = client
+        .get(format!("http://{addr}/api/agents/sessions"))
+        .bearer_auth("tok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        sessions["sessions"][0]["transcript"].as_str(),
+        Some(full.to_string_lossy().as_ref())
+    );
+
+    let older_cursor = v["older_cursor"].as_str().unwrap();
+    let older: serde_json::Value = client
+        .get(format!(
+            "http://{addr}/api/agents/messages?agent_id=antigravity&agent_session_id=s1&before={older_cursor}"
+        ))
+        .bearer_auth("tok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(older["source"], "transcript");
+    assert_eq!(older["reset"], false);
+    let older_msgs = older["messages"].as_array().unwrap();
+    assert_eq!(older_msgs.len(), 5);
+    assert_eq!(older_msgs[0]["id"], "step-0");
+    assert_eq!(older_msgs[0]["blocks"][0]["text"], "msg 0");
+
+    let cursor = v["cursor"].as_str().unwrap();
+    let after: serde_json::Value = client
+        .get(format!(
+            "http://{addr}/api/agents/messages?agent_id=antigravity&agent_session_id=s1&after={cursor}"
+        ))
+        .bearer_auth("tok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(after["source"], "transcript");
+    assert_eq!(after["reset"], false);
+    assert!(after["messages"].as_array().unwrap().is_empty());
+}

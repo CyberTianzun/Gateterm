@@ -335,3 +335,146 @@ fn locate_by_conversation_id() {
     assert_eq!(locate(home.path(), "c-1"), Some(logs.join("transcript_full.jsonl")));
     assert_eq!(locate(home.path(), "../c-1"), None);
 }
+
+#[tokio::test]
+async fn subagent_hooks_are_ignored_and_do_not_supersede_main_conversation() {
+    let a = find("antigravity").unwrap();
+    assert!(
+        a.parse(
+            "SessionStart",
+            &json!({"conversationId": "sub-1", "parentConversationId": "main-1"}),
+        )
+        .is_none()
+    );
+    assert!(
+        a.parse(
+            "SessionStart",
+            &json!({"conversation_id": "sub-1b", "parent_conversation_id": "main-1"}),
+        )
+        .is_none()
+    );
+    assert!(
+        a.parse(
+            "SessionStart",
+            &json!({"conversationId": "sub-2", "rootConversationId": "main-1"}),
+        )
+        .is_none()
+    );
+    assert!(
+        a.parse(
+            "PreInvocation",
+            &json!({"conversation_id": "sub-2b", "root_conversation_id": "main-1"}),
+        )
+        .is_none()
+    );
+    assert!(
+        a.parse(
+            "SessionStart",
+            &json!({"conversationId": "main-1", "rootConversationId": "main-1"}),
+        )
+        .is_some()
+    );
+
+    let e = env();
+    let transcript = e.home.path().join("main-transcript.jsonl");
+    fs::write(&transcript, FIXTURE).unwrap();
+    let addr = common::start_test_server_at("tok", 1 << 16, Default::default(), vec![]).await;
+    let client = reqwest::Client::new();
+
+    for (cid, extra) in [
+        ("main-1", json!({"transcriptPath": transcript, "workspacePaths": [e.home.path()]})),
+        ("sub-1", json!({"parentConversationId": "main-1", "workspacePaths": [e.home.path()]})),
+        ("sub-2", json!({"rootConversationId": "main-1", "workspacePaths": [e.home.path()]})),
+    ] {
+        let mut body = extra;
+        body["conversationId"] = json!(cid);
+        let r = client
+            .post(format!("http://{addr}/hook/antigravity/session-start"))
+            .header("Authorization", format!("Bearer {}", hook_token()))
+            .header("X-Gateterm-Session", "1")
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 200);
+        assert_eq!(r.text().await.unwrap(), "{}");
+    }
+
+    let snapshot: Value = client
+        .get(format!("http://{addr}/api/agents/sessions"))
+        .bearer_auth("tok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let sessions = snapshot["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0]["agent_session_id"], "main-1");
+
+    let chat: Value = client
+        .get(format!(
+            "http://{addr}/api/agents/messages?agent_id=antigravity&agent_session_id=main-1"
+        ))
+        .bearer_auth("tok")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(chat["source"], "transcript");
+    assert_eq!(chat["messages"].as_array().unwrap().len(), 5);
+}
+
+#[test]
+fn accepts_snake_case_antigravity_payload_fields() {
+    let a = find("antigravity").unwrap();
+    let body = json!({
+        "conversation_id": "c-snake",
+        "workspace_paths": ["/w/snake"],
+        "transcript_path": "/t/transcript_full.jsonl",
+        "toolCall": { "name": "view_file", "args": {} },
+    });
+    assert_eq!(a.agent_session_id(&body).as_deref(), Some("c-snake"));
+    let up = a.parse("PostToolUse", &body).unwrap();
+    assert_eq!(up.state, Some(AgentState::Working));
+    assert_eq!(up.detail.as_deref(), Some("view_file"));
+    assert_eq!(up.cwd.as_deref(), Some("/w/snake"));
+    assert_eq!(up.transcript.as_deref(), Some("/t/transcript_full.jsonl"));
+
+    let cwd_fallback = json!({
+        "conversation_id": "c-cwd",
+        "cwd": "/w/fallback",
+    });
+    let up2 = a.parse("SessionStart", &cwd_fallback).unwrap();
+    assert_eq!(up2.cwd.as_deref(), Some("/w/fallback"));
+}
+
+#[test]
+fn pending_transcript_and_full_sibling_upgrade() {
+    let e = env();
+    let a = find("antigravity").unwrap();
+    let fresh_brain = e.home.path().join(".gemini/antigravity-cli/brain/c-fresh");
+    fs::create_dir_all(&fresh_brain).unwrap();
+    let missing_log = fresh_brain.join(".system_generated/logs/transcript_full.jsonl");
+
+    assert!(a.is_pending_transcript(e.home.path(), "c-fresh", &missing_log));
+    assert!(!a.is_pending_transcript(e.home.path(), "c-missing", &missing_log));
+    assert!(!a.is_pending_transcript(e.home.path(), "../escape", &missing_log));
+
+    let only_dir = e.home.path().join("only");
+    fs::create_dir_all(&only_dir).unwrap();
+    let only_compact = only_dir.join("transcript.jsonl");
+    fs::write(&only_compact, "").unwrap();
+    assert_eq!(a.preferred_transcript_path(&only_compact), None);
+
+    let both_dir = e.home.path().join("both");
+    fs::create_dir_all(&both_dir).unwrap();
+    let compact = both_dir.join("transcript.jsonl");
+    let full = both_dir.join("transcript_full.jsonl");
+    fs::write(&compact, "").unwrap();
+    fs::write(&full, "").unwrap();
+    assert_eq!(a.preferred_transcript_path(&compact), Some(full));
+}

@@ -560,6 +560,88 @@ fn fell_back(reason: &str) -> Response {
     Json(serde_json::json!({ "source": "terminal", "reason": reason })).into_response()
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum TranscriptResolution {
+    UsePath { path: std::path::PathBuf, cache_update: bool },
+    Fallback(&'static str),
+}
+
+/// Resolve the readable transcript path for a session, upgrading compact logs to fuller
+/// siblings and distinguishing a freshly initialized session dir from an unreadable path.
+fn resolve_transcript_for_read(
+    adapter: &dyn crate::agent::AgentAdapter,
+    home: &std::path::Path,
+    agent_session_id: &str,
+    reported: Option<&str>,
+) -> TranscriptResolution {
+    let reported = reported.filter(|s| !s.is_empty());
+    if let Some(p) = reported {
+        let reported_path = std::path::Path::new(p);
+        if reported_path.is_file() {
+            if let Some(preferred) = adapter.preferred_transcript_path(reported_path) {
+                return TranscriptResolution::UsePath { path: preferred, cache_update: true };
+            }
+            return TranscriptResolution::UsePath {
+                path: reported_path.to_path_buf(),
+                cache_update: false,
+            };
+        }
+    }
+    if let Some(located) = adapter.locate_transcript(home, agent_session_id) {
+        return TranscriptResolution::UsePath { path: located, cache_update: true };
+    }
+    if let Some(p) = reported {
+        if adapter.is_pending_transcript(home, agent_session_id, std::path::Path::new(p)) {
+            return TranscriptResolution::Fallback("no-transcript-path");
+        }
+        return TranscriptResolution::UsePath {
+            path: std::path::PathBuf::from(p),
+            cache_update: false,
+        };
+    }
+    TranscriptResolution::Fallback("no-transcript-path")
+}
+
+const TRANSCRIPT_READ_RETRIES: usize = 2;
+const TRANSCRIPT_READ_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(25);
+
+fn is_transient_read_error(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::PermissionDenied
+            | std::io::ErrorKind::Interrupted
+    ) || e.raw_os_error() == Some(32)
+}
+
+fn read_with_retry<F>(mut op: F) -> std::io::Result<crate::agent::transcript::Window>
+where
+    F: FnMut() -> std::io::Result<crate::agent::transcript::Window>,
+{
+    for attempt in 0..=TRANSCRIPT_READ_RETRIES {
+        match op() {
+            Ok(window) => return Ok(window),
+            Err(e) if attempt < TRANSCRIPT_READ_RETRIES && is_transient_read_error(&e) => {
+                std::thread::sleep(TRANSCRIPT_READ_RETRY_DELAY);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!("retry loop always returns on final attempt")
+}
+
+enum TranscriptReadOutcome {
+    Window {
+        window: crate::agent::transcript::Window,
+        cache_path: Option<std::path::PathBuf>,
+    },
+    Fallback(&'static str),
+    Unreadable {
+        path: std::path::PathBuf,
+        error: std::io::Error,
+    },
+}
+
 /// `GET /api/agents/messages` —— 聊天视图的消息流。
 ///
 /// 走 HTTP 不走控制通道:一段对话可以是几 MB,协议 R4 明令不许在控制通道走大块数据。
@@ -588,55 +670,155 @@ pub async fn messages(
     if !adapter.supports_transcript() {
         return fell_back("unsupported-agent");
     }
-    // Claude 的 hook 直接给路径;Codex 不给,但文件名里含会话 id,可以确定性推出来。
-    // 推到了就记下来,免得每次增量拉取都重新走一遍文件系统。
-    let path = match session.transcript {
-        Some(p) => p,
-        None => {
-            let home = DetectEnv::current_home();
-            let (aid, sid) = (q.agent_id.clone(), q.agent_session_id.clone());
-            let found = tokio::task::spawn_blocking(move || {
-                crate::agent::find(&aid).and_then(|a| a.locate_transcript(&home, &sid))
-            })
-            .await
-            .ok()
-            .flatten();
-            match found {
-                Some(p) => {
-                    let s = p.to_string_lossy().to_string();
-                    state.agent_sessions.set_transcript(&q.agent_id, &q.agent_session_id, s.clone());
-                    s
-                }
-                None => return fell_back("no-transcript-path"),
-            }
-        }
-    };
 
-    // 读文件是阻塞 IO
+    // 路径解析与读取都是阻塞 IO,统一放进 spawn_blocking
+    let home = DetectEnv::current_home();
+    let sid = q.agent_session_id.clone();
+    let reported = session.transcript;
     let after = q.after.clone();
     let before = q.before.clone();
     let job = tokio::task::spawn_blocking(move || {
-        let parse = |text: &str, base| adapter.parse_transcript(text, base);
-        if let Some(before) = before {
-            crate::agent::transcript::read_older_window(std::path::Path::new(&path), &before, &parse)
-        } else {
-            crate::agent::transcript::read_window(std::path::Path::new(&path), after.as_deref(), &parse)
+        let mut cache_path = None;
+        let mut path = match resolve_transcript_for_read(adapter, &home, &sid, reported.as_deref()) {
+            TranscriptResolution::Fallback(reason) => return TranscriptReadOutcome::Fallback(reason),
+            TranscriptResolution::UsePath { path, cache_update } => {
+                if cache_update {
+                    cache_path = Some(path.clone());
+                }
+                path
+            }
+        };
+        let read_once = |target: &std::path::Path| {
+            let parse = |text: &str, base| adapter.parse_transcript(text, base);
+            if let Some(before) = before.as_deref() {
+                crate::agent::transcript::read_older_window(target, before, &parse)
+            } else {
+                crate::agent::transcript::read_window(target, after.as_deref(), &parse)
+            }
+        };
+        let mut res = read_with_retry(|| read_once(&path));
+        if let Err(ref e) = res
+            && e.kind() == std::io::ErrorKind::NotFound
+            && let Some(relocated) = adapter.locate_transcript(&home, &sid)
+            && relocated != path
+        {
+            path = relocated.clone();
+            cache_path = Some(relocated);
+            res = read_with_retry(|| read_once(&path));
+        }
+        match res {
+            Ok(window) => TranscriptReadOutcome::Window { window, cache_path },
+            Err(error) => TranscriptReadOutcome::Unreadable { path, error },
         }
     });
     match job.await {
-        Ok(Ok(window)) => {
+        Ok(TranscriptReadOutcome::Window { window, cache_path }) => {
+            if let Some(p) = cache_path {
+                state.agent_sessions.set_transcript(
+                    &q.agent_id,
+                    &q.agent_session_id,
+                    p.to_string_lossy().to_string(),
+                );
+            }
             let mut v = serde_json::to_value(&window).unwrap_or_default();
             v["source"] = serde_json::json!("transcript");
             Json(v).into_response()
         }
+        Ok(TranscriptReadOutcome::Fallback(reason)) => fell_back(reason),
         // 文件没了、权限不足、正好被换掉 —— 都不是错误,是「这次读不到」
-        Ok(Err(e)) => {
-            tracing::debug!(error = %e, "读 transcript 失败,回落到终端");
+        Ok(TranscriptReadOutcome::Unreadable { path, error }) => {
+            tracing::warn!(
+                agent = %q.agent_id,
+                agent_session = %q.agent_session_id,
+                path = %path.display(),
+                error = %error,
+                "读 transcript 失败,回落到终端"
+            );
             fell_back("unreadable")
         }
         Err(e) => {
-            tracing::error!(error = %e, "读 transcript 的任务失败");
+            tracing::error!(
+                agent = %q.agent_id,
+                agent_session = %q.agent_session_id,
+                error = %e,
+                "读 transcript 的任务失败"
+            );
             fell_back("unreadable")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    #[test]
+    fn resolve_transcript_falls_back_to_locate_and_detects_pending_session() {
+        let home = tempfile::tempdir().unwrap();
+        let agy = crate::agent::find("antigravity").unwrap();
+        let claude = crate::agent::find("claude-code").unwrap();
+
+        let logs = home
+            .path()
+            .join(".gemini/antigravity-cli/brain/agy-ready/.system_generated/logs");
+        fs::create_dir_all(&logs).unwrap();
+        let full = logs.join("transcript_full.jsonl");
+        fs::write(&full, "").unwrap();
+        let stale = home.path().join("stale/transcript_full.jsonl");
+        assert_eq!(
+            resolve_transcript_for_read(agy, home.path(), "agy-ready", Some(&stale.to_string_lossy())),
+            TranscriptResolution::UsePath { path: full, cache_update: true }
+        );
+
+        let fresh_brain = home.path().join(".gemini/antigravity-cli/brain/agy-fresh");
+        fs::create_dir_all(&fresh_brain).unwrap();
+        let unflushed = fresh_brain.join(".system_generated/logs/transcript_full.jsonl");
+        assert_eq!(
+            resolve_transcript_for_read(agy, home.path(), "agy-fresh", Some(&unflushed.to_string_lossy())),
+            TranscriptResolution::Fallback("no-transcript-path")
+        );
+
+        assert_eq!(
+            resolve_transcript_for_read(claude, home.path(), "c-1", Some("/definitely/not/here.jsonl")),
+            TranscriptResolution::UsePath {
+                path: PathBuf::from("/definitely/not/here.jsonl"),
+                cache_update: false,
+            }
+        );
+    }
+
+    #[test]
+    fn read_with_retry_handles_transient_and_permanent_errors() {
+        use std::io::ErrorKind;
+
+        let mut attempts = 0usize;
+        let ok = read_with_retry(|| {
+            attempts += 1;
+            if attempts == 1 {
+                Err(std::io::Error::from_raw_os_error(32))
+            } else if attempts == 2 {
+                Err(std::io::Error::new(ErrorKind::PermissionDenied, "locked"))
+            } else {
+                Ok(crate::agent::transcript::Window {
+                    messages: Vec::new(),
+                    cursor: "0.0".into(),
+                    reset: false,
+                    more: false,
+                    older_cursor: None,
+                })
+            }
+        });
+        assert!(ok.is_ok());
+        assert_eq!(attempts, 3);
+
+        let mut perm_attempts = 0usize;
+        let perm = read_with_retry(|| {
+            perm_attempts += 1;
+            Err(std::io::Error::new(ErrorKind::InvalidData, "corrupt"))
+        });
+        assert_eq!(perm.unwrap_err().kind(), ErrorKind::InvalidData);
+        assert_eq!(perm_attempts, 1);
     }
 }

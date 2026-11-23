@@ -122,10 +122,15 @@ fn unix_from_rfc3339(s: &str) -> Option<u64> {
     u64::try_from(days * 86_400 + hh * 3600 + mm * 60 + ss).ok()
 }
 
+/// 校验会话 id 不会跳出 brain 目录。
+pub(crate) fn is_valid_session_id(session_id: &str) -> bool {
+    !session_id.is_empty() && !session_id.contains(['/', '\\']) && !session_id.contains("..")
+}
+
 /// 由会话 id 找到记录文件。hook 事件里通常直接带着 `transcriptPath`,这里是它缺席时的退路。
 pub fn locate(home: &std::path::Path, session_id: &str) -> Option<std::path::PathBuf> {
     // 会话 id 会拼进路径,不许它带分隔符跳出 brain 目录
-    if session_id.is_empty() || session_id.contains(['/', '\\']) || session_id.contains("..") {
+    if !is_valid_session_id(session_id) {
         return None;
     }
     let logs = home

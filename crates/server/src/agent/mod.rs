@@ -163,6 +163,25 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
+    /// 上报的记录路径尚未落盘,但会话目录已由 agent 创建(刚启动尚未 flush)时返回 `true`。
+    /// 此时返回 `no-transcript-path` 而非 `unreadable`,避免客户端误报读取失败。
+    fn is_pending_transcript(
+        &self,
+        home: &std::path::Path,
+        agent_session_id: &str,
+        reported: &std::path::Path,
+    ) -> bool {
+        let _ = (home, agent_session_id, reported);
+        false
+    }
+
+    /// 当上报路径是精简版本而同目录下存在更完整版本(如 `transcript.jsonl` 与
+    /// `transcript_full.jsonl`)时,返回优先使用的路径。
+    fn preferred_transcript_path(&self, reported: &std::path::Path) -> Option<PathBuf> {
+        let _ = reported;
+        None
+    }
+
     /// 把这家的对话记录解析成归一化消息。只在 [`Self::supports_transcript`] 为真时调用。
     fn parse_transcript(&self, text: &str, base_offset: u64) -> Vec<transcript::Message> {
         let _ = (text, base_offset);
