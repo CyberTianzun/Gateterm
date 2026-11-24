@@ -18,6 +18,11 @@ const {
   isUserPromptMessage,
   userPromptTextBlocks,
   filterUserPromptMessages,
+  MAX_AUTO_OLDER_PAGES,
+  isHarnessUserText,
+  hasUserPrompt,
+  newlyPrependedMessages,
+  loadOlderUntilUserPrompt,
 } = await import("./.chat.build.mjs");
 
 const chatViewBundle = await build({
@@ -26,7 +31,7 @@ const chatViewBundle = await build({
   format: "esm",
   write: false,
 });
-const { renderMessages } = await import(
+const { buildChatHistoryHeader, renderMessages } = await import(
   `data:text/javascript;base64,${Buffer.from(chatViewBundle.outputFiles[0].text).toString("base64")}`
 );
 
@@ -733,4 +738,451 @@ test("fetchMessagesWithRecovery does not refreshAgents on non-404 fallbacks", as
     assert.deepEqual(fetched, ["s-1"]);
     assert.deepEqual(result, { agent: initial, window: fallbackWin });
   }
+});
+
+test("isUserPromptMessage and userPromptTextBlocks filter all 8 harness prefixes and empty Codex marker", () => {
+  const harnessTexts = [
+    "# AGENTS.md instructions\nAlways run tests",
+    "<environment_context>\n<cwd>/repo</cwd>\n</environment_context>",
+    "<permissions instructions>Read only</permissions instructions>",
+    "<developer_instructions>Be concise</developer_instructions>",
+    "<system-reminder>Hook output</system-reminder>",
+    "<local-command-caveat>Caveat</local-command-caveat>",
+    "<command-name>/clear</command-name>",
+    "This session is being continued from a previous conversation that ran out of context.",
+    "  \n<system-reminder>with leading whitespace</system-reminder>  ",
+    "## My request for Codex:\n   ",
+    "IDE context\n## My request for Codex:\n \t ",
+  ];
+  for (const text of harnessTexts) {
+    assert.equal(isHarnessUserText(text), true, `expected harness text: ${text}`);
+    assert.equal(
+      isUserPromptMessage({ id: "h", role: "user", ts: null, blocks: [{ kind: "text", text }] }),
+      false,
+      `expected non-prompt for: ${text}`,
+    );
+  }
+
+  const mixed = {
+    id: "u-mixed-harness",
+    role: "user",
+    ts: null,
+    blocks: [
+      { kind: "tool-result", ok: true, text: "done" },
+      { kind: "text", text: "<system-reminder>injected</system-reminder>" },
+      { kind: "text", text: "Real prompt" },
+    ],
+  };
+  assert.equal(isUserPromptMessage(mixed), true);
+  assert.deepEqual(userPromptTextBlocks(mixed), [{ kind: "text", text: "Real prompt" }]);
+
+  const codexWrapped = {
+    id: "u-codex",
+    role: "user",
+    ts: null,
+    blocks: [{ kind: "text", text: "Context\n## My request for Codex:\nFix it" }],
+  };
+  assert.equal(isHarnessUserText("Context\n## My request for Codex:\nFix it"), false);
+  assert.equal(isUserPromptMessage(codexWrapped), true);
+  assert.deepEqual(userPromptTextBlocks(codexWrapped), [
+    { kind: "text", text: "Context\n## My request for Codex:\nFix it" },
+  ]);
+
+  assert.equal(
+    hasUserPrompt([
+      { id: "a1", role: "assistant", ts: null, blocks: [{ kind: "text", text: "hi" }] },
+      { id: "u-sys", role: "user", ts: null, blocks: [{ kind: "text", text: "<environment_context></environment_context>" }] },
+    ]),
+    false,
+  );
+  assert.equal(hasUserPrompt([mixed]), true);
+});
+
+test("loadOlderUntilUserPrompt stops after 1 page when page 1 contains a human user prompt", async () => {
+  const userPrompt = { id: "u1", role: "user", ts: null, blocks: [{ kind: "text", text: "Hello" }] };
+  let messages = [msg("a2")];
+  const fetched = [];
+  const pages = [];
+  const res = await loadOlderUntilUserPrompt({
+    initialCursor: "c1",
+    isCancelled: () => false,
+    fetchPage: async (before) => {
+      fetched.push(before);
+      return win([userPrompt, msg("a1")], { older_cursor: "c0" });
+    },
+    getMessages: () => messages,
+    onPage: (w, incoming) => {
+      pages.push(incoming.map((m) => m.id));
+      messages = mergeWindow(messages, w, true);
+    },
+    onReset: () => assert.fail("unexpected reset"),
+  });
+  assert.deepEqual(res, { stop: "found-user-prompt", pagesFetched: 1 });
+  assert.deepEqual(fetched, ["c1"]);
+  assert.deepEqual(pages, [["u1", "a1"]]);
+  assert.deepEqual(messages.map((m) => m.id), ["u1", "a1", "a2"]);
+});
+
+test("loadOlderUntilUserPrompt skips tool-results, assistant, harness blocks, and empty pages until prompt arrives", async () => {
+  let messages = [msg("a-tail")];
+  const responses = new Map([
+    [
+      "c1",
+      win(
+        [
+          { id: "tr1", role: "user", ts: null, blocks: [{ kind: "tool-result", ok: true, text: "out" }] },
+          { id: "h1", role: "user", ts: null, blocks: [{ kind: "text", text: "<system-reminder>skip</system-reminder>" }] },
+          msg("a1"),
+        ],
+        { older_cursor: "c2" },
+      ),
+    ],
+    ["c2", win([], { older_cursor: "c3" })],
+    [
+      "c3",
+      win(
+        [
+          { id: "u1", role: "user", ts: null, blocks: [{ kind: "text", text: "Find the bug" }] },
+          msg("a0"),
+        ],
+        { older_cursor: "c4" },
+      ),
+    ],
+  ]);
+  const fetched = [];
+  const res = await loadOlderUntilUserPrompt({
+    initialCursor: "c1",
+    isCancelled: () => false,
+    fetchPage: async (before) => {
+      fetched.push(before);
+      return responses.get(before);
+    },
+    getMessages: () => messages,
+    onPage: (w) => {
+      messages = mergeWindow(messages, w, true);
+    },
+    onReset: () => assert.fail("unexpected reset"),
+  });
+  assert.deepEqual(res, { stop: "found-user-prompt", pagesFetched: 3 });
+  assert.deepEqual(fetched, ["c1", "c2", "c3"]);
+  assert.deepEqual(messages.map((m) => m.id), ["u1", "a0", "tr1", "h1", "a1", "a-tail"]);
+});
+
+test("loadOlderUntilUserPrompt does not stop prematurely on boundary-duplicated user prompt IDs", async () => {
+  const u2 = { id: "u2", role: "user", ts: null, blocks: [{ kind: "text", text: "Second" }] };
+  const u1 = { id: "u1", role: "user", ts: null, blocks: [{ kind: "text", text: "First" }] };
+  let messages = [u2, msg("a2")];
+  const fetched = [];
+  const res = await loadOlderUntilUserPrompt({
+    initialCursor: "c1",
+    isCancelled: () => false,
+    fetchPage: async (before) => {
+      fetched.push(before);
+      if (before === "c1") {
+        // Repeats u2 on the page boundary; newlyPrependedMessages should exclude u2.
+        return win([msg("a1"), u2], { older_cursor: "c2" });
+      }
+      return win([u1], { older_cursor: "c3" });
+    },
+    getMessages: () => messages,
+    onPage: (w) => {
+      messages = mergeWindow(messages, w, true);
+    },
+    onReset: () => assert.fail("unexpected reset"),
+  });
+  assert.deepEqual(res, { stop: "found-user-prompt", pagesFetched: 2 });
+  assert.deepEqual(fetched, ["c1", "c2"]);
+  assert.deepEqual(newlyPrependedMessages([u2, msg("a2")], win([msg("a1"), u2])).map((m) => m.id), ["a1"]);
+});
+
+test("loadOlderUntilUserPrompt stops with beginning when older_cursor becomes null", async () => {
+  let messages = [msg("a2")];
+  const res = await loadOlderUntilUserPrompt({
+    initialCursor: "c1",
+    isCancelled: () => false,
+    fetchPage: async () => win([msg("a1")], { older_cursor: null }),
+    getMessages: () => messages,
+    onPage: (w) => {
+      messages = mergeWindow(messages, w, true);
+    },
+    onReset: () => assert.fail("unexpected reset"),
+  });
+  assert.deepEqual(res, { stop: "beginning", pagesFetched: 1 });
+});
+
+test("loadOlderUntilUserPrompt stops at MAX_AUTO_OLDER_PAGES (16) with page-limit", async () => {
+  assert.equal(MAX_AUTO_OLDER_PAGES, 16);
+  let messages = [msg("a-tail")];
+  let n = 0;
+  const res = await loadOlderUntilUserPrompt({
+    initialCursor: "c0",
+    isCancelled: () => false,
+    fetchPage: async () => {
+      n++;
+      return win([msg(`a-${n}`)], { older_cursor: `c${n}` });
+    },
+    getMessages: () => messages,
+    onPage: (w) => {
+      messages = mergeWindow(messages, w, true);
+    },
+    onReset: () => assert.fail("unexpected reset"),
+  });
+  assert.deepEqual(res, { stop: "page-limit", pagesFetched: 16 });
+  assert.equal(n, 16);
+});
+
+test("loadOlderUntilUserPrompt stops with failed on throw, terminal fallback, null, or stalled cursor while preserving prior pages", async () => {
+  // 1. Network throw on page 2 keeps page 1
+  {
+    let messages = [msg("a-tail")];
+    let count = 0;
+    const res = await loadOlderUntilUserPrompt({
+      initialCursor: "c1",
+      isCancelled: () => false,
+      fetchPage: async () => {
+        count++;
+        if (count === 1) return win([msg("a1")], { older_cursor: "c2" });
+        throw new Error("network down");
+      },
+      getMessages: () => messages,
+      onPage: (w) => {
+        messages = mergeWindow(messages, w, true);
+      },
+      onReset: () => assert.fail("unexpected reset"),
+    });
+    assert.deepEqual(res, { stop: "failed", pagesFetched: 1 });
+    assert.deepEqual(messages.map((m) => m.id), ["a1", "a-tail"]);
+  }
+
+  // 2. Terminal fallback
+  {
+    const res = await loadOlderUntilUserPrompt({
+      initialCursor: "c1",
+      isCancelled: () => false,
+      fetchPage: async () => ({ source: "terminal", reason: "unreadable" }),
+      getMessages: () => [],
+      onPage: () => assert.fail("unexpected onPage"),
+      onReset: () => assert.fail("unexpected reset"),
+    });
+    assert.deepEqual(res, { stop: "failed", pagesFetched: 0 });
+  }
+
+  // 3. Null return (e.g., caught HistoryError)
+  {
+    const res = await loadOlderUntilUserPrompt({
+      initialCursor: "c1",
+      isCancelled: () => false,
+      fetchPage: async () => null,
+      getMessages: () => [],
+      onPage: () => assert.fail("unexpected onPage"),
+      onReset: () => assert.fail("unexpected reset"),
+    });
+    assert.deepEqual(res, { stop: "failed", pagesFetched: 0 });
+  }
+
+  // 4. Stalled cursor (!reset && win.older_cursor === before)
+  {
+    let messages = [msg("a-tail")];
+    const res = await loadOlderUntilUserPrompt({
+      initialCursor: "c1",
+      isCancelled: () => false,
+      fetchPage: async (before) => {
+        if (before === "c1") return win([msg("a1")], { older_cursor: "c2" });
+        return win([msg("a-dup")], { older_cursor: "c2" });
+      },
+      getMessages: () => messages,
+      onPage: (w) => {
+        messages = mergeWindow(messages, w, true);
+      },
+      onReset: () => assert.fail("unexpected reset"),
+    });
+    assert.deepEqual(res, { stop: "failed", pagesFetched: 1 });
+    assert.deepEqual(messages.map((m) => m.id), ["a1", "a-tail"]);
+  }
+});
+
+test("loadOlderUntilUserPrompt handles reset for old history servers vs real transcript resets", async () => {
+  // Old history server ignores ?before= and returns reset: true with same older_cursor
+  {
+    let resetCalled = 0;
+    let pageCalled = 0;
+    const res = await loadOlderUntilUserPrompt({
+      initialCursor: "same-cursor",
+      isHistoryPreview: true,
+      isCancelled: () => false,
+      fetchPage: async () => win([msg("a-head")], { reset: true, older_cursor: "same-cursor" }),
+      getMessages: () => [msg("a-head")],
+      onPage: () => {
+        pageCalled++;
+      },
+      onReset: () => {
+        resetCalled++;
+      },
+    });
+    assert.deepEqual(res, { stop: "unsupported-old-server", pagesFetched: 0 });
+    assert.equal(resetCalled, 0);
+    assert.equal(pageCalled, 0);
+  }
+
+  // Live chat receiving reset with unchanged cursor fails cleanly instead of calling onReset
+  {
+    let resetCalled = 0;
+    const res = await loadOlderUntilUserPrompt({
+      initialCursor: "same-cursor",
+      isHistoryPreview: false,
+      isCancelled: () => false,
+      fetchPage: async () => win([msg("a-head")], { reset: true, older_cursor: "same-cursor" }),
+      getMessages: () => [msg("a-head")],
+      onPage: () => assert.fail("unexpected onPage"),
+      onReset: () => {
+        resetCalled++;
+      },
+    });
+    assert.deepEqual(res, { stop: "failed", pagesFetched: 0 });
+    assert.equal(resetCalled, 0);
+  }
+
+  // Real reset with different older_cursor calls onReset once and stops
+  {
+    const resets = [];
+    const res = await loadOlderUntilUserPrompt({
+      initialCursor: "c1",
+      isHistoryPreview: true,
+      isCancelled: () => false,
+      fetchPage: async () => win([msg("fresh")], { reset: true, older_cursor: "c-new" }),
+      getMessages: () => [msg("old")],
+      onPage: () => assert.fail("unexpected onPage"),
+      onReset: (w) => {
+        resets.push(w.messages.map((m) => m.id));
+      },
+    });
+    assert.deepEqual(res, { stop: "reset", pagesFetched: 0 });
+    assert.deepEqual(resets, [["fresh"]]);
+  }
+});
+
+test("loadOlderUntilUserPrompt exits with cancelled without calling onPage or onReset when cancelled mid-flight", async () => {
+  let cancelled = false;
+  let pages = 0;
+  let resets = 0;
+  const res = await loadOlderUntilUserPrompt({
+    initialCursor: "c1",
+    isCancelled: () => cancelled,
+    fetchPage: async () => {
+      cancelled = true;
+      return win([msg("a1")], { older_cursor: "c2" });
+    },
+    getMessages: () => [msg("a2")],
+    onPage: () => {
+      pages++;
+    },
+    onReset: () => {
+      resets++;
+    },
+  });
+  assert.deepEqual(res, { stop: "cancelled", pagesFetched: 0 });
+  assert.equal(pages, 0);
+  assert.equal(resets, 0);
+});
+
+test("renderMessages keepBottomIfAtBottom pins short page to bottom while preserving anchor when scrolled up", (t) => {
+  const prevDoc = globalThis.document;
+  const { doc } = makeChatDom();
+  globalThis.document = doc;
+  t.after(() => {
+    globalThis.document = prevDoc;
+  });
+
+  // 1. Short initial page (clientHeight = 300, 1 assistant message = 200px, scrollTop = 0, at bottom)
+  {
+    const box = doc.createElement("div");
+    box.clientHeight = 300;
+    const initial = [msg("a4")];
+    renderMessages(box, initial, "short-1", box);
+    box.scrollTop = 0;
+
+    const older = [msg("a1"), msg("a2"), msg("a3"), ...initial];
+    renderMessages(box, older, "short-1", box, { prepend: true, keepBottomIfAtBottom: true });
+    assert.equal(box.scrollHeight, 800);
+    assert.equal(box.scrollTop, 800);
+  }
+
+  // 2. Scrolled up (!atBottom): clientHeight = 300, 2 assistant messages = 400px, scrollTop = 40
+  {
+    const box = doc.createElement("div");
+    box.clientHeight = 300;
+    const initial = [msg("a3"), msg("a4")];
+    renderMessages(box, initial, "long-1", box);
+    box.scrollTop = 40;
+
+    const older = [msg("a1"), msg("a2"), ...initial];
+    renderMessages(box, older, "long-1", box, { prepend: true, keepBottomIfAtBottom: true });
+    // Two 200px messages prepended above a3; anchor keeps a3 at its previous offset -> 40 + 400 = 440 (not bottom 800)
+    assert.equal(box.scrollHeight, 800);
+    assert.equal(box.scrollTop, 440);
+  }
+});
+
+test("buildChatHistoryHeader renders load, loading, retry, and beginning states consistently", (t) => {
+  const prevDoc = globalThis.document;
+  const { doc } = makeChatDom();
+  globalThis.document = doc;
+  t.after(() => {
+    globalThis.document = prevDoc;
+  });
+
+  assert.equal(
+    buildChatHistoryHeader({
+      supported: false,
+      olderCursor: null,
+      loading: false,
+      failed: false,
+      onLoadOlder: () => {},
+    }),
+    undefined,
+  );
+
+  let clicks = 0;
+  const ready = buildChatHistoryHeader({
+    supported: true,
+    olderCursor: "c1",
+    loading: false,
+    failed: false,
+    onLoadOlder: () => { clicks++; },
+  });
+  const btn = ready.firstElementChild;
+  assert.ok(btn);
+  assert.equal(btn.tagName, "BUTTON");
+  assert.equal(btn.disabled, false);
+  btn.click();
+  assert.equal(clicks, 1);
+
+  const loading = buildChatHistoryHeader({
+    supported: true,
+    olderCursor: "c1",
+    loading: true,
+    failed: false,
+    onLoadOlder: () => {},
+  });
+  assert.equal(loading.firstElementChild.disabled, true);
+
+  const failed = buildChatHistoryHeader({
+    supported: true,
+    olderCursor: "c1",
+    loading: false,
+    failed: true,
+    onLoadOlder: () => {},
+  });
+  assert.equal(failed.firstElementChild.disabled, false);
+  assert.notEqual(failed.textContent, ready.textContent);
+
+  const beginning = buildChatHistoryHeader({
+    supported: true,
+    olderCursor: null,
+    loading: false,
+    failed: false,
+    onLoadOlder: () => {},
+  });
+  assert.equal(beginning.firstElementChild, null);
+  assert.ok(beginning.textContent.length > 0);
 });

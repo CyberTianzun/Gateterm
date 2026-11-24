@@ -12,11 +12,38 @@ import { renderMarkdown } from "./markdown";
 
 export interface RenderMessagesOptions {
   prepend?: boolean;
+  keepBottomIfAtBottom?: boolean;
   header?: HTMLElement;
   userOnly?: boolean;
   onToggleUserOnly?: () => void;
   onPickUserMessage?: (messageId: string) => void;
   jumpToId?: string | null;
+}
+
+/** 构建聊天与历史预览共用的顶部「加载更早消息 / 已到开头」状态栏。 */
+export function buildChatHistoryHeader(opts: {
+  supported: boolean;
+  olderCursor: string | null;
+  loading: boolean;
+  failed: boolean;
+  onLoadOlder: () => void;
+}): HTMLElement | undefined {
+  if (!opts.supported) return undefined;
+  const header = document.createElement("div");
+  header.className = "chat-history";
+  if (opts.olderCursor) {
+    const load = document.createElement("button");
+    load.type = "button";
+    load.disabled = opts.loading;
+    load.textContent = t(
+      opts.loading ? "chat.loadingOlder" : opts.failed ? "chat.olderFailed" : "chat.loadOlder",
+    );
+    load.addEventListener("click", opts.onLoadOlder);
+    header.appendChild(load);
+  } else {
+    header.textContent = t("chat.beginning");
+  }
+  return header;
 }
 
 const savedExpanded = new WeakMap<HTMLElement, { scope: string; keys: Set<string> }>();
@@ -263,7 +290,11 @@ export function renderMessages(
   const restored = anchorId === undefined ? undefined : Array.from(box.querySelectorAll<HTMLElement>("[data-message-id]"))
     .find((row) => row.dataset.messageId === anchorId);
   if (options.prepend && sameScope) {
-    scrollContainer.scrollTop = scrollTop;
-    if (restored && anchorTop !== undefined) scrollContainer.scrollTop += restored.getBoundingClientRect().top - anchorTop;
+    if (options.keepBottomIfAtBottom && atBottom) {
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    } else {
+      scrollContainer.scrollTop = scrollTop;
+      if (restored && anchorTop !== undefined) scrollContainer.scrollTop += restored.getBoundingClientRect().top - anchorTop;
+    }
   } else scrollContainer.scrollTop = atBottom ? scrollContainer.scrollHeight : scrollTop;
 }

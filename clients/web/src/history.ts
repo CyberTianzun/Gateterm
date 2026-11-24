@@ -75,8 +75,14 @@ function key(entry: HistoryEntry): { agent_id: string; agent_session_id: string 
   return { agent_id: entry.agent_id, agent_session_id: entry.agent_session_id };
 }
 
-export async function fetchHistoryMessages(token: string, entry: HistoryEntry): Promise<ChatWindow> {
-  const window = await request(token, `/messages?${new URLSearchParams(key(entry))}`);
+export async function fetchHistoryMessages(
+  token: string,
+  entry: HistoryEntry,
+  before?: string,
+): Promise<ChatWindow> {
+  const params = new URLSearchParams(key(entry));
+  if (before) params.set("before", before);
+  const window = await request(token, `/messages?${params}`);
   if (window?.source !== "transcript" || !Array.isArray(window.messages)) throw new HistoryError("unreadable");
   return window;
 }

@@ -111,6 +111,15 @@ export async function fetchMessagesWithRecovery<T extends AgentRef>(opts: {
   return { agent: next, window: retryWin };
 }
 
+function uniqueIncoming(base: Message[], messages: Message[]): Message[] {
+  const seen = new Set(base.map((m) => m.id));
+  return messages.filter((m) => {
+    if (seen.has(m.id)) return false;
+    seen.add(m.id);
+    return true;
+  });
+}
+
 /**
  * 把一次拉取合并进已有的消息。
  *
@@ -123,8 +132,7 @@ export async function fetchMessagesWithRecovery<T extends AgentRef>(opts: {
 export function mergeWindow(prev: Message[], win: ChatWindow, prepend = false): Message[] {
   if (win.source !== "transcript") return prev;
   const base = win.reset ? [] : prev;
-  const seen = new Set(base.map((m) => m.id));
-  const incoming = win.messages.filter((m) => { if (seen.has(m.id)) return false; seen.add(m.id); return true; });
+  const incoming = uniqueIncoming(base, win.messages);
   return prepend ? incoming.concat(base) : base.concat(incoming);
 }
 
@@ -137,16 +145,42 @@ export function preview(m: Message): string {
   return "";
 }
 
-/** 仅提取用户主动发出的非空正文块，剔除同条里的 tool-result 或空白块。 */
+const HARNESS_USER_PREFIXES = [
+  "# AGENTS.md instructions",
+  "<environment_context>",
+  "<permissions instructions>",
+  "<developer_instructions>",
+  "<system-reminder>",
+  "<local-command-caveat>",
+  "<command-name>",
+  "This session is being continued from a previous conversation",
+] as const;
+
+const CODEX_REQUEST_MARKER = "## My request for Codex:";
+
+/** 判断 role="user" 的文本块是否为空白或框架注入上下文（对齐服务端 history::prompt_body）。 */
+export function isHarnessUserText(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return true;
+  if (HARNESS_USER_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) return true;
+  const markerIdx = trimmed.indexOf(CODEX_REQUEST_MARKER);
+  if (markerIdx !== -1 && !trimmed.slice(markerIdx + CODEX_REQUEST_MARKER.length).trim()) {
+    return true;
+  }
+  return false;
+}
+
+/** 仅提取用户主动发出的非空正文块，剔除同条里的 tool-result、空白与框架注入上下文。 */
 export function userPromptTextBlocks(m: Message): Extract<Block, { kind: "text" }>[] {
   if (m.role !== "user") return [];
   return m.blocks.filter(
-    (b): b is Extract<Block, { kind: "text" }> => b.kind === "text" && b.text.trim().length > 0,
+    (b): b is Extract<Block, { kind: "text" }> =>
+      b.kind === "text" && b.text.trim().length > 0 && !isHarnessUserText(b.text),
   );
 }
 
 /**
- * 判断一条消息是否为用户真正输入的一轮提示（而非工具回传/空白占位的 user turn）。
+ * 判断一条消息是否为用户真正输入的一轮提示（而非工具回传/空白占位/系统注入的 user turn）。
  * 不少 agent 的记录会把 tool-result 甚至 Pi 的 [tool-use, tool-result] 记成 role="user"。
  */
 export function isUserPromptMessage(m: Message): boolean {
@@ -156,4 +190,78 @@ export function isUserPromptMessage(m: Message): boolean {
 /** 筛出所有用户输入的消息并保持原始时间顺序。 */
 export function filterUserPromptMessages(messages: Message[]): Message[] {
   return messages.filter(isUserPromptMessage);
+}
+
+/** 判断消息列表中是否已包含至少一条用户主动提问。 */
+export function hasUserPrompt(messages: Message[]): boolean {
+  return messages.some(isUserPromptMessage);
+}
+
+export const MAX_AUTO_OLDER_PAGES = 16;
+
+export type OlderLoadStop =
+  | "found-user-prompt"
+  | "beginning"
+  | "page-limit"
+  | "reset"
+  | "unsupported-old-server"
+  | "failed"
+  | "cancelled";
+
+/** 计算本次向后翻页真正新增（未与已有消息重复）的前置消息集合。 */
+export function newlyPrependedMessages(prev: Message[], win: ChatWindow): Message[] {
+  if (win.source !== "transcript") return [];
+  const base = win.reset ? [] : prev;
+  return uniqueIncoming(base, win.messages);
+}
+
+/**
+ * 自动连续向后拉取更早消息，直到新前置的消息中包含用户主动提问、到达开头、
+ * 触及单次上限（16 页）、遇到 reset、失败或被取消为止。
+ */
+export async function loadOlderUntilUserPrompt(opts: {
+  initialCursor: string | null;
+  maxPages?: number;
+  isHistoryPreview?: boolean;
+  isCancelled: () => boolean;
+  fetchPage: (before: string) => Promise<ChatWindow | null>;
+  getMessages: () => Message[];
+  onPage: (win: Extract<ChatWindow, { source: "transcript" }>, incoming: Message[]) => void;
+  onReset: (win: Extract<ChatWindow, { source: "transcript" }>) => void;
+}): Promise<{ stop: OlderLoadStop; pagesFetched: number }> {
+  const maxPages = opts.maxPages ?? MAX_AUTO_OLDER_PAGES;
+  let cursor = opts.initialCursor;
+  let pagesFetched = 0;
+
+  while (true) {
+    if (opts.isCancelled()) return { stop: "cancelled", pagesFetched };
+    if (!cursor) return { stop: "beginning", pagesFetched };
+    if (pagesFetched >= maxPages) return { stop: "page-limit", pagesFetched };
+
+    let win: ChatWindow | null;
+    try {
+      win = await opts.fetchPage(cursor);
+    } catch {
+      if (opts.isCancelled()) return { stop: "cancelled", pagesFetched };
+      return { stop: "failed", pagesFetched };
+    }
+    if (opts.isCancelled()) return { stop: "cancelled", pagesFetched };
+    if (!win || win.source !== "transcript") return { stop: "failed", pagesFetched };
+
+    const nextCursor = win.older_cursor ?? null;
+    if (win.reset) {
+      if (nextCursor === cursor) {
+        return { stop: opts.isHistoryPreview ? "unsupported-old-server" : "failed", pagesFetched };
+      }
+      opts.onReset(win);
+      return { stop: "reset", pagesFetched };
+    }
+    if (nextCursor === cursor) return { stop: "failed", pagesFetched };
+
+    const incoming = newlyPrependedMessages(opts.getMessages(), win);
+    pagesFetched += 1;
+    opts.onPage(win, incoming);
+    if (hasUserPrompt(incoming)) return { stop: "found-user-prompt", pagesFetched };
+    cursor = nextCursor;
+  }
 }

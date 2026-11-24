@@ -1,4 +1,5 @@
-import { renderMessages } from "./chat-view";
+import { type Message, hasUserPrompt, loadOlderUntilUserPrompt, mergeWindow } from "./chat";
+import { buildChatHistoryHeader, renderMessages } from "./chat-view";
 import { createModal } from "./modal";
 import { t, localeTag } from "./i18n";
 import { createAgentBrandIcon } from "./agents";
@@ -113,38 +114,124 @@ export function mountHistory(trigger: HTMLElement, token: () => string, onOpen: 
       summary.append(actions, el("div", "history-meta", t("history.recentMessages")));
       const body = el("div", "history-transcript", t("history.loading"));
       preview.replaceChildren(summary, body);
+      preview.scrollTop = 0;
       back.focus();
       let previewUserOnly = false;
       let previewJumpToId: string | null = null;
+      let previewMessages: Message[] = [];
+      let previewOlderCursor: string | null = null;
+      let previewHistorySupported = false;
+      let previewOlderLoading = false;
+      let previewOlderFailed = false;
       const scope = `${entry.agent_id}:${entry.agent_session_id}`;
+      const isCancelled = () => !dialog.open || requestId !== previewRevision;
+
+      const paint = (prepend = false, keepBottomIfAtBottom = false) => {
+        if (isCancelled()) return;
+        if (previewMessages.length === 0 && !previewOlderCursor) {
+          delete body.dataset.chatScope;
+          delete body.dataset.chatUserOnly;
+          body.textContent = t("history.noMessages");
+          return;
+        }
+        const jumpToId = previewJumpToId;
+        previewJumpToId = null;
+        renderMessages(body, previewMessages, scope, preview, {
+          prepend,
+          keepBottomIfAtBottom,
+          header: buildChatHistoryHeader({
+            supported: previewHistorySupported,
+            olderCursor: previewOlderCursor,
+            loading: previewOlderLoading,
+            failed: previewOlderFailed,
+            onLoadOlder: () => {
+              void loadOlderPreview("manual");
+            },
+          }),
+          userOnly: previewUserOnly,
+          jumpToId,
+          onToggleUserOnly: () => {
+            previewUserOnly = !previewUserOnly;
+            previewJumpToId = null;
+            paint();
+          },
+          onPickUserMessage: (id) => {
+            previewUserOnly = false;
+            previewJumpToId = id;
+            paint();
+          },
+        });
+      };
+
+      const loadOlderPreview = async (mode: "auto" | "manual") => {
+        const before = previewOlderCursor;
+        if (!before || previewOlderLoading || isCancelled()) return;
+        const keepBottom = mode === "auto";
+        let didReset = false;
+        previewOlderLoading = true;
+        previewOlderFailed = false;
+        paint(true, keepBottom);
+        try {
+          const result = await loadOlderUntilUserPrompt({
+            initialCursor: before,
+            isHistoryPreview: true,
+            isCancelled,
+            fetchPage: async (cursor) => {
+              try {
+                return await fetchHistoryMessages(token(), entry, cursor);
+              } catch {
+                return null;
+              }
+            },
+            getMessages: () => previewMessages,
+            onPage: (win) => {
+              previewMessages = mergeWindow(previewMessages, win, true);
+              previewOlderCursor = win.older_cursor ?? null;
+              previewHistorySupported = win.older_cursor !== undefined;
+              paint(true, keepBottom);
+            },
+            onReset: (win) => {
+              didReset = true;
+              previewOlderLoading = false;
+              previewMessages = mergeWindow([], win);
+              previewOlderCursor = win.older_cursor ?? null;
+              previewHistorySupported = win.older_cursor !== undefined;
+              paint();
+            },
+          });
+          if (isCancelled()) return;
+          if (result.stop === "unsupported-old-server") {
+            previewOlderCursor = null;
+            previewHistorySupported = false;
+            previewOlderFailed = false;
+          } else if (result.stop === "failed") {
+            previewOlderFailed = true;
+          }
+        } finally {
+          if (!isCancelled()) {
+            previewOlderLoading = false;
+            if (!didReset) paint(true, keepBottom);
+          }
+        }
+      };
+
       try {
         const window = await fetchHistoryMessages(token(), entry);
-        if (!dialog.open || requestId !== previewRevision) return;
+        if (isCancelled()) return;
         body.replaceChildren();
-        if (window.source === "transcript" && window.messages.length) {
-          const paint = () => {
-            if (!dialog.open || requestId !== previewRevision) return;
-            const jumpToId = previewJumpToId;
-            previewJumpToId = null;
-            renderMessages(body, window.messages, scope, preview, {
-              userOnly: previewUserOnly,
-              jumpToId,
-              onToggleUserOnly: () => {
-                previewUserOnly = !previewUserOnly;
-                previewJumpToId = null;
-                paint();
-              },
-              onPickUserMessage: (id) => {
-                previewUserOnly = false;
-                previewJumpToId = id;
-                paint();
-              },
-            });
-          };
+        if (window.source === "transcript") {
+          previewMessages = mergeWindow([], window);
+          previewOlderCursor = window.older_cursor ?? null;
+          previewHistorySupported = window.older_cursor !== undefined;
           paint();
-        } else body.textContent = t("history.noMessages");
+          if (!hasUserPrompt(previewMessages) && previewOlderCursor) {
+            void loadOlderPreview("auto");
+          }
+        } else {
+          body.textContent = t("history.noMessages");
+        }
       } catch (error) {
-        if (dialog.open && requestId === previewRevision) body.textContent = failureText(error);
+        if (!isCancelled()) body.textContent = failureText(error);
       }
     }
     back.onclick = () => {

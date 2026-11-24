@@ -37,9 +37,11 @@ import {
   fallbackText,
   fetchMessages,
   fetchMessagesWithRecovery,
+  hasUserPrompt,
+  loadOlderUntilUserPrompt,
   mergeWindow,
 } from "./chat";
-import { renderMessages } from "./chat-view";
+import { buildChatHistoryHeader, renderMessages } from "./chat-view";
 import { mountHistory } from "./history-view";
 import {
   type AgentMap,
@@ -855,6 +857,7 @@ async function refreshChat(incremental: boolean) {
   if (chatBusy) { chatAgain = true; return; }
   let epoch = chatEpoch;
   chatBusy = true;
+  let needsAutoOlder = false;
   try {
     do {
       chatAgain = false;
@@ -891,6 +894,8 @@ async function refreshChat(incremental: boolean) {
       }
       const win = recovered.window;
       if (win.source !== "transcript") {
+        chatTimeline++;
+        chatOlderLoading = false;
         chatFallback = fallbackText(win.reason, activeAgent.agent_id); renderChat(); return;
       }
       chatFallback = null;
@@ -900,6 +905,7 @@ async function refreshChat(incremental: boolean) {
         chatHistorySupported = win.older_cursor !== undefined;
         chatOlderLoading = false;
         chatOlderFailed = false;
+        needsAutoOlder = true;
       }
       chatMessages = mergeWindow(incremental ? chatMessages : [], win);
       const advanced = win.cursor !== chatCursor;
@@ -908,45 +914,59 @@ async function refreshChat(incremental: boolean) {
       if (win.more && advanced) chatAgain = true;
       incremental = true;
     } while (chatAgain);
+    if (needsAutoOlder && !hasUserPrompt(chatMessages) && chatOlderCursor && viewMode === "chat") {
+      void loadOlderChat("auto");
+    }
   } finally { if (epoch === chatEpoch) chatBusy = false; }
 }
 
-async function loadOlderChat() {
+async function loadOlderChat(mode: "auto" | "manual" = "manual") {
   const agent = attachedAgent();
   const before = chatOlderCursor;
   if (!agent || !before || chatOlderLoading || viewMode !== "chat") return;
   const epoch = chatEpoch;
   const timeline = chatTimeline;
   const scope = chatScope;
+  const keepBottom = mode === "auto";
+  const isCancelled = () =>
+    epoch !== chatEpoch || timeline !== chatTimeline || scope !== chatScope || viewMode !== "chat";
   chatOlderLoading = true;
   chatOlderFailed = false;
-  renderChat(true);
+  renderChat(true, keepBottom);
   try {
-    const win = await fetchMessages(token(), agent.agent_id, agent.agent_session_id, undefined, before);
-    if (epoch !== chatEpoch || timeline !== chatTimeline || scope !== chatScope || chatOlderCursor !== before) return;
-    if (win.source !== "transcript") { chatOlderFailed = true; return; }
-    if (win.reset) {
-      resetChatPages();
-      chatScope = scope;
-      chatMessages = mergeWindow([], win);
-      chatCursor = win.cursor;
-      chatOlderCursor = win.older_cursor ?? null;
-      chatHistorySupported = win.older_cursor !== undefined;
-      renderChat();
-      return;
+    const result = await loadOlderUntilUserPrompt({
+      initialCursor: before,
+      isCancelled,
+      fetchPage: (cursor) => fetchMessages(token(), agent.agent_id, agent.agent_session_id, undefined, cursor),
+      getMessages: () => chatMessages,
+      onPage: (win) => {
+        chatMessages = mergeWindow(chatMessages, win, true);
+        chatOlderCursor = win.older_cursor ?? null;
+        chatHistorySupported = win.older_cursor !== undefined;
+        renderChat(true, keepBottom);
+      },
+      onReset: (win) => {
+        resetChatPages();
+        chatScope = scope;
+        chatMessages = mergeWindow([], win);
+        chatCursor = win.cursor;
+        chatOlderCursor = win.older_cursor ?? null;
+        chatHistorySupported = win.older_cursor !== undefined;
+        renderChat();
+      },
+    });
+    if (result.stop === "failed" && !isCancelled()) {
+      chatOlderFailed = true;
     }
-    if (win.older_cursor === before) { chatOlderFailed = true; return; }
-    chatMessages = mergeWindow(chatMessages, win, true);
-    chatOlderCursor = win.older_cursor ?? null;
   } finally {
     if (epoch === chatEpoch && timeline === chatTimeline) {
       chatOlderLoading = false;
-      renderChat(true);
+      if (viewMode === "chat") renderChat(true, keepBottom);
     }
   }
 }
 
-function renderChat(prepend = false) {
+function renderChat(prepend = false, keepBottomIfAtBottom = false) {
   const box = $("chat-view");
   if (chatFallback) {
     delete box.dataset.chatScope;
@@ -962,19 +982,13 @@ function renderChat(prepend = false) {
     box.replaceChildren(wrap);
     return;
   }
-  let header: HTMLElement | undefined;
-  if (chatHistorySupported) {
-    header = document.createElement("div");
-    header.className = "chat-history";
-    if (chatOlderCursor) {
-      const load = document.createElement("button");
-      load.type = "button";
-      load.disabled = chatOlderLoading;
-      load.textContent = t(chatOlderLoading ? "chat.loadingOlder" : chatOlderFailed ? "chat.olderFailed" : "chat.loadOlder");
-      load.addEventListener("click", () => { void loadOlderChat(); });
-      header.appendChild(load);
-    } else header.textContent = t("chat.beginning");
-  }
+  const header = buildChatHistoryHeader({
+    supported: chatHistorySupported,
+    olderCursor: chatOlderCursor,
+    loading: chatOlderLoading,
+    failed: chatOlderFailed,
+    onLoadOlder: () => { void loadOlderChat("manual"); },
+  });
   if (chatMessages.length === 0 && !chatOlderCursor) {
     delete box.dataset.chatScope;
     delete box.dataset.chatUserOnly;
@@ -985,6 +999,7 @@ function renderChat(prepend = false) {
   chatJumpToId = null;
   renderMessages(box, chatMessages, JSON.stringify([chatScope, chatEpoch]), box, {
     prepend,
+    keepBottomIfAtBottom,
     header,
     userOnly: chatUserOnly,
     jumpToId,

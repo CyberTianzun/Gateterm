@@ -61,6 +61,24 @@ test("preview also resolves by identity and does not send a transcript path", as
   assert.equal((await fetchHistoryMessages("t", entry)).source, "transcript");
 });
 
+test("preview encodes optional opaque before cursor and omits it when undefined", async () => {
+  let seenUrl = "";
+  globalThis.fetch = async (url) => {
+    seenUrl = url;
+    return { ok: true, json: async () => ({ source: "transcript", messages: [] }) };
+  };
+  await fetchHistoryMessages("t", entry, "opaque/+==");
+  const withBefore = new URL(seenUrl, "http://localhost");
+  assert.equal(withBefore.searchParams.get("agent_id"), "codex");
+  assert.equal(withBefore.searchParams.get("agent_session_id"), "known");
+  assert.equal(withBefore.searchParams.get("before"), "opaque/+==");
+  assert.equal(withBefore.searchParams.has("after"), false);
+
+  await fetchHistoryMessages("t", entry);
+  const withoutBefore = new URL(seenUrl, "http://localhost");
+  assert.equal(withoutBefore.searchParams.has("before"), false);
+});
+
 test("old servers, disconnections and typed failures produce readable errors", async () => {
   globalThis.fetch = async () => ({ ok: false, json: async () => ({ error: "missing-directory" }) });
   await assert.rejects(openHistory("t", entry), (e) => e instanceof HistoryError && e.reason === "missing-directory");
