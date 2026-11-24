@@ -163,15 +163,26 @@ struct HistoryView: View {
     }
 }
 
+private func previewSessionId(_ id: String) -> Int64 {
+    var hash: UInt64 = 14_695_981_039_346_656_037
+    for byte in id.utf8 {
+        hash ^= UInt64(byte)
+        hash &*= 1_099_511_628_211
+    }
+    return Int64(bitPattern: hash)
+}
+
 private struct HistoryConversationView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let entry: HistoryEntry
-    @State private var messages: [ChatMessage] = []
-    @State private var loading = true
+    @State private var chat = ChatUiState(loading: true)
     @State private var error: String?
     @State private var detailsOpen = false
     @State private var userOnly = false
+    @State private var olderTask: Task<Void, Never>?
+    @State private var previewRevision: UInt64 = 0
+    @State private var olderRunToken: UInt64 = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -191,10 +202,11 @@ private struct HistoryConversationView: View {
                 ContentUnavailableView(historyErrorText(error), systemImage: "exclamationmark.triangle")
             } else {
                 ChatView(
-                    chat: ChatUiState(messages: messages, loading: loading),
+                    chat: chat,
                     appearance: model.appearance,
                     userOnly: $userOnly,
-                    onOpenTerminal: { dismiss() }
+                    onOpenTerminal: { dismiss() },
+                    onLoadOlder: { startOlderPreview(manual: true) }
                 )
             }
         }
@@ -227,14 +239,123 @@ private struct HistoryConversationView: View {
             }
         }
         .onChange(of: entry.id) { _, _ in
+            cancelOlderPreview()
             userOnly = false
         }
+        .onDisappear {
+            cancelOlderPreview()
+        }
         .task(id: entry.id) {
+            cancelOlderPreview()
+            let revision = previewRevision
             userOnly = false
-            do { messages = try await model.previewHistory(entry) } catch {
+            error = nil
+            chat = ChatUiState(sessionId: previewSessionId(entry.id), loading: true)
+            do {
+                let win = try await model.previewHistory(entry)
+                guard !Task.isCancelled, previewRevision == revision else { return }
+                guard case let .transcript(messages, _, _, _, olderCursor, historySupported) = win else {
+                    self.error = "unreadable"
+                    chat.loading = false
+                    return
+                }
+                chat = ChatUiState(
+                    sessionId: previewSessionId(entry.id),
+                    messages: Chat.merge([], win),
+                    loading: false,
+                    olderCursor: olderCursor,
+                    historySupported: historySupported
+                )
+                if !Chat.hasUserPrompt(messages) && olderCursor != nil {
+                    startOlderPreview(manual: false)
+                }
+            } catch is CancellationError {
+            } catch {
+                guard !Task.isCancelled, previewRevision == revision else { return }
                 self.error = (error as? HistoryFailure)?.reason ?? "unreadable"
+                chat.loading = false
             }
-            loading = false
+        }
+    }
+
+    private func cancelOlderPreview() {
+        previewRevision &+= 1
+        olderRunToken &+= 1
+        olderTask?.cancel()
+        olderTask = nil
+        if chat.olderLoading { chat.olderLoading = false }
+    }
+
+    private func startOlderPreview(manual: Bool) {
+        guard error == nil,
+              let before = chat.olderCursor,
+              !before.isEmpty,
+              !chat.olderLoading,
+              olderTask == nil else { return }
+        if !manual && Chat.hasUserPrompt(chat.messages) { return }
+        let revision = previewRevision
+        olderRunToken &+= 1
+        let runToken = olderRunToken
+        let targetEntry = entry
+        chat.olderLoading = true
+        chat.olderFailed = false
+        olderTask = Task { @MainActor in
+            defer {
+                if olderRunToken == runToken {
+                    olderTask = nil
+                    if chat.olderLoading { chat.olderLoading = false }
+                }
+            }
+            let result = await Chat.loadOlderUntilUserPrompt(
+                initialCursor: before,
+                isHistoryPreview: true,
+                isCancelled: { previewRevision != revision || olderRunToken != runToken },
+                fetchPage: { cursor in
+                    do {
+                        return try await model.previewHistory(targetEntry, before: cursor)
+                    } catch {
+                        return nil
+                    }
+                },
+                getMessages: { chat.messages },
+                onPage: { win, _ in
+                    guard previewRevision == revision,
+                          olderRunToken == runToken,
+                          case let .transcript(_, _, _, _, olderCursor, historySupported) = win else { return }
+                    chat.messages = Chat.merge(chat.messages, win, prepend: true)
+                    chat.olderCursor = olderCursor
+                    chat.historySupported = historySupported
+                    chat.olderFailed = false
+                    if manual { chat.historyPage += 1 }
+                },
+                onReset: { win in
+                    guard previewRevision == revision,
+                          olderRunToken == runToken,
+                          case let .transcript(_, _, _, _, olderCursor, historySupported) = win else { return }
+                    chat.messages = Chat.merge([], win)
+                    chat.olderCursor = olderCursor
+                    chat.historySupported = historySupported
+                    chat.olderLoading = false
+                    chat.olderFailed = false
+                    chat.historyPage = 0
+                }
+            )
+            guard !Task.isCancelled, previewRevision == revision, olderRunToken == runToken else { return }
+            switch result.stop {
+            case .unsupportedOldServer:
+                chat.olderCursor = nil
+                chat.historySupported = false
+                chat.olderLoading = false
+                chat.olderFailed = false
+            case .failed:
+                chat.olderLoading = false
+                chat.olderFailed = true
+            case .foundUserPrompt, .beginning, .pageLimit:
+                chat.olderLoading = false
+                chat.olderFailed = false
+            case .reset, .cancelled:
+                break
+            }
         }
     }
 }

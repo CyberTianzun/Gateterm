@@ -2,9 +2,9 @@ import Foundation
 
 /// 聊天视图的数据层。消息来自 agent 自己写的对话记录,走 HTTP 拉取;增量由 `agent-event` 触发,不轮询。
 /// 与 Android `Chat.kt`、web `chat.ts` 一一对应。
-enum ChatRole { case user, assistant, system }
+enum ChatRole: Sendable { case user, assistant, system }
 
-enum ChatBlock: Equatable {
+enum ChatBlock: Equatable, Sendable {
     case text(String)
     case thinking(String)
     /// `input` 是服务端给的「给人看的一行」,不是原始 JSON
@@ -12,7 +12,7 @@ enum ChatBlock: Equatable {
     case toolResult(ok: Bool, text: String)
 }
 
-struct ChatMessage: Identifiable, Equatable {
+struct ChatMessage: Identifiable, Equatable, Sendable {
     let id: String
     let role: ChatRole
     let ts: Int64?
@@ -20,12 +20,11 @@ struct ChatMessage: Identifiable, Equatable {
 }
 
 extension ChatMessage {
-    /// 仅提取用户主动发出的非空正文块，剔除同条里的 tool-result 或空白块。
+    /// 仅提取用户主动发出的非空正文块，剔除同条里的 tool-result、空白或框架注入上下文。
     var userPromptTextBlocks: [String] {
         guard role == .user else { return [] }
         return blocks.compactMap { block in
-            guard case let .text(text) = block,
-                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            guard case let .text(text) = block, !Chat.isHarnessUserText(text) else { return nil }
             return text
         }
     }
@@ -36,7 +35,7 @@ extension ChatMessage {
 }
 
 /// 读不到对话记录时的原因。服务端给的是机器可读的键,文案在 UI 层按语言渲染。
-enum ChatFallback: String {
+enum ChatFallback: String, Sendable {
     case disabled
     case noTranscriptPath = "no-transcript-path"
     case unsupportedAgent = "unsupported-agent"
@@ -47,13 +46,54 @@ enum ChatFallback: String {
     static func parse(_ raw: String) -> ChatFallback { ChatFallback(rawValue: raw) ?? .unreadable }
 }
 
-enum ChatWindow: Equatable {
+enum ChatWindow: Equatable, Sendable {
     /// `cursor` 是不透明的:原样带回,**不解析**(协议 A9)
     case transcript(messages: [ChatMessage], cursor: String, reset: Bool, more: Bool, olderCursor: String?, historySupported: Bool)
     case terminal(ChatFallback)
 }
 
+enum OlderLoadStop: Equatable, Sendable {
+    case foundUserPrompt
+    case beginning
+    case pageLimit
+    case reset
+    case unsupportedOldServer
+    case failed
+    case cancelled
+}
+
+struct OlderLoadResult: Equatable, Sendable {
+    let stop: OlderLoadStop
+    let pagesFetched: Int
+}
+
 enum Chat {
+    static let maxAutoOlderPages = 16
+
+    private static let harnessUserPrefixes = [
+        "# AGENTS.md instructions",
+        "<environment_context>",
+        "<permissions instructions>",
+        "<developer_instructions>",
+        "<system-reminder>",
+        "<local-command-caveat>",
+        "<command-name>",
+        "This session is being continued from a previous conversation",
+    ]
+    private static let codexRequestMarker = "## My request for Codex:"
+
+    /// 判断 role="user" 的文本块是否为空白或框架注入上下文（对齐服务端 history::prompt_body）。
+    static func isHarnessUserText(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return true }
+        if harnessUserPrefixes.contains(where: { trimmed.hasPrefix($0) }) { return true }
+        if let range = trimmed.range(of: codexRequestMarker),
+           trimmed[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        return false
+    }
+
     static func parseWindow(_ data: Data) -> ChatWindow {
         guard let root = JSON(data: data) else { return .terminal(.unreadable) }
         guard root.string("source") == "transcript" else { return .terminal(.parse(root.string("reason"))) }
@@ -86,20 +126,31 @@ enum Chat {
         return ChatMessage(id: id, role: role, ts: obj.nullableInt64("ts"), blocks: blocks)
     }
 
+    private static func uniqueIncoming(_ base: [ChatMessage], _ messages: [ChatMessage]) -> [ChatMessage] {
+        var seen = Set(base.map(\.id))
+        return messages.filter { seen.insert($0.id).inserted }
+    }
+
     /// `reset` 是整段替换;追加时按 id 去重(窗口边界上的那条可能被重复送来),同一批里也去重。
     static func merge(_ prev: [ChatMessage], _ win: ChatWindow, prepend: Bool = false) -> [ChatMessage] {
         guard case let .transcript(messages, _, reset, _, _, _) = win else { return prev }
         let base = reset ? [] : prev
-        var seen = Set(base.map(\.id))
-        let incoming = messages.filter { seen.insert($0.id).inserted }
+        let incoming = uniqueIncoming(base, messages)
         return prepend ? incoming + base : base + incoming
+    }
+
+    /// 计算本次向后翻页真正新增（未与已有消息重复）的前置消息集合。
+    static func newlyPrepended(_ prev: [ChatMessage], _ win: ChatWindow) -> [ChatMessage] {
+        guard case let .transcript(messages, _, reset, _, _, _) = win else { return [] }
+        let base = reset ? [] : prev
+        return uniqueIncoming(base, messages)
     }
 
     /// 老版本服务端没有这个路由:降级成「读不到」,不是报错(协议 T12)。
     static func fetch(_ http: ServerHTTP, agentId: String, agentSessionId: String, after: String?, before: String? = nil) async -> ChatWindow {
         var query = [("agent_id", agentId), ("agent_session_id", agentSessionId)]
         if let after { query.append(("after", after)) }
-        if let before { query.append(("before", before)) }
+        if let before, !before.isEmpty { query.append(("before", before)) }
         guard let (status, body) = try? await http.request("/api/agents/messages", query: query), (200..<300).contains(status) else {
             return .terminal(.unreadable)
         }
@@ -109,6 +160,68 @@ enum Chat {
     /// 筛出所有用户输入的消息并保持原始时间顺序。
     static func userPrompts(_ messages: [ChatMessage]) -> [ChatMessage] {
         messages.filter(\.isUserPrompt)
+    }
+
+    /// 判断消息列表中是否已包含至少一条用户主动提问。
+    static func hasUserPrompt(_ messages: [ChatMessage]) -> Bool {
+        messages.contains(where: \.isUserPrompt)
+    }
+
+    /// 自动连续向后拉取更早消息，直到新前置的消息中包含用户主动提问、到达开头、
+    /// 触及单次上限（16 页）、遇到 reset、失败或被取消为止。
+    @MainActor
+    static func loadOlderUntilUserPrompt(
+        initialCursor: String?,
+        maxPages: Int = maxAutoOlderPages,
+        isHistoryPreview: Bool = false,
+        isCancelled: @MainActor () -> Bool,
+        fetchPage: @MainActor (String) async -> ChatWindow?,
+        getMessages: @MainActor () -> [ChatMessage],
+        onPage: @MainActor (ChatWindow, [ChatMessage]) -> Void,
+        onReset: @MainActor (ChatWindow) -> Void
+    ) async -> OlderLoadResult {
+        var cursor = initialCursor
+        var pagesFetched = 0
+        while true {
+            if Task.isCancelled || isCancelled() {
+                return OlderLoadResult(stop: .cancelled, pagesFetched: pagesFetched)
+            }
+            guard let activeCursor = cursor, !activeCursor.isEmpty else {
+                return OlderLoadResult(stop: .beginning, pagesFetched: pagesFetched)
+            }
+            if pagesFetched >= maxPages {
+                return OlderLoadResult(stop: .pageLimit, pagesFetched: pagesFetched)
+            }
+
+            let win = await fetchPage(activeCursor)
+            if Task.isCancelled || isCancelled() {
+                return OlderLoadResult(stop: .cancelled, pagesFetched: pagesFetched)
+            }
+            guard let win, case let .transcript(_, _, reset, _, olderCursor, _) = win else {
+                return OlderLoadResult(stop: .failed, pagesFetched: pagesFetched)
+            }
+            if reset {
+                if olderCursor == activeCursor {
+                    return OlderLoadResult(
+                        stop: isHistoryPreview ? .unsupportedOldServer : .failed,
+                        pagesFetched: pagesFetched
+                    )
+                }
+                onReset(win)
+                return OlderLoadResult(stop: .reset, pagesFetched: pagesFetched)
+            }
+            if olderCursor == activeCursor {
+                return OlderLoadResult(stop: .failed, pagesFetched: pagesFetched)
+            }
+
+            let incoming = newlyPrepended(getMessages(), win)
+            pagesFetched += 1
+            onPage(win, incoming)
+            if hasUserPrompt(incoming) {
+                return OlderLoadResult(stop: .foundUserPrompt, pagesFetched: pagesFetched)
+            }
+            cursor = olderCursor
+        }
     }
 }
 

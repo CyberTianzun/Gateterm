@@ -204,6 +204,53 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(Chat.userPrompts(messages).map(\.id), ["u1", "u2"])
     }
 
+    func testHarnessPrefixesAndCodexMarkerAreExcludedFromUserPrompts() {
+        let harnessInputs = [
+            "# AGENTS.md instructions\nDo X",
+            "  <environment_context>\n<cwd>/repo</cwd>",
+            "<permissions instructions>\nallow",
+            "<developer_instructions>\nbe terse",
+            "<system-reminder>hook output</system-reminder>",
+            "<local-command-caveat>caveat</local-command-caveat>",
+            "<command-name>/clear</command-name>",
+            "This session is being continued from a previous conversation\nSummary...",
+            "Context\n## My request for Codex:\n   \t ",
+        ]
+        for (idx, text) in harnessInputs.enumerated() {
+            XCTAssertTrue(Chat.isHarnessUserText(text), "expected harness text at index \(idx)")
+            let msg = ChatMessage(id: "h\(idx)", role: .user, ts: nil, blocks: [.text(text)])
+            XCTAssertFalse(msg.isUserPrompt, "expected non-user-prompt at index \(idx)")
+            XCTAssertEqual(msg.userPromptTextBlocks, [])
+        }
+
+        let codexPrompt = ChatMessage(
+            id: "codex-real",
+            role: .user,
+            ts: nil,
+            blocks: [.text("Preamble\n## My request for Codex:\nFix the crash")]
+        )
+        XCTAssertTrue(codexPrompt.isUserPrompt)
+        XCTAssertEqual(codexPrompt.userPromptTextBlocks, ["Preamble\n## My request for Codex:\nFix the crash"])
+
+        let mixedHarnessAndReal = ChatMessage(
+            id: "mixed-harness",
+            role: .user,
+            ts: nil,
+            blocks: [
+                .toolResult(ok: true, text: "ok"),
+                .text("<system-reminder>ignored</system-reminder>"),
+                .text("Real prompt"),
+            ]
+        )
+        XCTAssertTrue(mixedHarnessAndReal.isUserPrompt)
+        XCTAssertEqual(mixedHarnessAndReal.userPromptTextBlocks, ["Real prompt"])
+        XCTAssertTrue(Chat.hasUserPrompt([mixedHarnessAndReal]))
+        XCTAssertFalse(Chat.hasUserPrompt([
+            ChatMessage(id: "h-only", role: .user, ts: nil, blocks: [.text("<system-reminder>only</system-reminder>")]),
+            ChatMessage(id: "a-only", role: .assistant, ts: nil, blocks: [.text("reply")]),
+        ]))
+    }
+
     func testUiPaletteMarkdownColorsMeetContrastAcrossBuiltinsAndFallbacks() {
         for theme in AppearanceCodec.builtins {
             let palette = theme.palette

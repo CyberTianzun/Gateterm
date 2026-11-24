@@ -70,6 +70,8 @@ final class AppModel {
     @ObservationIgnored private var pendingOpen = PendingOpenTracker()
     @ObservationIgnored private var chatTask: Task<Void, Never>?
     @ObservationIgnored private var olderChatTask: Task<Void, Never>?
+    @ObservationIgnored private var chatTaskToken: UInt64 = 0
+    @ObservationIgnored private var olderChatToken: UInt64 = 0
     @ObservationIgnored private var chatTimeline: UInt64 = 0
     @ObservationIgnored private var chatAgain = false
     @ObservationIgnored private var chatCursor: String?
@@ -425,7 +427,9 @@ final class AppModel {
             if chatOpen { refreshChat(incremental: true) }
         } else {
             suspendViewports()
+            chatTaskToken &+= 1
             chatTask?.cancel(); chatTask = nil
+            olderChatToken &+= 1
             olderChatTask?.cancel(); olderChatTask = nil
             chat.olderLoading = false
         }
@@ -513,9 +517,9 @@ final class AppModel {
         return try await AgentHistory.fetch(http, query: query, agent: agent, offset: offset, refresh: refresh, workspace: workspace)
     }
 
-    func previewHistory(_ entry: HistoryEntry) async throws -> [ChatMessage] {
+    func previewHistory(_ entry: HistoryEntry, before: String? = nil) async throws -> ChatWindow {
         guard let http else { throw HistoryFailure(reason: "unreadable") }
-        return try await AgentHistory.messages(http, entry)
+        return try await AgentHistory.messages(http, entry, before: before)
     }
 
     func resumeHistory(_ entry: HistoryEntry) async throws {
@@ -772,7 +776,9 @@ final class AppModel {
 
     private func resetChat() {
         chatTimeline &+= 1
+        olderChatToken &+= 1
         olderChatTask?.cancel(); olderChatTask = nil
+        chatTaskToken &+= 1
         chatTask?.cancel(); chatTask = nil
         chatAgain = false
         chatCursor = nil
@@ -784,14 +790,25 @@ final class AppModel {
     private func refreshChat(incremental: Bool) {
         if chatTask != nil { chatAgain = true; return }
         guard let http else { return }
-        chatTask = Task { [weak self] in
-            defer { self?.chatTask = nil }
+        chatTaskToken &+= 1
+        let taskToken = chatTaskToken
+        chatTask = Task { @MainActor [weak self] in
+            defer {
+                if let self, self.chatTaskToken == taskToken {
+                    self.chatTask = nil
+                }
+            }
             var inc = incremental
+            var needsAutoOlder = false
             repeat {
-                guard let self, !Task.isCancelled else { return }
+                guard let self, !Task.isCancelled, self.chatTaskToken == taskToken else { return }
                 self.chatAgain = false
                 guard let sessionId = self.chat.sessionId, self.chatOpen else { return }
                 guard let agent = AgentSessions.chatAgentFor(self.agents, sessionId) else {
+                    self.chatTimeline &+= 1
+                    self.olderChatToken &+= 1
+                    self.olderChatTask?.cancel(); self.olderChatTask = nil
+                    self.chat.olderLoading = false
                     self.chat.notice = .noAgent
                     self.chat.loading = false
                     return
@@ -799,13 +816,19 @@ final class AppModel {
                 if agent.key != self.chatAgentKey { inc = false }
                 let win = await Chat.fetch(http, agentId: agent.agentId, agentSessionId: agent.agentSessionId,
                                            after: inc ? self.chatCursor : nil)
-                guard !Task.isCancelled, self.chat.sessionId == sessionId, self.chatOpen else { return }
+                guard !Task.isCancelled, self.chatTaskToken == taskToken,
+                      self.chat.sessionId == sessionId, self.chatOpen else { return }
                 if AgentSessions.chatAgentFor(self.agents, sessionId)?.key != agent.key {
                     self.chatAgain = true
                     continue
                 }
                 switch win {
                 case let .terminal(reason):
+                    needsAutoOlder = false
+                    self.chatTimeline &+= 1
+                    self.olderChatToken &+= 1
+                    self.olderChatTask?.cancel(); self.olderChatTask = nil
+                    self.chat.olderLoading = false
                     self.chat.notice = .server(reason, agentId: agent.agentId)
                     self.chat.loading = false
                 case let .transcript(_, cursor, reset, more, olderCursor, historySupported):
@@ -813,7 +836,9 @@ final class AppModel {
                     let fresh = reset || !inc
                     if fresh {
                         self.chatTimeline &+= 1
+                        self.olderChatToken &+= 1
                         self.olderChatTask?.cancel(); self.olderChatTask = nil
+                        needsAutoOlder = true
                     }
                     self.chatCursor = cursor
                     self.chatAgentKey = agent.key
@@ -826,46 +851,113 @@ final class AppModel {
                         next.historySupported = historySupported
                         next.olderLoading = false
                         next.olderFailed = false
+                        next.historyPage = 0
                     }
                     self.chat = next
                     if more && advanced { self.chatAgain = true }
                 }
                 inc = true
             } while self?.chatAgain == true
+            guard let self, !Task.isCancelled, self.chatTaskToken == taskToken else { return }
+            if needsAutoOlder,
+               self.chatOpen,
+               self.chat.notice == nil,
+               !Chat.hasUserPrompt(self.chat.messages),
+               self.chat.olderCursor != nil {
+                self.startOlderChat(manual: false)
+            }
         }
     }
 
     func loadOlderChat() {
-        guard let sessionId = chat.sessionId, let before = chat.olderCursor,
-              let agent = AgentSessions.chatAgentFor(agents, sessionId), let http,
-              chatOpen, !chat.olderLoading, olderChatTask == nil else { return }
+        startOlderChat(manual: true)
+    }
+
+    private func startOlderChat(manual: Bool) {
+        guard let sessionId = chat.sessionId,
+              let before = chat.olderCursor,
+              !before.isEmpty,
+              let agent = AgentSessions.chatAgentFor(agents, sessionId),
+              let http,
+              chatOpen,
+              !chat.olderLoading,
+              olderChatTask == nil else { return }
+        if !manual && Chat.hasUserPrompt(chat.messages) { return }
         let timeline = chatTimeline
+        olderChatToken &+= 1
+        let token = olderChatToken
         chat.olderLoading = true
         chat.olderFailed = false
-        olderChatTask = Task { [weak self] in
-            defer { self?.olderChatTask = nil }
-            let win = await Chat.fetch(http, agentId: agent.agentId, agentSessionId: agent.agentSessionId, after: nil, before: before)
-            guard let self, !Task.isCancelled, timeline == self.chatTimeline, self.chatOpen, self.chat.sessionId == sessionId,
-                  self.chat.olderCursor == before, AgentSessions.chatAgentFor(self.agents, sessionId)?.key == agent.key else { return }
-            guard case let .transcript(_, cursor, reset, _, olderCursor, historySupported) = win, reset || olderCursor != before else {
+        olderChatTask = Task { @MainActor [weak self] in
+            defer {
+                if let self, self.olderChatToken == token {
+                    self.olderChatTask = nil
+                    if self.chat.olderLoading {
+                        self.chat.olderLoading = false
+                    }
+                }
+            }
+            let contextValid: @MainActor () -> Bool = { [weak self] in
+                guard let self else { return false }
+                return self.olderChatToken == token &&
+                    timeline == self.chatTimeline &&
+                    self.chatOpen &&
+                    self.chat.sessionId == sessionId &&
+                    AgentSessions.chatAgentFor(self.agents, sessionId)?.key == agent.key
+            }
+            let result = await Chat.loadOlderUntilUserPrompt(
+                initialCursor: before,
+                isHistoryPreview: false,
+                isCancelled: { !contextValid() },
+                fetchPage: { cursor in
+                    await Chat.fetch(http, agentId: agent.agentId, agentSessionId: agent.agentSessionId, after: nil, before: cursor)
+                },
+                getMessages: { [weak self] in self?.chat.messages ?? [] },
+                onPage: { [weak self] win, _ in
+                    guard let self, contextValid(),
+                          case let .transcript(_, _, _, _, olderCursor, historySupported) = win else { return }
+                    var next = self.chat
+                    next.messages = Chat.merge(next.messages, win, prepend: true)
+                    next.olderCursor = olderCursor
+                    next.historySupported = historySupported
+                    next.olderFailed = false
+                    if manual { next.historyPage += 1 }
+                    self.chat = next
+                },
+                onReset: { [weak self] win in
+                    guard let self, contextValid(),
+                          case let .transcript(_, cursor, _, _, olderCursor, historySupported) = win else { return }
+                    self.chatTaskToken &+= 1
+                    self.chatTask?.cancel(); self.chatTask = nil
+                    self.chatAgain = false
+                    self.chatTimeline &+= 1
+                    self.chatCursor = cursor
+                    self.chatAgentKey = agent.key
+                    var next = self.chat
+                    next.messages = Chat.merge([], win)
+                    next.olderCursor = olderCursor
+                    next.historySupported = historySupported
+                    next.olderLoading = false
+                    next.olderFailed = false
+                    next.historyPage = 0
+                    self.chat = next
+                }
+            )
+            guard !Task.isCancelled, let self, self.olderChatToken == token else { return }
+            switch result.stop {
+            case .reset:
+                break
+            case .failed:
+                guard contextValid() else { return }
                 self.chat.olderLoading = false
                 self.chat.olderFailed = true
-                return
+            case .foundUserPrompt, .beginning, .pageLimit:
+                guard contextValid() else { return }
+                self.chat.olderLoading = false
+                self.chat.olderFailed = false
+            case .cancelled, .unsupportedOldServer:
+                break
             }
-            if reset {
-                self.chatTask?.cancel(); self.chatTask = nil; self.chatAgain = false
-                self.chatTimeline &+= 1
-                self.chatCursor = cursor
-                self.chatAgentKey = agent.key
-            }
-            var next = self.chat
-            next.messages = Chat.merge(next.messages, win, prepend: true)
-            next.olderCursor = olderCursor
-            next.historySupported = historySupported
-            next.olderLoading = false
-            next.olderFailed = false
-            next.historyPage += 1
-            self.chat = next
         }
     }
 

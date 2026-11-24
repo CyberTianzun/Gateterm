@@ -220,6 +220,37 @@ final class AgentAndChatTests: XCTestCase {
         XCTAssertEqual(older.map(\.id), ["a", "b", "c", "d"])
         XCTAssertEqual(older[2].blocks, [.text("latest c")])
         XCTAssertEqual(Chat.merge([msg("a")], .terminal(.disabled)).map(\.id), ["a"])
+        XCTAssertEqual(Chat.newlyPrepended([msg("c")], window([msg("b"), msg("c")], reset: false)).map(\.id), ["b"])
+        XCTAssertEqual(Chat.newlyPrepended([msg("c")], window([msg("b"), msg("c")], reset: true)).map(\.id), ["b", "c"])
+        XCTAssertEqual(Chat.newlyPrepended([msg("c")], .terminal(.unreadable)).map(\.id), [])
+    }
+
+    func testAgentHistoryMessagesQueryIncludesBeforeOnlyWhenNonEmpty() throws {
+        let entry = HistoryEntry(
+            agentId: "claude-code",
+            agentName: "Claude Code",
+            sessionId: "sess-1",
+            title: "T",
+            cwd: nil,
+            updatedAt: 0,
+            terminalSession: nil,
+            canResume: true,
+            unavailableReason: nil
+        )
+        let http = ServerHTTP(origin: "https://host:8443", token: "tok")
+
+        let q0 = AgentHistory.messagesQuery(entry, before: nil)
+        XCTAssertEqual(q0.map(\.0), ["agent_id", "agent_session_id"])
+        let qEmpty = AgentHistory.messagesQuery(entry, before: "")
+        XCTAssertEqual(qEmpty.map(\.0), ["agent_id", "agent_session_id"])
+
+        let qBefore = AgentHistory.messagesQuery(entry, before: "opaque/+==")
+        XCTAssertEqual(qBefore.map(\.0), ["agent_id", "agent_session_id", "before"])
+        XCTAssertEqual(qBefore.map(\.1), ["claude-code", "sess-1", "opaque/+=="])
+
+        let url = try XCTUnwrap(http.url("/api/agents/history/messages", query: qBefore))
+        let items = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+        XCTAssertEqual(items.first(where: { $0.name == "before" })?.value, "opaque/+==")
     }
 
     func testAgentSnapshotsAndEvents() {
@@ -255,6 +286,230 @@ final class AgentAndChatTests: XCTestCase {
         XCTAssertEqual(list[0].detail, "zsh -l")
         XCTAssertEqual(list[0].provider, "unknown")
         XCTAssertEqual(list[1].cwd, "/w")
+    }
+}
+
+@MainActor
+private final class OlderTestState {
+    var messages: [ChatMessage]
+    var fetched: [String] = []
+    var count = 0
+    var didReset = false
+    var cancelled = false
+
+    init(_ messages: [ChatMessage] = []) {
+        self.messages = messages
+    }
+}
+
+@MainActor
+final class ChatPaginationTests: XCTestCase {
+    private func userMsg(_ id: String, _ text: String = "prompt") -> ChatMessage {
+        ChatMessage(id: id, role: .user, ts: nil, blocks: [.text(text)])
+    }
+
+    private func assistantMsg(_ id: String) -> ChatMessage {
+        ChatMessage(id: id, role: .assistant, ts: nil, blocks: [.text("reply")])
+    }
+
+    private func harnessMsg(_ id: String) -> ChatMessage {
+        ChatMessage(id: id, role: .user, ts: nil, blocks: [.text("<system-reminder>ctx</system-reminder>")])
+    }
+
+    private func toolResultMsg(_ id: String) -> ChatMessage {
+        ChatMessage(id: id, role: .user, ts: nil, blocks: [.toolResult(ok: true, text: "done")])
+    }
+
+    private func transcript(
+        _ messages: [ChatMessage],
+        cursor: String = "cur",
+        reset: Bool = false,
+        olderCursor: String? = nil,
+        historySupported: Bool = true
+    ) -> ChatWindow {
+        .transcript(
+            messages: messages,
+            cursor: cursor,
+            reset: reset,
+            more: false,
+            olderCursor: olderCursor,
+            historySupported: historySupported
+        )
+    }
+
+    func testStopsAfterOnePageWhenHumanUserPromptFound() async {
+        let state = OlderTestState([assistantMsg("a1")])
+        let result = await Chat.loadOlderUntilUserPrompt(
+            initialCursor: "c1",
+            isCancelled: { false },
+            fetchPage: { cursor in
+                state.fetched.append(cursor)
+                return self.transcript([self.userMsg("u1", "hello"), self.assistantMsg("a0")], olderCursor: "c2")
+            },
+            getMessages: { state.messages },
+            onPage: { win, _ in state.messages = Chat.merge(state.messages, win, prepend: true) },
+            onReset: { _ in XCTFail("unexpected reset") }
+        )
+        XCTAssertEqual(result, OlderLoadResult(stop: .foundUserPrompt, pagesFetched: 1))
+        XCTAssertEqual(state.fetched, ["c1"])
+        XCTAssertEqual(state.messages.map(\.id), ["u1", "a0", "a1"])
+    }
+
+    func testContinuesAcrossToolHarnessEmptyAndBoundaryDuplicatesUntilNewPrompt() async {
+        let state = OlderTestState([userMsg("u-dup", "existing"), assistantMsg("a-tail")])
+        let pages: [String: ChatWindow] = [
+            "c1": transcript([harnessMsg("h1"), toolResultMsg("t1"), userMsg("u-dup", "existing")], olderCursor: "c2"),
+            "c2": transcript([], olderCursor: "c3"),
+            "c3": transcript([userMsg("u-older", "real older"), assistantMsg("a-mid")], olderCursor: "c4"),
+        ]
+        let result = await Chat.loadOlderUntilUserPrompt(
+            initialCursor: "c1",
+            isCancelled: { false },
+            fetchPage: { cursor in
+                state.fetched.append(cursor)
+                return pages[cursor]
+            },
+            getMessages: { state.messages },
+            onPage: { win, _ in state.messages = Chat.merge(state.messages, win, prepend: true) },
+            onReset: { _ in XCTFail("unexpected reset") }
+        )
+        XCTAssertEqual(result, OlderLoadResult(stop: .foundUserPrompt, pagesFetched: 3))
+        XCTAssertEqual(state.fetched, ["c1", "c2", "c3"])
+        XCTAssertEqual(state.messages.map(\.id), ["u-older", "a-mid", "h1", "t1", "u-dup", "a-tail"])
+    }
+
+    func testStopsAtBeginningAndAtMaxPageLimit() async {
+        let beginState = OlderTestState([assistantMsg("a-tail")])
+        let beginning = await Chat.loadOlderUntilUserPrompt(
+            initialCursor: "c1",
+            isCancelled: { false },
+            fetchPage: { _ in self.transcript([self.assistantMsg("a0")], olderCursor: nil) },
+            getMessages: { beginState.messages },
+            onPage: { win, _ in beginState.messages = Chat.merge(beginState.messages, win, prepend: true) },
+            onReset: { _ in XCTFail("unexpected reset") }
+        )
+        XCTAssertEqual(beginning, OlderLoadResult(stop: .beginning, pagesFetched: 1))
+
+        let limitState = OlderTestState([assistantMsg("tail")])
+        let limitResult = await Chat.loadOlderUntilUserPrompt(
+            initialCursor: "p0",
+            isCancelled: { false },
+            fetchPage: { cursor in
+                limitState.count += 1
+                return self.transcript([self.assistantMsg("m-\(cursor)")], olderCursor: "p\(limitState.count)")
+            },
+            getMessages: { limitState.messages },
+            onPage: { win, _ in limitState.messages = Chat.merge(limitState.messages, win, prepend: true) },
+            onReset: { _ in XCTFail("unexpected reset") }
+        )
+        XCTAssertEqual(Chat.maxAutoOlderPages, 16)
+        XCTAssertEqual(limitResult, OlderLoadResult(stop: .pageLimit, pagesFetched: 16))
+        XCTAssertEqual(limitState.count, 16)
+    }
+
+    func testHandlesFailuresStalledCursorResetsAndOldServerDegradation() async {
+        let state = OlderTestState([assistantMsg("a1")])
+
+        let nilFail = await Chat.loadOlderUntilUserPrompt(
+            initialCursor: "c1",
+            isCancelled: { false },
+            fetchPage: { _ in nil },
+            getMessages: { state.messages },
+            onPage: { _, _ in XCTFail() },
+            onReset: { _ in XCTFail() }
+        )
+        XCTAssertEqual(nilFail, OlderLoadResult(stop: .failed, pagesFetched: 0))
+
+        let terminalFail = await Chat.loadOlderUntilUserPrompt(
+            initialCursor: "c1",
+            isCancelled: { false },
+            fetchPage: { _ in .terminal(.unreadable) },
+            getMessages: { state.messages },
+            onPage: { _, _ in XCTFail() },
+            onReset: { _ in XCTFail() }
+        )
+        XCTAssertEqual(terminalFail, OlderLoadResult(stop: .failed, pagesFetched: 0))
+
+        let stalled = await Chat.loadOlderUntilUserPrompt(
+            initialCursor: "c1",
+            isCancelled: { false },
+            fetchPage: { _ in self.transcript([self.assistantMsg("a0")], olderCursor: "c1") },
+            getMessages: { state.messages },
+            onPage: { _, _ in XCTFail() },
+            onReset: { _ in XCTFail() }
+        )
+        XCTAssertEqual(stalled, OlderLoadResult(stop: .failed, pagesFetched: 0))
+
+        let oldServerPreview = await Chat.loadOlderUntilUserPrompt(
+            initialCursor: "c1",
+            isHistoryPreview: true,
+            isCancelled: { false },
+            fetchPage: { _ in self.transcript([self.assistantMsg("a1")], reset: true, olderCursor: "c1") },
+            getMessages: { state.messages },
+            onPage: { _, _ in XCTFail() },
+            onReset: { _ in XCTFail() }
+        )
+        XCTAssertEqual(oldServerPreview, OlderLoadResult(stop: .unsupportedOldServer, pagesFetched: 0))
+
+        let liveSameCursorReset = await Chat.loadOlderUntilUserPrompt(
+            initialCursor: "c1",
+            isHistoryPreview: false,
+            isCancelled: { false },
+            fetchPage: { _ in self.transcript([self.assistantMsg("a1")], reset: true, olderCursor: "c1") },
+            getMessages: { state.messages },
+            onPage: { _, _ in XCTFail() },
+            onReset: { _ in XCTFail() }
+        )
+        XCTAssertEqual(liveSameCursorReset, OlderLoadResult(stop: .failed, pagesFetched: 0))
+
+        let realReset = await Chat.loadOlderUntilUserPrompt(
+            initialCursor: "c1",
+            isHistoryPreview: true,
+            isCancelled: { false },
+            fetchPage: { _ in self.transcript([self.userMsg("u-fresh", "fresh")], cursor: "c-new", reset: true, olderCursor: "c2") },
+            getMessages: { state.messages },
+            onPage: { _, _ in XCTFail() },
+            onReset: { win in
+                state.didReset = true
+                state.messages = Chat.merge([], win)
+            }
+        )
+        XCTAssertEqual(realReset, OlderLoadResult(stop: .reset, pagesFetched: 0))
+        XCTAssertTrue(state.didReset)
+        XCTAssertEqual(state.messages.map(\.id), ["u-fresh"])
+    }
+
+    func testRespectsPredicateAndTaskCancellation() async {
+        let state = OlderTestState()
+        let predicateCancel = await Chat.loadOlderUntilUserPrompt(
+            initialCursor: "c1",
+            isCancelled: { state.cancelled },
+            fetchPage: { _ in
+                state.cancelled = true
+                return self.transcript([self.userMsg("u1", "hi")], olderCursor: nil)
+            },
+            getMessages: { [] },
+            onPage: { _, _ in XCTFail() },
+            onReset: { _ in XCTFail() }
+        )
+        XCTAssertEqual(predicateCancel, OlderLoadResult(stop: .cancelled, pagesFetched: 0))
+
+        let task: Task<OlderLoadResult, Never> = Task { @MainActor in
+            await Chat.loadOlderUntilUserPrompt(
+                initialCursor: "c1",
+                isCancelled: { false },
+                fetchPage: { _ in
+                    await Task.yield()
+                    return nil
+                },
+                getMessages: { [] },
+                onPage: { _, _ in XCTFail() },
+                onReset: { _ in XCTFail() }
+            )
+        }
+        task.cancel()
+        let taskCancel = await task.value
+        XCTAssertEqual(taskCancel, OlderLoadResult(stop: .cancelled, pagesFetched: 0))
     }
 }
 

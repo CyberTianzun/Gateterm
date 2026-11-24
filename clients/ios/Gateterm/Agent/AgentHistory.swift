@@ -1,6 +1,6 @@
 import Foundation
 
-struct HistoryEntry: Identifiable, Equatable, Hashable {
+struct HistoryEntry: Identifiable, Equatable, Hashable, Sendable {
     let agentId: String
     let agentName: String
     let sessionId: String
@@ -30,7 +30,7 @@ struct HistoryPage {
     var workspaces: [String] = []
 }
 
-struct HistoryFailure: Error { let reason: String }
+struct HistoryFailure: Error, Sendable { let reason: String }
 
 enum AgentHistory {
     static func parsePage(_ data: Data) throws -> HistoryPage {
@@ -71,11 +71,18 @@ enum AgentHistory {
         ]))
     }
 
-    static func messages(_ http: ServerHTTP, _ entry: HistoryEntry) async throws -> [ChatMessage] {
-        let window = Chat.parseWindow(try await call(http, "/api/agents/history/messages",
-                                                     query: [("agent_id", entry.agentId), ("agent_session_id", entry.sessionId)]))
-        guard case let .transcript(messages, _, _, _, _, _) = window else { throw HistoryFailure(reason: "unreadable") }
-        return messages
+    static func messagesQuery(_ entry: HistoryEntry, before: String? = nil) -> [(String, String)] {
+        var query = [("agent_id", entry.agentId), ("agent_session_id", entry.sessionId)]
+        if let before, !before.isEmpty {
+            query.append(("before", before))
+        }
+        return query
+    }
+
+    static func messages(_ http: ServerHTTP, _ entry: HistoryEntry, before: String? = nil) async throws -> ChatWindow {
+        let window = Chat.parseWindow(try await call(http, "/api/agents/history/messages", query: messagesQuery(entry, before: before)))
+        guard case .transcript = window else { throw HistoryFailure(reason: "unreadable") }
+        return window
     }
 
     static func open(_ http: ServerHTTP, _ entry: HistoryEntry) async throws -> SessionInfo {

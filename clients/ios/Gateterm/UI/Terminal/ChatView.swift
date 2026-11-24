@@ -85,9 +85,11 @@ struct ChatView: View {
                                 Spacer()
                                 if chat.olderCursor != nil {
                                     Button(
-                                        L.t(chat.olderLoading ? "chat_loading_older" : chat.olderFailed ? "chat_older_failed" : "chat_load_older"),
-                                        action: onLoadOlder
-                                    )
+                                        L.t(chat.olderLoading ? "chat_loading_older" : chat.olderFailed ? "chat_older_failed" : "chat_load_older")
+                                    ) {
+                                        followBottom = false
+                                        onLoadOlder()
+                                    }
                                     .font(.system(size: 13, design: .monospaced))
                                     .buttonStyle(.bordered)
                                     .disabled(chat.olderLoading)
@@ -139,8 +141,13 @@ struct ChatView: View {
                 }
                 .defaultScrollAnchor(.bottom)
                 .onChange(of: chat.messages.last?.id) { _, _ in
-                    if followBottom && !userOnly && chat.historyPage == 0 {
+                    if followBottom && !userOnly {
                         withAnimation { proxy.scrollTo("end", anchor: .bottom) }
+                    }
+                }
+                .onChange(of: chat.messages.first?.id) { _, _ in
+                    if followBottom && !userOnly && pendingJumpId == nil && !jumping {
+                        proxy.scrollTo("end", anchor: .bottom)
                     }
                 }
                 .onChange(of: userOnly) { oldUserOnly, nowUserOnly in
