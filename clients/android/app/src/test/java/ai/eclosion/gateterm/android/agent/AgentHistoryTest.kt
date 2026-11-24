@@ -50,4 +50,21 @@ class AgentHistoryTest {
         assertEquals("gpt-test", page.sessions.single().model)
         assertEquals(listOf("/work/project"), page.workspaces)
     }
+
+    @Test
+    fun messagesUrlEncodesOptionalBeforeCursorAndOmitsWhenNull() {
+        val entry = HistoryEntry("codex", "Codex", "known", "Title", "/work", 42, null, true, null)
+        val initial = AgentHistory.messagesUrl("https://host:8443/", entry, null)
+        assertEquals("/api/agents/history/messages", initial.encodedPath)
+        assertEquals("codex", initial.queryParameter("agent_id"))
+        assertEquals("known", initial.queryParameter("agent_session_id"))
+        assertFalse("before" in initial.queryParameterNames)
+        assertNull(initial.queryParameter("after"))
+
+        val older = AgentHistory.messagesUrl("https://host:8443/", entry, "opaque/+==")
+        assertEquals("codex", older.queryParameter("agent_id"))
+        assertEquals("known", older.queryParameter("agent_session_id"))
+        assertEquals("opaque/+==", older.queryParameter("before"))
+        assertNull(older.queryParameter("after"))
+    }
 }

@@ -1,6 +1,7 @@
 package ai.eclosion.gateterm.android.agent
 
 import ai.eclosion.gateterm.android.wire.SessionInfo
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -102,9 +103,21 @@ object AgentHistory {
         catch (_: Exception) { throw HistoryFailure("unreadable") }
     }
 
-    fun messages(http: OkHttpClient, origin: String, token: String, entry: HistoryEntry): ChatWindow {
-        val url = (origin.trimEnd('/') + "/api/agents/history/messages").toHttpUrl().newBuilder()
-            .addQueryParameter("agent_id", entry.agentId).addQueryParameter("agent_session_id", entry.sessionId).build()
+    fun messagesUrl(origin: String, entry: HistoryEntry, before: String? = null): HttpUrl =
+        (origin.trimEnd('/') + "/api/agents/history/messages").toHttpUrl().newBuilder()
+            .addQueryParameter("agent_id", entry.agentId)
+            .addQueryParameter("agent_session_id", entry.sessionId)
+            .apply { if (!before.isNullOrEmpty()) addQueryParameter("before", before) }
+            .build()
+
+    fun messages(
+        http: OkHttpClient,
+        origin: String,
+        token: String,
+        entry: HistoryEntry,
+        before: String? = null,
+    ): ChatWindow {
+        val url = messagesUrl(origin, entry, before)
         val window = Chat.parseWindow(request(http, token, Request.Builder().url(url)))
         if (window !is ChatWindow.Transcript) throw HistoryFailure("unreadable")
         return window

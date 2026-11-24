@@ -83,7 +83,7 @@ fun ServerHomeScreen(
     onRename: (SessionInfo) -> Unit,
     onKill: (Long) -> Unit,
     onLoadHistory: suspend (String, String, Int, Boolean, String) -> HistoryPage,
-    onPreviewHistory: suspend (HistoryEntry) -> ChatWindow,
+    onPreviewHistory: suspend (HistoryEntry, String?) -> ChatWindow,
     onResumeHistory: suspend (HistoryEntry) -> Unit,
 ) {
     var historyOpen by remember { mutableStateOf(false) }

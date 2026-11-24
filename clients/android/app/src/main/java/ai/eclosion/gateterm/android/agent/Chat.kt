@@ -1,5 +1,6 @@
 package ai.eclosion.gateterm.android.agent
 
+import kotlinx.coroutines.CancellationException
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -29,10 +30,37 @@ data class ChatMessage(
     val blocks: List<ChatBlock>,
 )
 
-/** 仅提取用户主动发出的非空正文块，剔除同条里的 tool-result 或空白块。 */
+const val MAX_AUTO_OLDER_PAGES = 16
+
+private val HARNESS_USER_PREFIXES = listOf(
+    "# AGENTS.md instructions",
+    "<environment_context>",
+    "<permissions instructions>",
+    "<developer_instructions>",
+    "<system-reminder>",
+    "<local-command-caveat>",
+    "<command-name>",
+    "This session is being continued from a previous conversation",
+)
+
+private const val CODEX_REQUEST_MARKER = "## My request for Codex:"
+
+/** 判断 role="user" 的文本块是否为空白或框架注入上下文（对齐服务端 history::prompt_body）。 */
+fun isHarnessUserText(text: String): Boolean {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return true
+    if (HARNESS_USER_PREFIXES.any { trimmed.startsWith(it) }) return true
+    val markerIdx = trimmed.indexOf(CODEX_REQUEST_MARKER)
+    if (markerIdx != -1 && trimmed.substring(markerIdx + CODEX_REQUEST_MARKER.length).trim().isEmpty()) {
+        return true
+    }
+    return false
+}
+
+/** 仅提取用户主动发出的非空正文块，剔除同条里的 tool-result、空白或框架注入上下文。 */
 fun ChatMessage.userPromptTextBlocks(): List<ChatBlock.Text> {
     if (role != ChatRole.User) return emptyList()
-    return blocks.filterIsInstance<ChatBlock.Text>().filter { it.text.isNotBlank() }
+    return blocks.filterIsInstance<ChatBlock.Text>().filter { it.text.isNotBlank() && !isHarnessUserText(it.text) }
 }
 
 /**
@@ -69,6 +97,18 @@ sealed class ChatWindow {
 
     data class Terminal(val reason: ChatFallback) : ChatWindow()
 }
+
+enum class OlderLoadStop {
+    FoundUserPrompt,
+    Beginning,
+    PageLimit,
+    Reset,
+    UnsupportedOldServer,
+    Failed,
+    Cancelled,
+}
+
+data class OlderLoadResult(val stop: OlderLoadStop, val pagesFetched: Int)
 
 object Chat {
     fun parseWindow(body: String): ChatWindow {
@@ -124,6 +164,11 @@ object Chat {
         return ChatMessage(id, role, ts, blocks)
     }
 
+    private fun uniqueIncoming(base: List<ChatMessage>, messages: List<ChatMessage>): List<ChatMessage> {
+        val seen = base.mapTo(HashSet()) { it.id }
+        return messages.filter { seen.add(it.id) }
+    }
+
     /**
      * 把一次拉取合并进已有的消息。
      *
@@ -136,14 +181,75 @@ object Chat {
     fun merge(prev: List<ChatMessage>, win: ChatWindow, prepend: Boolean = false): List<ChatMessage> {
         if (win !is ChatWindow.Transcript) return prev
         val base = if (win.reset) emptyList() else prev
-        val seen = base.mapTo(HashSet()) { it.id }
-        val incoming = win.messages.filter { seen.add(it.id) }
+        val incoming = uniqueIncoming(base, win.messages)
         return if (prepend) incoming + base else base + incoming
+    }
+
+    /** 计算本次向后翻页真正新增（未与已有消息重复）的前置消息集合。 */
+    fun newlyPrepended(prev: List<ChatMessage>, win: ChatWindow): List<ChatMessage> {
+        if (win !is ChatWindow.Transcript) return emptyList()
+        val base = if (win.reset) emptyList() else prev
+        return uniqueIncoming(base, win.messages)
     }
 
     /** 筛出所有用户输入的消息并保持原始时间顺序。 */
     fun userPrompts(messages: List<ChatMessage>): List<ChatMessage> =
         messages.filter { it.isUserPrompt() }
+
+    /** 判断消息列表中是否已包含至少一条用户主动提问。 */
+    fun hasUserPrompt(messages: List<ChatMessage>): Boolean =
+        messages.any { it.isUserPrompt() }
+
+    /**
+     * 自动连续向后拉取更早消息，直到新前置的消息中包含用户主动提问、到达开头、
+     * 触及单次上限（16 页）、遇到 reset、失败或被取消为止。
+     */
+    suspend fun loadOlderUntilUserPrompt(
+        initialCursor: String?,
+        maxPages: Int = MAX_AUTO_OLDER_PAGES,
+        isHistoryPreview: Boolean = false,
+        isCancelled: () -> Boolean,
+        fetchPage: suspend (String) -> ChatWindow?,
+        getMessages: () -> List<ChatMessage>,
+        onPage: (ChatWindow.Transcript, List<ChatMessage>) -> Unit,
+        onReset: (ChatWindow.Transcript) -> Unit,
+    ): OlderLoadResult {
+        var cursor = initialCursor
+        var pagesFetched = 0
+        while (true) {
+            if (isCancelled()) return OlderLoadResult(OlderLoadStop.Cancelled, pagesFetched)
+            if (cursor.isNullOrEmpty()) return OlderLoadResult(OlderLoadStop.Beginning, pagesFetched)
+            if (pagesFetched >= maxPages) return OlderLoadResult(OlderLoadStop.PageLimit, pagesFetched)
+
+            val win = try {
+                fetchPage(cursor)
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (_: Exception) {
+                if (isCancelled()) return OlderLoadResult(OlderLoadStop.Cancelled, pagesFetched)
+                return OlderLoadResult(OlderLoadStop.Failed, pagesFetched)
+            }
+            if (isCancelled()) return OlderLoadResult(OlderLoadStop.Cancelled, pagesFetched)
+            if (win !is ChatWindow.Transcript) return OlderLoadResult(OlderLoadStop.Failed, pagesFetched)
+
+            val nextCursor = win.olderCursor
+            if (win.reset) {
+                if (nextCursor == cursor) {
+                    val stop = if (isHistoryPreview) OlderLoadStop.UnsupportedOldServer else OlderLoadStop.Failed
+                    return OlderLoadResult(stop, pagesFetched)
+                }
+                onReset(win)
+                return OlderLoadResult(OlderLoadStop.Reset, pagesFetched)
+            }
+            if (nextCursor == cursor) return OlderLoadResult(OlderLoadStop.Failed, pagesFetched)
+
+            val incoming = newlyPrepended(getMessages(), win)
+            pagesFetched += 1
+            onPage(win, incoming)
+            if (hasUserPrompt(incoming)) return OlderLoadResult(OlderLoadStop.FoundUserPrompt, pagesFetched)
+            cursor = nextCursor
+        }
+    }
 
     /** 老版本服务端没有这个路由:降级成「读不到」,不是报错(协议 T12)。 */
     fun fetch(
@@ -162,7 +268,7 @@ object Chat {
                 ?.addQueryParameter("agent_id", agentId)
                 ?.addQueryParameter("agent_session_id", agentSessionId)
                 ?.apply { if (after != null) addQueryParameter("after", after) }
-                ?.apply { if (before != null) addQueryParameter("before", before) }
+                ?.apply { if (!before.isNullOrEmpty()) addQueryParameter("before", before) }
                 ?.build()
                 ?: return unreadable
             val request = Request.Builder().url(url).header("Authorization", "Bearer $token").build()

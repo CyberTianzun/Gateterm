@@ -149,7 +149,9 @@ private fun Messages(
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = trailingItemIndex)
     var historyPage by remember { mutableStateOf(chat.historyPage) }
     var historyAnchor by remember { mutableStateOf<Pair<String, Int>?>(null) }
+    var visibleAnchor by remember { mutableStateOf<Pair<String, Int>?>(null) }
     val olderLoading by rememberUpdatedState(chat.olderLoading)
+    val latestHistoryPage by rememberUpdatedState(chat.historyPage)
     // 贴着底部时才自动跟随;用户往上翻看历史时不该被拽回来。只在**用户滚动**时更新,
     // 否则新消息一来「不在底部了」会先于跟随生效,把自己关掉。
     var follow by remember { mutableStateOf(true) }
@@ -165,22 +167,35 @@ private fun Messages(
     }
     LaunchedEffect(listState) {
         snapshotFlow {
-            if (olderLoading && listState.isScrollInProgress && !scrollingToBottom)
+            if (!scrollingToBottom && historyPage == latestHistoryPage)
                 listState.layoutInfo.visibleItemsInfo.firstOrNull { (it.key as? String)?.startsWith("message:") == true }
                     ?.let { it.key as String to it.offset }
             else null
-        }.collect { anchor -> if (anchor != null) historyAnchor = anchor }
+        }.collect { anchor ->
+            if (anchor != null) {
+                visibleAnchor = anchor
+                if (olderLoading && listState.isScrollInProgress) historyAnchor = anchor
+            }
+        }
     }
     LaunchedEffect(messages, chat.historyPage, userOnly) {
         if (historyPage != chat.historyPage) {
             historyPage = chat.historyPage
-            val anchor = historyAnchor
-            historyAnchor = null
-            val index = anchor?.let { saved -> displayedMessages.indexOfFirst { "message:${it.id}" == saved.first } } ?: -1
-            if (anchor != null && index >= 0) {
+            if (follow && pendingJumpId == null) {
                 scrollingToBottom = true
-                try { listState.scrollToItem(index + 1, -anchor.second) }
+                try { listState.scrollToItem(trailingItemIndex) }
                 finally { scrollingToBottom = false }
+            } else {
+                val anchor = historyAnchor ?: visibleAnchor
+                if (anchor != null && chat.olderLoading && historyAnchor == null) {
+                    historyAnchor = anchor
+                }
+                val index = anchor?.let { saved -> displayedMessages.indexOfFirst { "message:${it.id}" == saved.first } } ?: -1
+                if (anchor != null && index >= 0) {
+                    scrollingToBottom = true
+                    try { listState.scrollToItem(index + 1, -anchor.second) }
+                    finally { scrollingToBottom = false }
+                }
             }
             return@LaunchedEffect
         }
@@ -189,6 +204,9 @@ private fun Messages(
             try { listState.scrollToItem(trailingItemIndex) }
             finally { scrollingToBottom = false }
         }
+    }
+    LaunchedEffect(chat.olderLoading) {
+        if (!chat.olderLoading) historyAnchor = null
     }
     LaunchedEffect(pendingJumpId, userOnly, messages) {
         val targetId = pendingJumpId ?: return@LaunchedEffect

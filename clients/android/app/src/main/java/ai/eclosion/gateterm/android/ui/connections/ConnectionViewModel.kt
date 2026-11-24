@@ -20,6 +20,7 @@ import ai.eclosion.gateterm.android.agent.Chat
 import ai.eclosion.gateterm.android.agent.ChatFallback
 import ai.eclosion.gateterm.android.agent.ChatMessage
 import ai.eclosion.gateterm.android.agent.ChatWindow
+import ai.eclosion.gateterm.android.agent.OlderLoadStop
 import ai.eclosion.gateterm.android.appearance.AppearanceCodec
 import ai.eclosion.gateterm.android.appearance.AppearanceStore
 import ai.eclosion.gateterm.android.appearance.TermAppearance
@@ -219,7 +220,7 @@ interface ConnectionActions {
     fun dismissLauncherMenu()
     fun newSession(launcher: Launcher)
     suspend fun loadHistory(query: String, agent: String, offset: Int, refresh: Boolean, workspace: String): HistoryPage
-    suspend fun previewHistory(entry: HistoryEntry): ChatWindow
+    suspend fun previewHistory(entry: HistoryEntry, before: String? = null): ChatWindow
     suspend fun resumeHistory(entry: HistoryEntry)
     fun openSession(sessionId: Long)
     fun leaveTerminal()
@@ -835,10 +836,10 @@ class ConnectionController(
         return withContext(Dispatchers.IO) { AgentHistory.fetch(http, origin, token, query, agent, offset, refresh, workspace) }
     }
 
-    override suspend fun previewHistory(entry: HistoryEntry): ChatWindow {
+    override suspend fun previewHistory(entry: HistoryEntry, before: String?): ChatWindow {
         val origin = httpOrigin ?: throw HistoryFailure("unreadable")
         val token = httpToken ?: throw HistoryFailure("unreadable")
-        return withContext(Dispatchers.IO) { AgentHistory.messages(http, origin, token, entry) }
+        return withContext(Dispatchers.IO) { AgentHistory.messages(http, origin, token, entry, before) }
     }
 
     override suspend fun resumeHistory(entry: HistoryEntry) {
@@ -1313,6 +1314,7 @@ class ConnectionController(
         val token = httpToken ?: return
         chatJob = controllerScope.launch {
             var inc = incremental
+            var needsAutoOlder = false
             do {
                 chatAgain = false
                 val st = _state.value
@@ -1337,14 +1339,19 @@ class ConnectionController(
                     continue
                 }
                 when (win) {
-                    is ChatWindow.Terminal -> _state.update {
-                        it.copy(chat = it.chat.copy(notice = ChatNotice.Server(win.reason, agent.agentId), loading = false))
+                    is ChatWindow.Terminal -> {
+                        needsAutoOlder = false
+                        _state.update {
+                            it.copy(chat = it.chat.copy(notice = ChatNotice.Server(win.reason, agent.agentId), loading = false))
+                        }
                     }
                     is ChatWindow.Transcript -> {
                         val advanced = !inc || win.cursor != chatCursor
-                        if (win.reset || !inc) {
+                        val fresh = win.reset || !inc
+                        if (fresh) {
                             chatTimeline++
                             olderChatJob?.cancel(); olderChatJob = null
+                            needsAutoOlder = true
                         }
                         chatCursor = win.cursor
                         chatAgentKey = agent.key
@@ -1354,10 +1361,10 @@ class ConnectionController(
                                     messages = Chat.merge(if (inc) it.chat.messages else emptyList(), win),
                                     notice = null,
                                     loading = false,
-                                    olderCursor = if (win.reset || !inc) win.olderCursor else it.chat.olderCursor,
-                                    historySupported = if (win.reset || !inc) win.historySupported else it.chat.historySupported,
-                                    olderLoading = if (win.reset || !inc) false else it.chat.olderLoading,
-                                    olderFailed = if (win.reset || !inc) false else it.chat.olderFailed,
+                                    olderCursor = if (fresh) win.olderCursor else it.chat.olderCursor,
+                                    historySupported = if (fresh) win.historySupported else it.chat.historySupported,
+                                    olderLoading = if (fresh) false else it.chat.olderLoading,
+                                    olderFailed = if (fresh) false else it.chat.olderFailed,
                                 ),
                             )
                         }
@@ -1366,10 +1373,22 @@ class ConnectionController(
                 }
                 inc = true
             } while (chatAgain)
+            if (needsAutoOlder) {
+                val current = _state.value
+                if (current.chatOpen && current.chat.notice == null &&
+                    !Chat.hasUserPrompt(current.chat.messages) && current.chat.olderCursor != null
+                ) {
+                    startOlderChat(manual = false)
+                }
+            }
         }
     }
 
     override fun loadOlderChat() {
+        startOlderChat(manual = true)
+    }
+
+    private fun startOlderChat(manual: Boolean) {
         val st = _state.value
         val sessionId = st.chat.sessionId ?: return
         val before = st.chat.olderCursor ?: return
@@ -1377,30 +1396,79 @@ class ConnectionController(
         val origin = httpOrigin ?: return
         val token = httpToken ?: return
         if (!st.chatOpen || st.chat.olderLoading || olderChatJob?.isActive == true) return
+        if (!manual && Chat.hasUserPrompt(st.chat.messages)) return
         val timeline = chatTimeline
         _state.update { it.copy(chat = it.chat.copy(olderLoading = true, olderFailed = false)) }
         olderChatJob = controllerScope.launch {
-            val win = withContext(Dispatchers.IO) {
-                Chat.fetch(http, origin, token, agent.agentId, agent.agentSessionId, null, before)
+            fun contextValid(): Boolean {
+                val current = _state.value
+                return timeline == chatTimeline &&
+                    current.chatOpen &&
+                    current.chat.sessionId == sessionId &&
+                    AgentSessions.chatAgentFor(current.agents, sessionId)?.key == agent.key
             }
-            val current = _state.value
-            if (timeline != chatTimeline || !current.chatOpen || current.chat.sessionId != sessionId ||
-                current.chat.olderCursor != before || AgentSessions.chatAgentFor(current.agents, sessionId)?.key != agent.key) return@launch
-            if (win !is ChatWindow.Transcript || (!win.reset && win.olderCursor == before)) {
-                _state.update { it.copy(chat = it.chat.copy(olderLoading = false, olderFailed = true)) }
-                return@launch
+
+            var didReset = false
+            try {
+                val result = Chat.loadOlderUntilUserPrompt(
+                    initialCursor = before,
+                    isHistoryPreview = false,
+                    isCancelled = { !contextValid() },
+                    fetchPage = { cursor ->
+                        withContext(Dispatchers.IO) {
+                            Chat.fetch(http, origin, token, agent.agentId, agent.agentSessionId, null, cursor)
+                        }
+                    },
+                    getMessages = { _state.value.chat.messages },
+                    onPage = { win, _ ->
+                        _state.update {
+                            it.copy(
+                                chat = it.chat.copy(
+                                    messages = Chat.merge(it.chat.messages, win, prepend = true),
+                                    olderCursor = win.olderCursor,
+                                    historySupported = win.historySupported,
+                                    olderFailed = false,
+                                    historyPage = it.chat.historyPage + 1,
+                                ),
+                            )
+                        }
+                    },
+                    onReset = { win ->
+                        didReset = true
+                        chatJob?.cancel()
+                        chatJob = null
+                        chatAgain = false
+                        chatTimeline++
+                        chatCursor = win.cursor
+                        chatAgentKey = agent.key
+                        _state.update {
+                            it.copy(
+                                chat = it.chat.copy(
+                                    messages = Chat.merge(emptyList(), win),
+                                    olderCursor = win.olderCursor,
+                                    historySupported = win.historySupported,
+                                    olderLoading = false,
+                                    olderFailed = false,
+                                ),
+                            )
+                        }
+                    },
+                )
+                if (!contextValid() && result.stop != OlderLoadStop.Reset) return@launch
+                when (result.stop) {
+                    OlderLoadStop.Failed -> _state.update {
+                        it.copy(chat = it.chat.copy(olderLoading = false, olderFailed = true))
+                    }
+                    OlderLoadStop.Reset -> Unit
+                    else -> if (!didReset) _state.update {
+                        it.copy(chat = it.chat.copy(olderLoading = false, olderFailed = false))
+                    }
+                }
+            } finally {
+                if (!didReset && contextValid() && _state.value.chat.olderLoading) {
+                    _state.update { it.copy(chat = it.chat.copy(olderLoading = false)) }
+                }
             }
-            if (win.reset) {
-                chatJob?.cancel(); chatJob = null; chatAgain = false
-                chatTimeline++
-                chatCursor = win.cursor
-                chatAgentKey = agent.key
-            }
-            _state.update { it.copy(chat = it.chat.copy(
-                messages = Chat.merge(it.chat.messages, win, prepend = true),
-                olderCursor = win.olderCursor, historySupported = win.historySupported,
-                olderLoading = false, olderFailed = false, historyPage = it.chat.historyPage + 1,
-            )) }
         }
     }
 

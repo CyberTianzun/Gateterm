@@ -40,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -58,15 +59,18 @@ import androidx.compose.ui.unit.dp
 import ai.eclosion.gateterm.android.R
 import ai.eclosion.gateterm.android.ui.components.AgentBrandIcon
 import ai.eclosion.gateterm.android.ui.components.AppBarTitle
+import ai.eclosion.gateterm.android.agent.Chat
 import ai.eclosion.gateterm.android.agent.ChatWindow
 import ai.eclosion.gateterm.android.agent.HistoryAgent
 import ai.eclosion.gateterm.android.agent.HistoryEntry
 import ai.eclosion.gateterm.android.agent.HistoryFailure
 import ai.eclosion.gateterm.android.agent.HistoryPage
+import ai.eclosion.gateterm.android.agent.OlderLoadStop
 import ai.eclosion.gateterm.android.ui.term.ChatView
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -76,7 +80,7 @@ fun HistoryScreen(
     reconnecting: Boolean,
     onBack: () -> Unit,
     onLoad: suspend (String, String, Int, Boolean, String) -> HistoryPage,
-    onPreview: suspend (HistoryEntry) -> ChatWindow,
+    onPreview: suspend (HistoryEntry, String?) -> ChatWindow,
     onResume: suspend (HistoryEntry) -> Unit,
 ) {
     var filters by remember { mutableStateOf(HistoryFilters()) }
@@ -256,22 +260,124 @@ fun HistoryScreen(
 private fun HistoryConversationScreen(
     entry: HistoryEntry,
     onBack: () -> Unit,
-    onPreview: suspend (HistoryEntry) -> ChatWindow,
+    onPreview: suspend (HistoryEntry, String?) -> ChatWindow,
 ) {
-    var transcript by remember(entry.key) { mutableStateOf<ChatWindow?>(null) }
-    var loading by remember(entry.key) { mutableStateOf(true) }
+    val previewScope = rememberCoroutineScope()
+    var chat by remember(entry.key) {
+        mutableStateOf(ChatUiState(sessionId = entry.key.hashCode().toLong(), loading = true))
+    }
     var error by remember(entry.key) { mutableStateOf<String?>(null) }
     var detailsOpen by remember(entry.key) { mutableStateOf(false) }
     var userOnly by remember(entry.key) { mutableStateOf(false) }
+    var olderJob by remember(entry.key) { mutableStateOf<Job?>(null) }
+    var previewRevision by remember { mutableIntStateOf(0) }
+
+    DisposableEffect(entry.key) {
+        onDispose {
+            previewRevision++
+            olderJob?.cancel()
+            olderJob = null
+        }
+    }
+
+    fun launchOlder(manual: Boolean) {
+        val before = chat.olderCursor ?: return
+        if (chat.olderLoading || olderJob?.isActive == true) return
+        if (!manual && Chat.hasUserPrompt(chat.messages)) return
+        val runRevision = previewRevision
+        var didReset = false
+        chat = chat.copy(olderLoading = true, olderFailed = false)
+        olderJob = previewScope.launch {
+            try {
+                val result = Chat.loadOlderUntilUserPrompt(
+                    initialCursor = before,
+                    isHistoryPreview = true,
+                    isCancelled = { runRevision != previewRevision },
+                    fetchPage = { cursor ->
+                        try {
+                            onPreview(entry, cursor)
+                        } catch (cancel: CancellationException) {
+                            throw cancel
+                        } catch (_: Exception) {
+                            null
+                        }
+                    },
+                    getMessages = { chat.messages },
+                    onPage = { win, _ ->
+                        if (runRevision != previewRevision) return@loadOlderUntilUserPrompt
+                        chat = chat.copy(
+                            messages = Chat.merge(chat.messages, win, prepend = true),
+                            olderCursor = win.olderCursor,
+                            historySupported = win.historySupported,
+                            olderFailed = false,
+                            historyPage = chat.historyPage + 1,
+                        )
+                    },
+                    onReset = { win ->
+                        if (runRevision != previewRevision) return@loadOlderUntilUserPrompt
+                        didReset = true
+                        chat = chat.copy(
+                            messages = Chat.merge(emptyList(), win),
+                            olderCursor = win.olderCursor,
+                            historySupported = win.historySupported,
+                            olderLoading = false,
+                            olderFailed = false,
+                        )
+                    },
+                )
+                if (runRevision != previewRevision) return@launch
+                when (result.stop) {
+                    OlderLoadStop.UnsupportedOldServer -> {
+                        chat = chat.copy(
+                            olderCursor = null,
+                            historySupported = false,
+                            olderLoading = false,
+                            olderFailed = false,
+                        )
+                    }
+                    OlderLoadStop.Failed -> {
+                        chat = chat.copy(olderLoading = false, olderFailed = true)
+                    }
+                    OlderLoadStop.Reset -> Unit
+                    else -> {
+                        if (!didReset) chat = chat.copy(olderLoading = false, olderFailed = false)
+                    }
+                }
+            } finally {
+                if (!didReset && runRevision == previewRevision && chat.olderLoading) {
+                    chat = chat.copy(olderLoading = false)
+                }
+            }
+        }
+    }
+
     LaunchedEffect(entry.key) {
+        val runRevision = previewRevision
         try {
-            transcript = onPreview(entry)
+            val win = onPreview(entry, null)
+            if (runRevision != previewRevision) return@LaunchedEffect
+            if (win is ChatWindow.Transcript) {
+                chat = chat.copy(
+                    messages = Chat.merge(emptyList(), win),
+                    loading = false,
+                    olderCursor = win.olderCursor,
+                    historySupported = win.historySupported,
+                    olderLoading = false,
+                    olderFailed = false,
+                )
+                if (!Chat.hasUserPrompt(win.messages) && win.olderCursor != null) {
+                    launchOlder(manual = false)
+                }
+            } else {
+                chat = chat.copy(loading = false)
+            }
         } catch (cancel: CancellationException) {
             throw cancel
         } catch (failure: Exception) {
-            error = (failure as? HistoryFailure)?.reason ?: "unreadable"
-        } finally {
-            loading = false
+            if (runRevision == previewRevision) {
+                error = (failure as? HistoryFailure)?.reason ?: "unreadable"
+                chat = chat.copy(loading = false)
+            }
         }
     }
     BackHandler {
@@ -323,8 +429,9 @@ private fun HistoryConversationScreen(
                 Text(stringResource(historyErrorResource(error!!)), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
             } else {
                 ChatView(
-                    chat = ChatUiState(messages = (transcript as? ChatWindow.Transcript)?.messages.orEmpty(), loading = loading),
+                    chat = chat,
                     onOpenTerminal = onBack,
+                    onLoadOlder = { launchOlder(manual = true) },
                     userOnly = userOnly,
                     onUserOnlyChange = { userOnly = it },
                     modifier = Modifier.weight(1f).fillMaxWidth(),
