@@ -136,12 +136,23 @@ pub struct CloudConfig {
 /// 开关管的是另一条:监听服务端机器的**系统剪贴板**,把会话里的进程写进去的内容
 /// 转给远端(目前只有 Windows,见 `crate::clipboard`)。默认开;不希望服务端剪贴板
 /// 的任何内容离开这台机器时可以关掉。
+fn default_osc52_env() -> bool {
+    !cfg!(windows)
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub struct ClipboardConfig {
     #[serde(default = "default_true")]
     pub host_watch: bool,
-    /// 启动 PTY 时按需注入 `PI_CLIPBOARD_OSC52=1` 与 `SSH_CONNECTION`,触发兼容终端应用发送 OSC 52。
-    #[serde(default = "default_true")]
+    /// 启动 PTY 时是否额外注入 `SSH_CONNECTION`,以引导 Codex / Grok 等 CLI 走 OSC 52。
+    ///
+    /// Windows 上默认关闭:
+    /// 1. Claude Code 在 Windows 检测到 `SSH_CONNECTION` 时会触发 `win_ssh_auto_off`,
+    ///    强制禁用全屏 TUI 并提示 `Still the classic renderer · fullscreen is off over SSH to Windows`;
+    /// 2. Windows 已有 `host_watch` 监听系统剪贴板兜底 Codex / Grok / agy,而 Claude / Pi / OpenCode
+    ///    本身无需 `SSH_CONNECTION` 即可走 OSC 52 / 5522。
+    /// 非 Windows(macOS / Linux)目前没有 `host_watch`,默认开启。需要时可在 `config.toml` 显式覆盖。
+    #[serde(default = "default_osc52_env")]
     pub osc52_env: bool,
 }
 
@@ -149,7 +160,7 @@ impl Default for ClipboardConfig {
     fn default() -> Self {
         Self {
             host_watch: true,
-            osc52_env: true,
+            osc52_env: default_osc52_env(),
         }
     }
 }
@@ -517,11 +528,20 @@ mod tests {
     fn clipboard_config_defaults_and_overrides() {
         let default_cfg: Config = toml::from_str("").unwrap();
         assert!(default_cfg.clipboard.host_watch);
-        assert!(default_cfg.clipboard.osc52_env);
+        assert_eq!(default_cfg.clipboard.osc52_env, !cfg!(windows));
 
-        let custom: Config =
+        let partial: Config = toml::from_str("[clipboard]\nhost_watch = false\n").unwrap();
+        assert!(!partial.clipboard.host_watch);
+        assert_eq!(partial.clipboard.osc52_env, !cfg!(windows));
+
+        let explicit_off: Config =
             toml::from_str("[clipboard]\nhost_watch = false\nosc52_env = false\n").unwrap();
-        assert!(!custom.clipboard.host_watch);
-        assert!(!custom.clipboard.osc52_env);
+        assert!(!explicit_off.clipboard.host_watch);
+        assert!(!explicit_off.clipboard.osc52_env);
+
+        let explicit_on: Config =
+            toml::from_str("[clipboard]\nhost_watch = true\nosc52_env = true\n").unwrap();
+        assert!(explicit_on.clipboard.host_watch);
+        assert!(explicit_on.clipboard.osc52_env);
     }
 }

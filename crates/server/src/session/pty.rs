@@ -1286,6 +1286,14 @@ mod tests {
     }
 
     #[test]
+    fn default_clipboard_env_skips_ssh_connection_on_windows() {
+        let vars = clipboard_env_overrides(ClipboardConfig::default(), false, false);
+        let has_ssh = vars.iter().any(|(k, _)| *k == "SSH_CONNECTION");
+        assert_eq!(has_ssh, !cfg!(windows));
+        assert!(vars.contains(&("PI_CLIPBOARD_OSC52", "1")));
+    }
+
+    #[test]
     fn osc5522_writes_replies_to_pty_in_order_and_routes_clipboard_to_owner() {
         struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
         impl Write for CaptureWriter {
