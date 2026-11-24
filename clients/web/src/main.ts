@@ -133,6 +133,15 @@ function resetChatPages() {
   chatUserOnly = false;
   chatJumpToId = null;
 }
+
+function leaveChatView() {
+  if (viewMode !== "chat") return;
+  viewMode = "terminal";
+  chatTimeline++;
+  chatOlderLoading = false;
+  chatUserOnly = false;
+  chatJumpToId = null;
+}
 /** 读不到对话记录时的原因(已经翻成人话)。有值就说明这次该显示回落。 */
 let chatFallback: string | null = null;
 
@@ -409,7 +418,7 @@ function openTerminal(id: number) {
   setDrawer(false);
   if (attachedId === id) {
     if (terminalSuspended) resumeTerminal();
-    viewMode = "terminal";
+    leaveChatView();
     showView();
     term?.focus();
     return;
@@ -725,11 +734,8 @@ narrowSidebar.addEventListener("change", () => {
 // 身后那张列表页恰好被挡住,看起来像什么都没发生。
 function toggleView() {
   if (viewMode === "terminal" && !chatAvailable(agents, attachedId, transcriptEnabled)) return;
-  viewMode = viewMode === "chat" ? "terminal" : "chat";
-  if (viewMode === "terminal") {
-    chatUserOnly = false;
-    chatJumpToId = null;
-  }
+  if (viewMode === "chat") leaveChatView();
+  else viewMode = "chat";
   setDrawer(false);
   showView();
   // 进聊天视图才去拉 —— 不看的时候不该白读别人的文件
@@ -825,7 +831,7 @@ function syncViewToggle() {
  */
 function showView(opts?: { skipRefit?: boolean }) {
   if (viewMode === "chat" && !chatAvailable(agents, attachedId, transcriptEnabled)) {
-    viewMode = "terminal";
+    leaveChatView();
     term?.focus();
   }
   const chatting = viewMode === "chat" && attachedId !== null;
@@ -849,7 +855,13 @@ function showView(opts?: { skipRefit?: boolean }) {
 async function refreshChat(incremental: boolean) {
   if (!chatAvailable(agents, attachedId, transcriptEnabled)) { showView(); return; }
   const initial = attachedAgent();
-  if (!initial) { chatFallback = t("chat.fallback.noAgent"); renderChat(); return; }
+  if (!initial) {
+    chatTimeline++;
+    chatOlderLoading = false;
+    chatFallback = t("chat.fallback.noAgent");
+    renderChat();
+    return;
+  }
   let activeAgent = initial;
   const sessionId = attachedId;
   const scope = JSON.stringify([sessionId, keyOf(activeAgent)]);
@@ -977,7 +989,7 @@ function renderChat(prepend = false, keepBottomIfAtBottom = false) {
     why.textContent = chatFallback;
     const go = document.createElement("button");
     go.textContent = t("chat.openTerminalInstead");
-    go.addEventListener("click", () => { viewMode = "terminal"; showView(); });
+    go.addEventListener("click", () => { leaveChatView(); showView(); });
     wrap.append(why, go);
     box.replaceChildren(wrap);
     return;

@@ -47,11 +47,11 @@ private const val CODEX_REQUEST_MARKER = "## My request for Codex:"
 
 /** 判断 role="user" 的文本块是否为空白或框架注入上下文（对齐服务端 history::prompt_body）。 */
 fun isHarnessUserText(text: String): Boolean {
-    val trimmed = text.trim()
+    val trimmed = text.trim { it.isWhitespace() }
     if (trimmed.isEmpty()) return true
     if (HARNESS_USER_PREFIXES.any { trimmed.startsWith(it) }) return true
     val markerIdx = trimmed.indexOf(CODEX_REQUEST_MARKER)
-    if (markerIdx != -1 && trimmed.substring(markerIdx + CODEX_REQUEST_MARKER.length).trim().isEmpty()) {
+    if (markerIdx != -1 && trimmed.substring(markerIdx + CODEX_REQUEST_MARKER.length).trim { it.isWhitespace() }.isEmpty()) {
         return true
     }
     return false

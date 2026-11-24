@@ -1287,10 +1287,28 @@ class ConnectionController(
         if (st.chat.sessionId != null && !st.chatAvailable) { resetChat(); resumeViewports() }
     }
 
-    private fun resetChat() {
+    private fun invalidateOlderChat() {
         chatTimeline++
         olderChatJob?.cancel()
         olderChatJob = null
+    }
+
+    private fun applyChatFallback(notice: ChatNotice) {
+        invalidateOlderChat()
+        _state.update {
+            it.copy(
+                chat = it.chat.copy(
+                    notice = notice,
+                    loading = false,
+                    olderLoading = false,
+                    olderFailed = false,
+                ),
+            )
+        }
+    }
+
+    private fun resetChat() {
+        invalidateOlderChat()
         chatJob?.cancel()
         chatJob = null
         chatAgain = false
@@ -1323,7 +1341,7 @@ class ConnectionController(
                 val agent = AgentSessions.chatAgentFor(st.agents, sessionId)
                 if (agent == null) {
                     // 说清楚,并给一条出路 —— 沉默会让人以为是坏了
-                    _state.update { it.copy(chat = it.chat.copy(notice = ChatNotice.NoAgent, loading = false)) }
+                    applyChatFallback(ChatNotice.NoAgent)
                     return@launch
                 }
                 if (agent.key != chatAgentKey) inc = false
@@ -1341,16 +1359,13 @@ class ConnectionController(
                 when (win) {
                     is ChatWindow.Terminal -> {
                         needsAutoOlder = false
-                        _state.update {
-                            it.copy(chat = it.chat.copy(notice = ChatNotice.Server(win.reason, agent.agentId), loading = false))
-                        }
+                        applyChatFallback(ChatNotice.Server(win.reason, agent.agentId))
                     }
                     is ChatWindow.Transcript -> {
                         val advanced = !inc || win.cursor != chatCursor
                         val fresh = win.reset || !inc
                         if (fresh) {
-                            chatTimeline++
-                            olderChatJob?.cancel(); olderChatJob = null
+                            invalidateOlderChat()
                             needsAutoOlder = true
                         }
                         chatCursor = win.cursor

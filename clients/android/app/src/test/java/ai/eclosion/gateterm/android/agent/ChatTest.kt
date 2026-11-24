@@ -246,6 +246,27 @@ class ChatTest {
     }
 
     @Test
+    fun filtersUnicodeWhitespaceHarnessTextAndEmptyCodexSuffix() {
+        val unicodeCases = listOf(
+            "\u00A0\u00A0",
+            "\u00A0<system-reminder>injected</system-reminder>\u00A0",
+            "\u00A0## My request for Codex:\u00A0\n\u00A0",
+            "IDE context\n## My request for Codex:\u00A0",
+        )
+        for (text in unicodeCases) {
+            assertTrue("expected Unicode harness/blank text: $text", isHarnessUserText(text))
+            assertFalse("expected non-prompt for Unicode text: $text", userMsg("u-unicode", text).isUserPrompt())
+            assertEquals(emptyList<ChatBlock.Text>(), userMsg("u-unicode", text).userPromptTextBlocks())
+        }
+
+        val realPromptWithNbsp = "\u00A0Fix Unicode trim\u00A0"
+        assertFalse(isHarnessUserText(realPromptWithNbsp))
+        val realMsg = userMsg("u-real-unicode", realPromptWithNbsp)
+        assertTrue(realMsg.isUserPrompt())
+        assertEquals(listOf(ChatBlock.Text(realPromptWithNbsp)), realMsg.userPromptTextBlocks())
+    }
+
+    @Test
     fun loadOlderUntilUserPromptStopsAfterOnePageOnHumanPrompt() = runBlocking {
         val u1 = userMsg("u1", "Hello")
         var messages = listOf(msg("a2"))
