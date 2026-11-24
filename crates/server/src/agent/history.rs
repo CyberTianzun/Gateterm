@@ -592,6 +592,14 @@ pub struct Key {
     pub agent_session_id: String,
 }
 
+#[derive(Clone, Deserialize)]
+pub struct HistoryMessagesQuery {
+    pub agent_id: String,
+    pub agent_session_id: String,
+    #[serde(default)]
+    pub before: Option<String>,
+}
+
 fn find_entry(state: &AppState, key: &Key) -> Option<Entry> {
     state
         .agent_sessions
@@ -607,19 +615,29 @@ fn find_entry(state: &AppState, key: &Key) -> Option<Entry> {
 pub async fn messages(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(key): Query<Key>,
+    Query(query): Query<HistoryMessagesQuery>,
 ) -> Response {
     if let Some(response) = guard(&state, &headers) {
         return response;
     }
+    let key = Key {
+        agent_id: query.agent_id,
+        agent_session_id: query.agent_session_id,
+    };
     let Some(entry) = find_entry(&state, &key) else {
         return error(StatusCode::NOT_FOUND, "not-found");
     };
     let Some(adapter) = super::find(&entry.agent_id) else {
         return error(StatusCode::NOT_FOUND, "not-found");
     };
+    let before = query.before.filter(|s| !s.is_empty());
     match tokio::task::spawn_blocking(move || {
-        super::transcript::read_window(&entry.path, None, &|t, b| adapter.parse_transcript(t, b))
+        let parse = |t: &str, b: u64| adapter.parse_transcript(t, b);
+        if let Some(before) = before.as_deref() {
+            super::transcript::read_older_window(&entry.path, before, &parse)
+        } else {
+            super::transcript::read_window(&entry.path, None, &parse)
+        }
     })
     .await
     {
@@ -1745,5 +1763,160 @@ mod tests {
             None
         );
         state.manager.kill(sid_empty);
+    }
+
+    #[tokio::test]
+    async fn messages_endpoint_supports_backward_pagination_and_resets_invalid_cursors() {
+        let home = tempfile::tempdir().unwrap();
+        let line = |id: usize, text: &str| -> String {
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "sessionId": "claude-paginated",
+                    "type": "user",
+                    "uuid": format!("m{id}"),
+                    "message": { "role": "user", "content": text }
+                })
+            )
+        };
+        fixture(
+            home.path(),
+            ".claude/projects/p/claude-paginated.jsonl",
+            &(0..450).map(|i| line(i, "hello")).collect::<String>(),
+        );
+
+        let metadata = format!(
+            "{}\n",
+            serde_json::json!({"type": "metadata", "padding": "x".repeat(100_000)})
+        );
+        let meta_body = format!(
+            "{}\n{}",
+            serde_json::json!({
+                "sessionId": "claude-meta-tail",
+                "type": "user",
+                "uuid": "early-prompt",
+                "message": { "role": "user", "content": "Earlier user prompt" }
+            }),
+            metadata.repeat(50)
+        );
+        fixture(
+            home.path(),
+            ".claude/projects/p/claude-meta-tail.jsonl",
+            &meta_body,
+        );
+
+        let state = state();
+        *state.agent_sessions.history.lock().unwrap() = scan(&DetectEnv {
+            home: home.path().into(),
+            path: None,
+        });
+
+        let fetch = |agent_session_id: &str, before: Option<String>, hdrs: HeaderMap| {
+            let state = state.clone();
+            let agent_session_id = agent_session_id.to_string();
+            async move {
+                messages(
+                    State(state),
+                    hdrs,
+                    Query(HistoryMessagesQuery {
+                        agent_id: "claude-code".into(),
+                        agent_session_id,
+                        before,
+                    }),
+                )
+                .await
+            }
+        };
+
+        let parse_body = |resp: Response| async move {
+            let status = resp.status();
+            let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+                .await
+                .unwrap();
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            (status, body)
+        };
+
+        // 1. Initial call (before: None) returns tail with older_cursor and reset == true.
+        let (status, first) = parse_body(fetch("claude-paginated", None, headers()).await).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(first["source"], "transcript");
+        assert_eq!(first["reset"], true);
+        assert!(first["older_cursor"].as_str().is_some());
+
+        let msg_ids = |v: &Value| -> Vec<String> {
+            v["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| m["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+
+        let tail_ids = msg_ids(&first);
+        let mut all_ids = tail_ids.clone();
+        let mut cursor = first["older_cursor"].as_str().map(str::to_string);
+        let mut visited = HashSet::new();
+
+        // 2. Looping with before until older_cursor is None yields !reset pages and all 450 IDs.
+        while let Some(before) = cursor {
+            assert!(visited.insert(before.clone()), "backward cursor stalled");
+            let (st, page) =
+                parse_body(fetch("claude-paginated", Some(before), headers()).await).await;
+            assert_eq!(st, StatusCode::OK);
+            assert_eq!(page["source"], "transcript");
+            assert_eq!(page["reset"], false);
+            let mut earlier = msg_ids(&page);
+            earlier.extend(all_ids);
+            all_ids = earlier;
+            cursor = page["older_cursor"].as_str().map(str::to_string);
+        }
+        assert_eq!(
+            all_ids,
+            (0..450).map(|i| format!("m{i}")).collect::<Vec<_>>()
+        );
+
+        // 3. Empty before behaves identically to before: None.
+        let (st_empty, empty_before) =
+            parse_body(fetch("claude-paginated", Some(String::new()), headers()).await).await;
+        assert_eq!(st_empty, StatusCode::OK);
+        assert_eq!(empty_before["reset"], true);
+        assert_eq!(msg_ids(&empty_before), tail_ids);
+
+        // 4. Malformed before returns reset == true with a valid fresh tail window.
+        let (st_bad, malformed) =
+            parse_body(fetch("claude-paginated", Some("garbage".into()), headers()).await).await;
+        assert_eq!(st_bad, StatusCode::OK);
+        assert_eq!(malformed["reset"], true);
+        assert_eq!(msg_ids(&malformed), tail_ids);
+
+        // 5. Trailing >4 MiB metadata-only returns empty messages with older_cursor, and paging recovers prompt.
+        let (st_meta, mut meta_page) =
+            parse_body(fetch("claude-meta-tail", None, headers()).await).await;
+        assert_eq!(st_meta, StatusCode::OK);
+        assert_eq!(meta_page["reset"], true);
+        assert!(meta_page["messages"].as_array().unwrap().is_empty());
+        assert!(meta_page["older_cursor"].as_str().is_some());
+
+        let mut recovered = Vec::new();
+        let mut meta_visited = HashSet::new();
+        while let Some(before) = meta_page["older_cursor"].as_str().map(str::to_string) {
+            assert!(meta_visited.insert(before.clone()));
+            let (st, page) =
+                parse_body(fetch("claude-meta-tail", Some(before), headers()).await).await;
+            assert_eq!(st, StatusCode::OK);
+            assert_eq!(page["reset"], false);
+            let mut earlier = msg_ids(&page);
+            earlier.extend(recovered);
+            recovered = earlier;
+            meta_page = page;
+        }
+        assert_eq!(recovered, vec!["early-prompt"]);
+
+        // 6. Unauthenticated returns 401 and unknown session returns 404 even with before.
+        let unauth = fetch("claude-paginated", Some("cursor".into()), HeaderMap::new()).await;
+        assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
+        let missing = fetch("does-not-exist", Some("cursor".into()), headers()).await;
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     }
 }
