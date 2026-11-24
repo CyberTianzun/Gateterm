@@ -537,7 +537,6 @@ impl AgentSessionStore {
                 full_title,
             },
         );
-        drop(titles);
         let _ = manager.auto_rename(session_id, &concise);
         true
     }
