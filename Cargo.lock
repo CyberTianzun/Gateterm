@@ -1476,7 +1476,7 @@ dependencies = [
 
 [[package]]
 name = "gateterm-client-core"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "alacritty_terminal",
  "base64",
@@ -1487,7 +1487,7 @@ dependencies = [
 
 [[package]]
 name = "gateterm-cloud-client"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "axum",
  "directories",
@@ -1501,7 +1501,7 @@ dependencies = [
 
 [[package]]
 name = "gateterm-cloud-ffi"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "axum",
  "gateterm-client-core",
@@ -1515,7 +1515,7 @@ dependencies = [
 
 [[package]]
 name = "gateterm-desktop-web"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1556,7 +1556,7 @@ dependencies = [
 
 [[package]]
 name = "gateterm-protocol"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -1565,7 +1565,7 @@ dependencies = [
 
 [[package]]
 name = "gateterm-server"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
