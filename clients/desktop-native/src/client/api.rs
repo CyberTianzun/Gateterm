@@ -125,6 +125,17 @@ pub struct ChatMessage {
     pub blocks: Vec<ChatBlock>,
 }
 
+fn deserialize_present_opt<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(
+        Option::<String>::deserialize(deserializer)?.filter(|s| !s.is_empty()),
+    ))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "kebab-case")]
 pub enum ChatWindow {
@@ -137,13 +148,36 @@ pub enum ChatWindow {
         reset: bool,
         #[serde(default)]
         more: bool,
-        #[serde(default)]
-        older_cursor: Option<String>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_opt"
+        )]
+        older_cursor: Option<Option<String>>,
     },
     Terminal {
         #[serde(default)]
         reason: String,
     },
+}
+
+impl ChatWindow {
+    pub fn older_cursor(&self) -> Option<&str> {
+        match self {
+            Self::Transcript { older_cursor, .. } => older_cursor
+                .as_ref()
+                .and_then(|o| o.as_deref())
+                .filter(|s| !s.is_empty()),
+            Self::Terminal { .. } => None,
+        }
+    }
+
+    pub fn history_supported(&self) -> bool {
+        match self {
+            Self::Transcript { older_cursor, .. } => older_cursor.is_some(),
+            Self::Terminal { .. } => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -367,7 +401,7 @@ impl GateHttpClient {
         if let Some(a) = after {
             req = req.query(&[("after", a)]);
         }
-        if let Some(b) = before {
+        if let Some(b) = before.filter(|s| !s.is_empty()) {
             req = req.query(&[("before", b)]);
         }
         match req.send().await {
@@ -411,17 +445,20 @@ impl GateHttpClient {
         &self,
         agent_id: &str,
         agent_session_id: &str,
+        before: Option<&str>,
     ) -> Result<ChatWindow> {
-        let resp = self
+        let mut req = self
             .http
             .get(self.url("/api/agents/history/messages"))
             .bearer_auth(&self.token)
             .query(&[
                 ("agent_id", agent_id),
                 ("agent_session_id", agent_session_id),
-            ])
-            .send()
-            .await?;
+            ]);
+        if let Some(b) = before.filter(|s| !s.is_empty()) {
+            req = req.query(&[("before", b)]);
+        }
+        let resp = req.send().await?;
         if !resp.status().is_success() {
             bail!("GET /api/agents/history/messages returned {}", resp.status());
         }
@@ -591,5 +628,68 @@ mod tests {
                 .await,
             McpServerStatus::Error(_)
         ));
+    }
+
+    #[test]
+    fn chat_window_transcript_distinguishes_older_cursor_presence() {
+        let old_server: ChatWindow =
+            serde_json::from_str(r#"{"source":"transcript","messages":[],"cursor":"c1"}"#)
+                .unwrap();
+        assert!(!old_server.history_supported());
+        assert_eq!(old_server.older_cursor(), None);
+
+        let at_beginning: ChatWindow = serde_json::from_str(
+            r#"{"source":"transcript","messages":[],"cursor":"c1","older_cursor":null}"#,
+        )
+        .unwrap();
+        assert!(at_beginning.history_supported());
+        assert_eq!(at_beginning.older_cursor(), None);
+
+        let has_older: ChatWindow = serde_json::from_str(
+            r#"{"source":"transcript","messages":[],"cursor":"c1","older_cursor":"opaque-1"}"#,
+        )
+        .unwrap();
+        assert!(has_older.history_supported());
+        assert_eq!(has_older.older_cursor(), Some("opaque-1"));
+
+        let term: ChatWindow =
+            serde_json::from_str(r#"{"source":"terminal","reason":"unreadable"}"#).unwrap();
+        assert!(!term.history_supported());
+        assert_eq!(term.older_cursor(), None);
+    }
+
+    #[tokio::test]
+    async fn fetch_history_messages_encodes_optional_before_query_param() {
+        let body = r#"{"source":"transcript","messages":[],"cursor":"c1","older_cursor":null}"#;
+
+        let (base_no_before, req_no_before) = serve_one_http_response("200 OK", body).await;
+        let win = GateHttpClient::new(base_no_before, "tok")
+            .fetch_history_messages("codex", "sess-1", None)
+            .await
+            .unwrap();
+        assert!(win.history_supported());
+        let raw_no_before = req_no_before.await.unwrap();
+        let line_no_before = raw_no_before.lines().next().unwrap();
+        assert!(line_no_before.contains("/api/agents/history/messages?"));
+        assert!(line_no_before.contains("agent_id=codex"));
+        assert!(line_no_before.contains("agent_session_id=sess-1"));
+        assert!(!line_no_before.contains("before="));
+
+        let (base_empty_before, req_empty_before) = serve_one_http_response("200 OK", body).await;
+        GateHttpClient::new(base_empty_before, "tok")
+            .fetch_history_messages("codex", "sess-1", Some(""))
+            .await
+            .unwrap();
+        let raw_empty_before = req_empty_before.await.unwrap();
+        assert!(!raw_empty_before.lines().next().unwrap().contains("before="));
+
+        let (base_with_before, req_with_before) = serve_one_http_response("200 OK", body).await;
+        GateHttpClient::new(base_with_before, "tok")
+            .fetch_history_messages("codex", "sess-1", Some("cur/a+b"))
+            .await
+            .unwrap();
+        let raw_with_before = req_with_before.await.unwrap();
+        let line_with_before = raw_with_before.lines().next().unwrap();
+        assert!(line_with_before.contains("before=cur%2Fa%2Bb"));
     }
 }

@@ -15,9 +15,10 @@ use gpui_component::{
 };
 
 use super::app::GatetermWorkbench;
-use super::chat_view::render_message_list;
+use super::chat_view::{render_message_list, render_older_history_control};
 use super::icons::{GatetermIcon, render_agent_brand_icon};
-use crate::client::api::{ChatMessage, HistoryAgentFilter, HistoryEntry};
+use crate::client::ChatTranscriptState;
+use crate::client::api::{HistoryAgentFilter, HistoryEntry};
 
 #[derive(Default)]
 pub struct HistoryModalState {
@@ -30,8 +31,17 @@ pub struct HistoryModalState {
     pub loading: bool,
     pub error: Option<String>,
     pub selected_key: Option<(String, String)>,
-    pub preview_messages: Vec<ChatMessage>,
+    pub preview_state: ChatTranscriptState,
     pub preview_loading: bool,
+    pub preview_revision: u64,
+}
+
+impl HistoryModalState {
+    pub fn close(&mut self) {
+        self.open = false;
+        self.preview_revision = self.preview_revision.wrapping_add(1);
+        self.preview_state.older_loading = false;
+    }
 }
 
 pub fn render_history_modal(
@@ -235,6 +245,25 @@ pub fn render_history_modal(
         );
     }
 
+    let preview_older_bar = if !state.preview_loading
+        && (!state.preview_state.messages.is_empty() || state.preview_state.older_cursor.is_some())
+    {
+        render_older_history_control(
+            "hist-load-older",
+            state.preview_state.history_supported,
+            state.preview_state.older_cursor.is_some(),
+            state.preview_state.older_loading,
+            state.preview_state.older_failed,
+            locale,
+            cx,
+            |this, cx| {
+                this.load_older_history_preview(cx);
+            },
+        )
+    } else {
+        None
+    };
+
     let preview_pane: AnyElement = if state.preview_loading {
         v_flex()
             .size_full()
@@ -247,7 +276,8 @@ pub fn render_history_modal(
                     .child(locale.t("正在加载对话预览…", "Loading transcript preview...")),
             )
             .into_any_element()
-    } else if state.preview_messages.is_empty() {
+    } else if state.preview_state.messages.is_empty() && state.preview_state.older_cursor.is_none()
+    {
         v_flex()
             .size_full()
             .items_center()
@@ -264,7 +294,47 @@ pub fn render_history_modal(
             )
             .into_any_element()
     } else {
-        render_message_list(&state.preview_messages, locale, cx)
+        let body: AnyElement = if state.preview_state.messages.is_empty()
+            && state.preview_state.older_loading
+        {
+            v_flex()
+                .flex_1()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(locale.t("正在加载更早消息…", "Loading earlier messages...")),
+                )
+                .into_any_element()
+        } else {
+            render_message_list(&state.preview_state.messages, locale, cx)
+        };
+        v_flex()
+            .size_full()
+            .overflow_hidden()
+            .children(preview_older_bar.map(|ctrl| {
+                h_flex()
+                    .w_full()
+                    .px_3()
+                    .py_1p5()
+                    .items_center()
+                    .justify_between()
+                    .bg(cx.theme().tab_bar)
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(locale.t("对话预览", "Transcript Preview")),
+                    )
+                    .child(ctrl)
+            }))
+            .child(div().flex_1().size_full().overflow_hidden().child(body))
+            .into_any_element()
     };
 
     let dialog = v_flex()
@@ -321,7 +391,7 @@ pub fn render_history_modal(
                         .ghost()
                         .icon(IconName::Close)
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.history_modal.open = false;
+                            this.history_modal.close();
                             cx.notify();
                         })),
                 ),
@@ -401,7 +471,7 @@ pub fn render_history_modal(
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
-                    this.history_modal.open = false;
+                    this.history_modal.close();
                     cx.notify();
                 }),
             )

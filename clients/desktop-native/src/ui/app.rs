@@ -39,8 +39,9 @@ use crate::client::api::{
 };
 use crate::client::ws::{WsCommand, WsConnectionState, WsEvent, spawn_ws_worker};
 use crate::client::{
-    ChatTranscriptState, apply_agent_event, apply_chat_window, best_agent_for_session,
-    chat_agent_for_session, replace_all_agents,
+    ChatTranscriptState, MAX_AUTO_OLDER_PAGES, OlderPageStep, apply_agent_event, apply_chat_window,
+    apply_older_page, best_agent_for_session, chat_agent_for_session, has_user_prompt,
+    replace_all_agents,
 };
 use crate::config::{DesktopClientConfig, LOCAL_SERVER_ID, ServerProfile, parse_access_url};
 use crate::gpui_tokio::Tokio;
@@ -1507,6 +1508,55 @@ impl GatetermWorkbench {
         cx.notify();
     }
 
+    fn spawn_older_loop<F, Fut>(
+        &self,
+        initial_cursor: String,
+        cx: &mut Context<Self>,
+        fetch_page: F,
+        mut on_page: impl FnMut(&mut Self, &str, ChatWindow, usize) -> Option<OlderPageStep> + 'static,
+        mut on_finish_check: impl FnMut(&mut Self, bool) + 'static,
+    ) where
+        F: Fn(String) -> Fut + 'static,
+        Fut: std::future::Future<Output = ChatWindow> + Send + 'static,
+    {
+        cx.spawn(async move |this, cx| {
+            let mut cursor = initial_cursor;
+            let mut pages_fetched = 0usize;
+            loop {
+                if pages_fetched >= MAX_AUTO_OLDER_PAGES {
+                    let _ = this.update(cx, |this, cx| {
+                        on_finish_check(this, false);
+                        cx.notify();
+                    });
+                    break;
+                }
+                let fut = fetch_page(cursor.clone());
+                let task = Tokio::spawn_result(cx, async move { Ok(fut.await) });
+                let Ok(win) = task.await else {
+                    let _ = this.update(cx, |this, cx| {
+                        on_finish_check(this, true);
+                        cx.notify();
+                    });
+                    break;
+                };
+                pages_fetched += 1;
+                let mut next_step = None;
+                let updated = this.update(cx, |this, cx| {
+                    next_step = on_page(this, &cursor, win, pages_fetched);
+                    cx.notify();
+                });
+                if updated.is_err() {
+                    break;
+                }
+                match next_step {
+                    Some(OlderPageStep::Continue { next_cursor }) => cursor = next_cursor,
+                    _ => break,
+                }
+            }
+        })
+        .detach();
+    }
+
     pub fn fetch_chat_messages(
         &mut self,
         server_id: String,
@@ -1514,6 +1564,10 @@ impl GatetermWorkbench {
         older: bool,
         cx: &mut Context<Self>,
     ) {
+        if older {
+            self.start_older_chat_loop(server_id, session_id, cx);
+            return;
+        }
         let Some(conn) = self.servers.get_mut(&server_id) else {
             return;
         };
@@ -1523,52 +1577,158 @@ impl GatetermWorkbench {
         let Some(agent) = chat_agent_for_session(&conn.agent_sessions, session_id) else {
             let st = conn.chat_states.entry(session_id).or_default();
             st.fallback_reason = Some("no-transcript-path".to_string());
+            st.older_loading = false;
+            st.timeline = st.timeline.wrapping_add(1);
             cx.notify();
             return;
         };
 
-        let before = if older {
-            conn.chat_states
-                .get(&session_id)
-                .and_then(|st| st.older_cursor.clone())
-        } else {
-            None
-        };
-        let after = if !older {
-            conn.chat_states
-                .get(&session_id)
-                .map(|st| st.cursor.clone())
-                .filter(|c| !c.is_empty())
-        } else {
-            None
-        };
+        let agent_key = agent.key();
+        let st = conn.chat_states.entry(session_id).or_default();
+        let switched = st.agent_key.as_deref() != Some(agent_key.as_str());
+        if switched {
+            st.messages.clear();
+            st.cursor.clear();
+            st.older_cursor = None;
+            st.history_supported = false;
+            st.older_loading = false;
+            st.older_failed = false;
+            st.fallback_reason = None;
+            st.timeline = st.timeline.wrapping_add(1);
+            st.agent_key = Some(agent_key.clone());
+        }
+
+        let after = (!switched && !st.cursor.is_empty()).then(|| st.cursor.clone());
+        let is_fresh_request = after.is_none();
+        let had_fallback = st.fallback_reason.is_some();
+        let request_timeline = st.timeline;
 
         let agent_id = agent.agent_id.clone();
         let agent_session_id = agent.agent_session_id.clone();
 
         let task = Tokio::spawn_result(cx, async move {
             Ok(http
-                .fetch_messages(
-                    &agent_id,
-                    &agent_session_id,
-                    after.as_deref(),
-                    before.as_deref(),
-                )
+                .fetch_messages(&agent_id, &agent_session_id, after.as_deref(), None)
                 .await)
         });
 
         cx.spawn(async move |this, cx| {
             if let Ok(window_data) = task.await {
                 let _ = this.update(cx, |this, cx| {
+                    let mut should_auto_older = false;
                     if let Some(conn) = this.servers.get_mut(&server_id) {
                         let st = conn.chat_states.entry(session_id).or_default();
-                        apply_chat_window(st, window_data, older);
+                        if st.timeline != request_timeline
+                            || st.agent_key.as_deref() != Some(agent_key.as_str())
+                        {
+                            return;
+                        }
+                        let is_transcript = matches!(&window_data, ChatWindow::Transcript { .. });
+                        let was_reset =
+                            matches!(&window_data, ChatWindow::Transcript { reset: true, .. });
+                        apply_chat_window(st, window_data, false);
+                        should_auto_older = is_transcript
+                            && (is_fresh_request || was_reset || had_fallback)
+                            && !has_user_prompt(&st.messages)
+                            && st.older_cursor.is_some()
+                            && !st.older_loading;
+                    }
+                    if should_auto_older {
+                        this.start_older_chat_loop(server_id, session_id, cx);
                     }
                     cx.notify();
                 });
             }
         })
         .detach();
+    }
+
+    pub fn start_older_chat_loop(
+        &mut self,
+        server_id: String,
+        session_id: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(conn) = self.servers.get_mut(&server_id) else {
+            return;
+        };
+        let Some(http) = conn.http.clone() else {
+            return;
+        };
+        let Some(agent) = chat_agent_for_session(&conn.agent_sessions, session_id) else {
+            return;
+        };
+        let agent_key = agent.key();
+        let Some(st) = conn.chat_states.get_mut(&session_id) else {
+            return;
+        };
+        if st.older_loading {
+            return;
+        }
+        if st.agent_key.is_none() {
+            st.agent_key = Some(agent_key.clone());
+        } else if st.agent_key.as_deref() != Some(agent_key.as_str()) {
+            return;
+        }
+        let Some(cursor) = st.older_cursor.clone().filter(|s| !s.is_empty()) else {
+            return;
+        };
+        let timeline = st.timeline;
+        st.older_loading = true;
+        st.older_failed = false;
+        cx.notify();
+
+        let agent_id = agent.agent_id.clone();
+        let agent_session_id = agent.agent_session_id.clone();
+        let srv_page = server_id.clone();
+        let key_page = agent_key.clone();
+
+        self.spawn_older_loop(
+            cursor,
+            cx,
+            move |before| {
+                let http = http.clone();
+                let aid = agent_id.clone();
+                let asid = agent_session_id.clone();
+                async move { http.fetch_messages(&aid, &asid, None, Some(&before)).await }
+            },
+            move |this, requested_before, win, pages_fetched| {
+                let conn = this.servers.get_mut(&srv_page)?;
+                let current_agent_matches =
+                    chat_agent_for_session(&conn.agent_sessions, session_id)
+                        .is_some_and(|a| a.key() == key_page);
+                let st = conn.chat_states.get_mut(&session_id)?;
+                if st.timeline != timeline || st.agent_key.as_deref() != Some(key_page.as_str()) {
+                    return None;
+                }
+                if !current_agent_matches {
+                    st.older_loading = false;
+                    return None;
+                }
+                Some(apply_older_page(
+                    st,
+                    requested_before,
+                    win,
+                    pages_fetched,
+                    MAX_AUTO_OLDER_PAGES,
+                    false,
+                ))
+            },
+            move |this, failed| {
+                if let Some(conn) = this.servers.get_mut(&server_id) {
+                    if let Some(st) = conn.chat_states.get_mut(&session_id) {
+                        if st.timeline == timeline
+                            && st.agent_key.as_deref() == Some(agent_key.as_str())
+                        {
+                            st.older_loading = false;
+                            if failed {
+                                st.older_failed = true;
+                            }
+                        }
+                    }
+                }
+            },
+        );
     }
 
     pub fn send_chat_prompt_to_session(
@@ -1606,6 +1766,10 @@ impl GatetermWorkbench {
     pub fn open_history_modal(&mut self, cx: &mut Context<Self>) {
         self.history_modal.open = true;
         self.history_modal.server_id = self.active_server_id.clone();
+        self.history_modal.preview_revision = self.history_modal.preview_revision.wrapping_add(1);
+        self.history_modal.selected_key = None;
+        self.history_modal.preview_loading = false;
+        self.history_modal.preview_state = ChatTranscriptState::default();
         self.pending_focus_terminal = true;
         self.refresh_history_list(false, cx);
         cx.notify();
@@ -1674,35 +1838,122 @@ impl GatetermWorkbench {
         agent_session_id: String,
         cx: &mut Context<Self>,
     ) {
+        self.history_modal.preview_revision = self.history_modal.preview_revision.wrapping_add(1);
+        let revision = self.history_modal.preview_revision;
         self.history_modal.selected_key = Some((agent_id.clone(), agent_session_id.clone()));
         self.history_modal.preview_loading = true;
-        self.history_modal.preview_messages.clear();
+        self.history_modal.preview_state = ChatTranscriptState::default();
         cx.notify();
 
-        let srv_id = self.history_modal.server_id.clone();
+        let srv_id = if self.history_modal.server_id.is_empty() {
+            self.active_server_id.clone()
+        } else {
+            self.history_modal.server_id.clone()
+        };
         let Some(http) = self.servers.get(&srv_id).and_then(|s| s.http.clone()) else {
+            self.history_modal.preview_loading = false;
+            cx.notify();
             return;
         };
         let task = Tokio::spawn_result(cx, async move {
-            http.fetch_history_messages(&agent_id, &agent_session_id)
+            http.fetch_history_messages(&agent_id, &agent_session_id, None)
                 .await
         });
 
         cx.spawn(async move |this, cx| {
-            if let Ok(ChatWindow::Transcript { messages, .. }) = task.await {
-                let _ = this.update(cx, |this, cx| {
-                    this.history_modal.preview_loading = false;
-                    this.history_modal.preview_messages = messages;
-                    cx.notify();
-                });
-            } else {
-                let _ = this.update(cx, |this, cx| {
-                    this.history_modal.preview_loading = false;
-                    cx.notify();
-                });
-            }
+            let res = task.await;
+            let _ = this.update(cx, |this, cx| {
+                if !this.history_modal.open || this.history_modal.preview_revision != revision {
+                    return;
+                }
+                this.history_modal.preview_loading = false;
+                if let Ok(win) = res {
+                    let is_transcript = matches!(&win, ChatWindow::Transcript { .. });
+                    apply_chat_window(&mut this.history_modal.preview_state, win, false);
+                    if is_transcript
+                        && !has_user_prompt(&this.history_modal.preview_state.messages)
+                        && this.history_modal.preview_state.older_cursor.is_some()
+                    {
+                        this.start_older_history_loop(cx);
+                    }
+                }
+                cx.notify();
+            });
         })
         .detach();
+    }
+
+    pub fn load_older_history_preview(&mut self, cx: &mut Context<Self>) {
+        self.start_older_history_loop(cx);
+    }
+
+    pub fn start_older_history_loop(&mut self, cx: &mut Context<Self>) {
+        if !self.history_modal.open || self.history_modal.preview_state.older_loading {
+            return;
+        }
+        let Some(cursor) = self
+            .history_modal
+            .preview_state
+            .older_cursor
+            .clone()
+            .filter(|s| !s.is_empty())
+        else {
+            return;
+        };
+        let Some((agent_id, agent_session_id)) = self.history_modal.selected_key.clone() else {
+            return;
+        };
+        let srv_id = if self.history_modal.server_id.is_empty() {
+            self.active_server_id.clone()
+        } else {
+            self.history_modal.server_id.clone()
+        };
+        let Some(http) = self.servers.get(&srv_id).and_then(|s| s.http.clone()) else {
+            return;
+        };
+        let revision = self.history_modal.preview_revision;
+        self.history_modal.preview_state.older_loading = true;
+        self.history_modal.preview_state.older_failed = false;
+        cx.notify();
+
+        self.spawn_older_loop(
+            cursor,
+            cx,
+            move |before| {
+                let http = http.clone();
+                let aid = agent_id.clone();
+                let asid = agent_session_id.clone();
+                async move {
+                    match http.fetch_history_messages(&aid, &asid, Some(&before)).await {
+                        Ok(win) => win,
+                        Err(_) => ChatWindow::Terminal {
+                            reason: "unreadable".into(),
+                        },
+                    }
+                }
+            },
+            move |this, requested_before, win, pages_fetched| {
+                if !this.history_modal.open || this.history_modal.preview_revision != revision {
+                    return None;
+                }
+                Some(apply_older_page(
+                    &mut this.history_modal.preview_state,
+                    requested_before,
+                    win,
+                    pages_fetched,
+                    MAX_AUTO_OLDER_PAGES,
+                    true,
+                ))
+            },
+            move |this, failed| {
+                if this.history_modal.open && this.history_modal.preview_revision == revision {
+                    this.history_modal.preview_state.older_loading = false;
+                    if failed {
+                        this.history_modal.preview_state.older_failed = true;
+                    }
+                }
+            },
+        );
     }
 
     pub fn open_history_entry(
@@ -1724,7 +1975,7 @@ impl GatetermWorkbench {
         cx.spawn(async move |this, cx| match task.await {
             Ok(resp) => {
                 let _ = this.update(cx, |this, cx| {
-                    this.history_modal.open = false;
+                    this.history_modal.close();
                     this.history_modal.error = None;
                     if let Some(conn) = this.servers.get_mut(&srv_id) {
                         if !conn.sessions.iter().any(|s| s.id == resp.session.id) {

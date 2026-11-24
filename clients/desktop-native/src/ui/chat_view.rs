@@ -5,7 +5,7 @@ use gpui::{
     SharedString, Styled as _, div, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::Input,
@@ -53,6 +53,9 @@ pub fn render_chat_view(
     let srv_send = server_id.to_string();
 
     let older_cursor = state_opt.and_then(|st| st.older_cursor.clone());
+    let history_supported = state_opt.is_some_and(|st| st.history_supported);
+    let older_loading = state_opt.is_some_and(|st| st.older_loading);
+    let older_failed = state_opt.is_some_and(|st| st.older_failed);
     let fallback_reason = state_opt.and_then(|st| st.fallback_reason.clone());
     let messages: Vec<ChatMessage> = state_opt
         .map(|st| st.messages.clone())
@@ -84,15 +87,18 @@ pub fn render_chat_view(
             h_flex()
                 .items_center()
                 .gap_1p5()
-                .children(older_cursor.map(|_| {
-                    Button::new("chat-load-older")
-                        .xsmall()
-                        .ghost()
-                        .label(locale.t("加载更早消息", "Load Older"))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.fetch_chat_messages(srv_older.clone(), session_id, true, cx);
-                        }))
-                }))
+                .children(render_older_history_control(
+                    "chat-load-older",
+                    history_supported,
+                    older_cursor.is_some(),
+                    older_loading,
+                    older_failed,
+                    locale,
+                    cx,
+                    move |this, cx| {
+                        this.fetch_chat_messages(srv_older.clone(), session_id, true, cx);
+                    },
+                ))
                 .child(
                     Button::new("chat-refresh")
                         .xsmall()
@@ -146,7 +152,7 @@ pub fn render_chat_view(
                     })),
             )
             .into_any_element()
-    } else if messages.is_empty() {
+    } else if messages.is_empty() && older_cursor.is_none() {
         v_flex()
             .flex_1()
             .size_full()
@@ -167,6 +173,20 @@ pub fn render_chat_view(
                         "暂无结构化对话记录。若此会话正在运行 Claude / Codex / OpenCode / Antigravity，请点击刷新。",
                         "No structured transcript messages yet. Click Refresh if an AI agent is running in this session.",
                     )),
+            )
+            .into_any_element()
+    } else if messages.is_empty() && older_loading {
+        v_flex()
+            .flex_1()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .p_6()
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(locale.t("正在加载更早消息…", "Loading earlier messages...")),
             )
             .into_any_element()
     } else {
@@ -206,6 +226,51 @@ pub fn render_chat_view(
         .into_any_element()
 }
 
+/// Shared Load Older / Loading / Retry / Beginning control used by ChatView and History Preview.
+pub fn render_older_history_control(
+    button_id: &'static str,
+    history_supported: bool,
+    has_older_cursor: bool,
+    older_loading: bool,
+    older_failed: bool,
+    locale: Locale,
+    cx: &mut Context<GatetermWorkbench>,
+    on_click: impl Fn(&mut GatetermWorkbench, &mut Context<GatetermWorkbench>) + 'static,
+) -> Option<AnyElement> {
+    if !history_supported {
+        return None;
+    }
+    if has_older_cursor {
+        let label = if older_loading {
+            locale.t("正在加载…", "Loading...")
+        } else if older_failed {
+            locale.t("加载失败，点击重试", "Failed · Retry")
+        } else {
+            locale.t("加载更早消息", "Load Older")
+        };
+        Some(
+            Button::new(button_id)
+                .xsmall()
+                .ghost()
+                .disabled(older_loading)
+                .label(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    on_click(this, cx);
+                }))
+                .into_any_element(),
+        )
+    } else {
+        Some(
+            div()
+                .px_1p5()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(locale.t("已到对话开头", "Beginning of conversation"))
+                .into_any_element(),
+        )
+    }
+}
+
 pub fn render_message_list(
     messages: &[ChatMessage],
     locale: Locale,
@@ -213,7 +278,7 @@ pub fn render_message_list(
 ) -> AnyElement {
     let mut list = v_flex().w_full().p_4().gap_3();
 
-    for (idx, msg) in messages.iter().enumerate() {
+    for msg in messages {
         let (role_label, role_bg, role_border, role_fg) = match msg.role {
             ChatRole::User => (
                 locale.t("用户", "User"),
@@ -236,7 +301,7 @@ pub fn render_message_list(
         };
 
         let mut card = v_flex()
-            .id(SharedString::from(format!("chat-msg-{idx}-{}", msg.id)))
+            .id(SharedString::from(format!("chat-msg-{}", msg.id)))
             .w_full()
             .p_3()
             .gap_2()
