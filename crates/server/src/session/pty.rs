@@ -114,6 +114,14 @@ pub struct Snapshot {
     pub resize_revision: u64,
 }
 
+/// Non-intrusive summary of attached human viewports and recency of human input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+pub struct HumanPresence {
+    pub attached_clients: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_input_secs: Option<u64>,
+}
+
 /// Plain-text screen snapshot paired with the exact buffer `seq` under one lock.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ScreenSnapshot {
@@ -126,6 +134,7 @@ pub struct ScreenSnapshot {
     pub exited: bool,
     pub history_available: usize,
     pub history_returned: usize,
+    pub human: HumanPresence,
     pub text: String,
 }
 
@@ -315,6 +324,7 @@ impl Session {
             buffer_cap,
             window_size,
             ClipboardConfig::default(),
+            None,
         )
     }
 
@@ -328,6 +338,7 @@ impl Session {
         buffer_cap: usize,
         window_size: WindowSize,
         clipboard: ClipboardConfig,
+        server_id: Option<&str>,
     ) -> Result<Arc<Session>> {
         // 只有 Windows 分支会改写 argv
         #[allow(unused_mut)]
@@ -404,6 +415,9 @@ impl Session {
         // 反过来也成立:在 gateterm 之外启动的 Claude 拿不到这两个变量,hook 照样触发
         // 但没有鉴权头,一律 401 —— 「只管托管会话」这条边界由机制保证。
         cmd.env("GATETERM_SESSION_ID", id.to_string());
+        if let Some(sid) = server_id.filter(|s| !s.is_empty()) {
+            cmd.env("GATETERM_SERVER_ID", sid);
+        }
         cmd.env("GATETERM_HOOK_TOKEN", crate::agent::store::hook_token());
 
         let mut child = pty
@@ -609,6 +623,19 @@ impl Session {
         (at != 0).then(|| Duration::from_millis(monotonic_ms().saturating_sub(at)))
     }
 
+    /// Number of human/UI viewports currently attached to this session.
+    pub fn attached_clients(&self) -> usize {
+        self.shared.lock().unwrap().viewports.len()
+    }
+
+    /// Non-intrusive summary of attached UI clients and recency of human input.
+    pub fn human_presence(&self) -> HumanPresence {
+        HumanPresence {
+            attached_clients: self.attached_clients(),
+            last_input_secs: self.since_last_input().map(|d| d.as_secs()),
+        }
+    }
+
     /// 把一段待复制文本投给剪贴板目标(最近一次输入的 attach)。没有目标就丢弃 ——
     /// 宁可这次没复制上,也不能改掉别人的剪贴板。返回是否真的投递了。
     pub fn deliver_clipboard(&self, text: String) -> bool {
@@ -721,12 +748,17 @@ impl Session {
 
     /// Capture a non-intrusive plain-text snapshot and `end_seq` under the same lock.
     pub fn plain_text_screen(&self, scrollback_lines: usize) -> ScreenSnapshot {
-        let (snap, seq) = {
+        let (snap, seq, attached_clients) = {
             let shared = self.shared.lock().unwrap();
             (
                 shared.grid.plain_text_snapshot(scrollback_lines),
                 shared.buffer.end_seq(),
+                shared.viewports.len(),
             )
+        };
+        let human = HumanPresence {
+            attached_clients,
+            last_input_secs: self.since_last_input().map(|d| d.as_secs()),
         };
         ScreenSnapshot {
             session_id: self.id,
@@ -738,6 +770,7 @@ impl Session {
             exited: self.has_exited(),
             history_available: snap.history_available,
             history_returned: snap.history_returned,
+            human,
             text: snap.text,
         }
     }
@@ -1391,6 +1424,44 @@ mod tests {
             .expect("terminal_title_state should be populated");
         assert_eq!(state.seq, 1);
         assert_eq!(state.title.as_deref(), Some("Refactor auth"));
+    }
+
+    #[test]
+    fn human_presence_tracks_attached_viewports_and_input_without_mcp_interference() {
+        let session = test_support::session();
+        assert_eq!(session.attached_clients(), 0);
+        assert_eq!(
+            session.human_presence(),
+            HumanPresence {
+                attached_clients: 0,
+                last_input_secs: None,
+            }
+        );
+        let snap0 = session.plain_text_screen(0);
+        assert_eq!(
+            snap0.human,
+            HumanPresence {
+                attached_clients: 0,
+                last_input_secs: None,
+            }
+        );
+
+        let vp1 = session.viewport(100, 30);
+        let vp2 = session.viewport(120, 40);
+        assert_eq!(session.attached_clients(), 2);
+        assert_eq!(session.plain_text_screen(0).human.attached_clients, 2);
+
+        session.note_input(vp1.id());
+        let snap_after_input = session.plain_text_screen(0);
+        assert_eq!(snap_after_input.human.attached_clients, 2);
+        assert!(snap_after_input.human.last_input_secs.is_some());
+
+        drop(vp1);
+        drop(vp2);
+        let snap_detached = session.plain_text_screen(0);
+        assert_eq!(snap_detached.human.attached_clients, 0);
+        // Recent human input timestamp persists after detach so agents can see recent activity.
+        assert!(snap_detached.human.last_input_secs.is_some());
     }
 }
 

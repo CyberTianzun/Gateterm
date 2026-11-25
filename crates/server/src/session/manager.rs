@@ -101,6 +101,7 @@ impl SessionManager {
             self.buffer_cap,
             self.window_size,
             self.clipboard,
+            Some(self.instance_id.as_str()),
         ) {
             Ok(s) => s,
             Err(e) => {
@@ -150,6 +151,13 @@ impl SessionManager {
 
     pub fn list(&self) -> Vec<SessionInfo> {
         let mut v: Vec<_> = self.sessions.lock().unwrap().values().map(|s| s.info()).collect();
+        v.sort_by_key(|s| s.id);
+        v
+    }
+
+    /// All active sessions sorted ascending by `id`.
+    pub fn list_sessions(&self) -> Vec<Arc<Session>> {
+        let mut v: Vec<_> = self.sessions.lock().unwrap().values().cloned().collect();
         v.sort_by_key(|s| s.id);
         v
     }
@@ -244,5 +252,50 @@ mod tests {
         assert!(!mgr.auto_rename(session.id, "Overwrite Attempt"));
         assert_eq!(session.info().name, "Pinned Tab");
         assert!(events.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn create_injects_gateterm_server_id_and_list_sessions_is_sorted() {
+        use std::time::Duration;
+
+        let mgr = SessionManager::new(1 << 20, WindowSize::default());
+        #[cfg(windows)]
+        let cmd = Some(vec![
+            "cmd.exe".into(),
+            "/C".into(),
+            "echo %GATETERM_SERVER_ID%:%GATETERM_SESSION_ID%".into(),
+        ]);
+        #[cfg(unix)]
+        let cmd = Some(vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            r#"printf "%s:%s\n" "$GATETERM_SERVER_ID" "$GATETERM_SESSION_ID""#.into(),
+        ]);
+
+        let session = mgr.create(None, cmd, None).unwrap();
+        let expected = format!("{}:{}", mgr.instance_id(), session.id);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let last_text = session.plain_text_screen(0).text;
+            if last_text.contains(&expected) {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "expected {expected:?} in screen text, got: {last_text:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        mgr.kill(session.id);
+
+        let mgr2 = SessionManager::new(1 << 20, WindowSize::default());
+        let s1 = mgr2.create(None, None, None).unwrap();
+        let s2 = mgr2.create(None, None, None).unwrap();
+        let s3 = mgr2.create(None, None, None).unwrap();
+        let ids: Vec<u64> = mgr2.list_sessions().into_iter().map(|s| s.id).collect();
+        assert_eq!(ids, vec![s1.id, s2.id, s3.id]);
+        for id in ids {
+            mgr2.kill(id);
+        }
     }
 }
