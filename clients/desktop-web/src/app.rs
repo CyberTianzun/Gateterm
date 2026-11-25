@@ -508,7 +508,12 @@ impl App {
         let listen = self.sup.listen()?;
         let token = self.sup.token()?;
         let host = crate::settings::web_addr::resolve_live_web_host(listen, self.startup.web_host);
-        let url = crate::settings::web_addr::format_access_url(host, listen.port(), token);
+        let url = crate::settings::web_addr::format_access_url(
+            host,
+            listen.port(),
+            token,
+            self.sup.web_title().as_deref(),
+        );
         if self.resolved_web_host != Some(host) {
             self.resolved_web_host = Some(host);
             self.refresh_status();

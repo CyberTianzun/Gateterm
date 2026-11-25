@@ -93,6 +93,7 @@ async fn run_server(args: Args) -> anyhow::Result<()> {
     let base = config.listen.unwrap_or_else(gateterm_server::config::default_listen);
     let listen = gateterm_server::config::effective_listen(base, args.host, args.port);
     let (token, generated) = gateterm_server::config::resolve_token(args.token, config.token);
+    let resolved_web_title = gateterm_server::config::resolve_web_title(args.web_title, config.web_title);
     // 必须在任何会话 spawn 之前:密钥要跨重启不变,见 `store::hook_token`
     gateterm_server::agent::store::init_hook_token(
         gateterm_server::agent::store::default_hook_token_path().as_deref(),
@@ -111,7 +112,7 @@ async fn run_server(args: Args) -> anyhow::Result<()> {
 
     // Jupyter 式:每次启动打印可直接点开的访问 URL;IPv4 全网卡监听时列出各网卡地址。
     eprintln!("gateterm-server listening on {listen}");
-    for url in connection_urls::connection_urls(listen, &token) {
+    for url in connection_urls::connection_urls(listen, &token, resolved_web_title.as_deref()) {
         eprintln!("    {url}");
     }
     if generated {
@@ -163,9 +164,7 @@ async fn run_server(args: Args) -> anyhow::Result<()> {
     let agents = config.agents;
     let agent_sessions = std::sync::Arc::new(gateterm_server::agent::store::AgentSessionStore::new());
     let cloud = gateterm_server::cloud::creds::SharedCreds::new(gateterm_cloud_client::credentials::default_path());
-    let web_title = gateterm_server::config::SharedWebTitle::new(
-        gateterm_server::config::resolve_web_title(args.web_title, config.web_title),
-    );
+    let web_title = gateterm_server::config::SharedWebTitle::new(resolved_web_title);
     let mcp = config.mcp;
     let state = AppState { manager, token, launchers, listen_port, agents, agent_sessions, cloud, web_title, mcp };
     gateterm_server::cloud::notifier::spawn(state.manager.clone(), state.agent_sessions.clone(), state.cloud.clone());

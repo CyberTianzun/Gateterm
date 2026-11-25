@@ -348,10 +348,13 @@ pub fn resolve_live_web_host(listen: SocketAddr, pref: Option<IpAddr>) -> IpAddr
     resolve_web_host(listen, pref, &candidates)
 }
 
-pub fn format_access_url(host: IpAddr, port: u16, token: &str) -> String {
-    let fragment = url::form_urlencoded::Serializer::new(String::new())
-        .append_pair("token", token)
-        .finish();
+pub fn format_access_url(host: IpAddr, port: u16, token: &str, title: Option<&str>) -> String {
+    let mut ser = url::form_urlencoded::Serializer::new(String::new());
+    ser.append_pair("token", token);
+    if let Some(t) = gateterm_server::config::normalize_web_title(title.map(str::to_string)) {
+        ser.append_pair("title", &t);
+    }
+    let fragment = ser.finish();
     format!("http://{}/#{fragment}", SocketAddr::new(host, port))
 }
 
@@ -482,20 +485,42 @@ mod tests {
 
     #[test]
     fn format_access_url_escapes_token_and_brackets_ipv6() {
-        let url = format_access_url("fd00::2".parse().unwrap(), 49152, "a+b &=#密码");
+        let url = format_access_url("fd00::2".parse().unwrap(), 49152, "a+b &=#密码", None);
         let parsed = url::Url::parse(&url).unwrap();
         assert_eq!(parsed.port(), Some(49152));
         assert_eq!(parsed.host_str(), Some("[fd00::2]"));
         assert_eq!(
             url::form_urlencoded::parse(parsed.fragment().unwrap().as_bytes())
-                .next()
-                .unwrap()
-                .1,
-            "a+b &=#密码"
+                .collect::<Vec<_>>(),
+            [("token".into(), "a+b &=#密码".into())]
         );
 
-        let v4 = format_access_url("192.168.1.5".parse().unwrap(), 7683, "tok");
+        let v4 = format_access_url("192.168.1.5".parse().unwrap(), 7683, "tok", None);
         assert_eq!(v4, "http://192.168.1.5:7683/#token=tok");
+
+        let with_title = format_access_url(
+            "192.168.1.5".parse().unwrap(),
+            7683,
+            "a+b &=#密码",
+            Some("  研发\n1号+a&b=#测试  "),
+        );
+        let parsed_with_title = url::Url::parse(&with_title).unwrap();
+        assert_eq!(
+            url::form_urlencoded::parse(parsed_with_title.fragment().unwrap().as_bytes())
+                .collect::<Vec<_>>(),
+            [
+                ("token".into(), "a+b &=#密码".into()),
+                ("title".into(), "研发 1号+a&b=#测试".into()),
+            ]
+        );
+
+        let blank_title = format_access_url(
+            "192.168.1.5".parse().unwrap(),
+            7683,
+            "tok",
+            Some("  \n "),
+        );
+        assert_eq!(blank_title, "http://192.168.1.5:7683/#token=tok");
     }
 
     #[test]
