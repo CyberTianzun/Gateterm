@@ -6,7 +6,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::client::mcp::McpServerStatus;
+use crate::client::mcp::{McpServerIdentity, McpServerStatus};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LauncherItem {
@@ -261,11 +261,39 @@ pub struct CloudStatus {
     pub email: Option<String>,
 }
 
+fn deserialize_optional_server_identity<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<McpServerIdentity>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<Value>::deserialize(deserializer)?;
+    let Some(Value::Object(map)) = raw else {
+        return Ok(None);
+    };
+    let str_field = |key: &str| map.get(key).and_then(Value::as_str).map(ToOwned::to_owned);
+    let port = map
+        .get("port")
+        .and_then(Value::as_u64)
+        .and_then(|n| u16::try_from(n).ok());
+    Ok(Some(McpServerIdentity {
+        instance_id: str_field("instance_id"),
+        name: str_field("name"),
+        hostname: str_field("hostname"),
+        os: str_field("os"),
+        arch: str_field("arch"),
+        port,
+        description: str_field("description"),
+    }))
+}
+
 #[derive(Debug, Deserialize)]
 struct McpStatusBody {
     enabled: bool,
     #[serde(default)]
     protocol_versions: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_server_identity")]
+    server: Option<McpServerIdentity>,
 }
 
 #[derive(Clone)]
@@ -313,8 +341,11 @@ impl GateHttpClient {
         match resp.json::<McpStatusBody>().await {
             Ok(body) if body.enabled => McpServerStatus::Enabled {
                 protocol_versions: body.protocol_versions,
+                server: body.server,
             },
-            Ok(_) => McpServerStatus::Disabled,
+            Ok(body) => McpServerStatus::Disabled {
+                server: body.server,
+            },
             Err(err) => McpServerStatus::Error(err.to_string()),
         }
     }
@@ -590,11 +621,35 @@ mod tests {
             status_ok,
             McpServerStatus::Enabled {
                 protocol_versions: vec!["2025-11-25".to_string(), "2025-06-18".to_string()],
+                server: None,
             }
         );
         let raw_req = req_ok.await.unwrap();
         assert!(raw_req.starts_with("GET /gateterm/api/mcp/status "));
         assert!(raw_req.to_ascii_lowercase().contains("authorization: bearer tok-123"));
+
+        let (base_ok_srv, _) = serve_one_http_response(
+            "200 OK",
+            r#"{"enabled":true,"protocol_versions":["2025-11-25"],"endpoint":"/mcp","server":{"instance_id":"a1b2c3d4e5f64789a0b1c2d3e4f56789","name":"mac-build","hostname":"Mac-Studio.local","os":"macos","arch":"aarch64","port":7683,"description":"macOS arm64 iOS build"}}"#,
+        )
+        .await;
+        assert_eq!(
+            GateHttpClient::new(base_ok_srv, "tok-123")
+                .fetch_mcp_status()
+                .await,
+            McpServerStatus::Enabled {
+                protocol_versions: vec!["2025-11-25".to_string()],
+                server: Some(McpServerIdentity {
+                    instance_id: Some("a1b2c3d4e5f64789a0b1c2d3e4f56789".to_string()),
+                    name: Some("mac-build".to_string()),
+                    hostname: Some("Mac-Studio.local".to_string()),
+                    os: Some("macos".to_string()),
+                    arch: Some("aarch64".to_string()),
+                    port: Some(7683),
+                    description: Some("macOS arm64 iOS build".to_string()),
+                }),
+            }
+        );
 
         let (base_dis, _) =
             serve_one_http_response("200 OK", r#"{"enabled":false,"protocol_versions":[]}"#).await;
@@ -602,7 +657,29 @@ mod tests {
             GateHttpClient::new(base_dis, "tok-123")
                 .fetch_mcp_status()
                 .await,
-            McpServerStatus::Disabled
+            McpServerStatus::Disabled { server: None }
+        );
+
+        let (base_dis_srv, _) = serve_one_http_response(
+            "200 OK",
+            r#"{"enabled":false,"protocol_versions":["2025-11-25"],"endpoint":"/mcp","server":{"instance_id":"deadbeef","name":"win-box","os":"windows","arch":"x86_64"}}"#,
+        )
+        .await;
+        assert_eq!(
+            GateHttpClient::new(base_dis_srv, "tok-123")
+                .fetch_mcp_status()
+                .await,
+            McpServerStatus::Disabled {
+                server: Some(McpServerIdentity {
+                    instance_id: Some("deadbeef".to_string()),
+                    name: Some("win-box".to_string()),
+                    hostname: None,
+                    os: Some("windows".to_string()),
+                    arch: Some("x86_64".to_string()),
+                    port: None,
+                    description: None,
+                }),
+            }
         );
 
         let (base_404, _) = serve_one_http_response("404 Not Found", "").await;
@@ -628,6 +705,21 @@ mod tests {
                 .await,
             McpServerStatus::Error(_)
         ));
+
+        let (base_malformed_server, _) = serve_one_http_response(
+            "200 OK",
+            r#"{"enabled":true,"protocol_versions":["2025-11-25"],"server":["not-an-object"]}"#,
+        )
+        .await;
+        assert_eq!(
+            GateHttpClient::new(base_malformed_server, "tok-123")
+                .fetch_mcp_status()
+                .await,
+            McpServerStatus::Enabled {
+                protocol_versions: vec!["2025-11-25".to_string()],
+                server: None,
+            }
+        );
     }
 
     #[test]

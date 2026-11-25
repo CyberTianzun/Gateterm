@@ -154,6 +154,7 @@ pub struct GatetermWorkbench {
     pub embedded_token_input: Entity<InputState>,
     pub cloud_password_input: Entity<InputState>,
     pub cloud_code_input: Entity<InputState>,
+    pub mcp_server_name_input: Entity<InputState>,
 
     pub system_tray: Option<crate::system::tray::SystemTray>,
     pub quitting: bool,
@@ -246,8 +247,24 @@ impl GatetermWorkbench {
         let cloud_code_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(locale.t("6 位邮箱验证码", "6-digit email code"))
         });
+        let mcp_server_name_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(locale.t(
+                "留空使用下方默认建议名",
+                "Leave blank for suggested default below",
+            ))
+        });
 
         let mut subscriptions = Vec::new();
+        subscriptions.push(cx.subscribe_in(
+            &mcp_server_name_input,
+            window,
+            |this, _, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.settings_modal.mcp_copied_key = None;
+                    cx.notify();
+                }
+            },
+        ));
         subscriptions.push(cx.subscribe_in(
             &chat_prompt_input,
             window,
@@ -439,6 +456,7 @@ impl GatetermWorkbench {
             embedded_token_input,
             cloud_password_input,
             cloud_code_input,
+            mcp_server_name_input,
             system_tray,
             quitting: false,
             window_hidden_to_tray: false,
@@ -516,7 +534,7 @@ impl GatetermWorkbench {
             TrayAction::OpenSettings => {
                 crate::system::window_ext::show_and_focus_window(window, cx);
                 self.restore_session_after_show(cx);
-                self.open_settings_modal(cx);
+                self.open_settings_modal(window, cx);
             }
             TrayAction::ViewLogs => {
                 self.open_log_file();
@@ -2084,7 +2102,7 @@ impl GatetermWorkbench {
         cx.notify();
     }
 
-    pub fn open_settings_modal(&mut self, cx: &mut Context<Self>) {
+    pub fn open_settings_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings_modal.open = true;
         self.pending_focus_terminal = true;
         self.settings_modal.autostart_enabled =
@@ -2094,12 +2112,41 @@ impl GatetermWorkbench {
         self.settings_modal.mcp_reveal_token = false;
         self.settings_modal.mcp_copied_key = None;
         self.settings_modal.mcp_server_id = None;
+        self.settings_modal.mcp_status = crate::client::mcp::McpServerStatus::Loading;
+        self.reset_mcp_server_name_input(window, cx);
         self.refresh_pairing_from_supervisor();
         self.refresh_settings_hooks_and_cloud(cx);
         if self.settings_modal.section == super::settings_modal::SettingsSection::Mcp {
             self.refresh_selected_mcp_status(cx);
         }
         cx.notify();
+    }
+
+    pub fn default_mcp_server_name(&self, server_id: &str, base_url: &str) -> String {
+        let profile_name = self
+            .servers
+            .get(server_id)
+            .map(|conn| conn.profile.name.as_str());
+        let status_server = if self.settings_modal.mcp_server_id.as_deref() == Some(server_id) {
+            self.settings_modal.mcp_status.server_identity()
+        } else {
+            None
+        };
+        let status_name = status_server.and_then(|s| s.name.as_deref());
+        let status_hostname = status_server.and_then(|s| s.hostname.as_deref());
+        crate::client::mcp::derive_mcp_server_key(
+            &[profile_name, status_name, status_hostname],
+            base_url,
+        )
+    }
+
+    pub fn reset_mcp_server_name_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.mcp_server_name_input.read(cx).value().is_empty() {
+            self.mcp_server_name_input.update(cx, |s, cx| {
+                s.set_value("", window, cx);
+            });
+        }
+        self.settings_modal.mcp_copied_key = None;
     }
 
     pub fn resolve_mcp_target(&self, requested_id: Option<&str>) -> Option<(String, String, String)> {
@@ -2999,8 +3046,8 @@ impl GatetermWorkbench {
                                     .ghost()
                                     .icon(IconName::Settings)
                                     .tooltip(locale.t("设置", "Settings"))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.open_settings_modal(cx);
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_settings_modal(window, cx);
                                     })),
                             ),
                     ),
@@ -3749,8 +3796,8 @@ impl Render for GatetermWorkbench {
             .on_action(cx.listener(|this, _: &OpenHistoryModal, _, cx| {
                 this.open_history_modal(cx);
             }))
-            .on_action(cx.listener(|this, _: &OpenSettingsModal, _, cx| {
-                this.open_settings_modal(cx);
+            .on_action(cx.listener(|this, _: &OpenSettingsModal, window, cx| {
+                this.open_settings_modal(window, cx);
             }))
             .on_action(cx.listener(|this, _: &CloseActivePane, _, cx| {
                 let idx = this.active_tab_idx;

@@ -20,7 +20,7 @@ use gpui_component::{
 
 use super::app::GatetermWorkbench;
 use crate::client::api::{AgentIntegrationStatus, CloudStatus};
-use crate::client::mcp::{McpServerStatus, build_mcp_presets};
+use crate::client::mcp::{McpServerStatus, build_mcp_presets, format_mcp_node_meta};
 use crate::i18n::{LanguagePref, Locale};
 use crate::system::{
     cloud::{CloudAccountStatus, CloudAction, RelayRegion},
@@ -1871,8 +1871,18 @@ fn render_mcp_section(
 
     let reveal = workbench.settings_modal.mcp_reveal_token;
     let copied_key = workbench.settings_modal.mcp_copied_key.as_deref();
-    let display = build_mcp_presets(&base_url, &token, !reveal);
-    let raw = build_mcp_presets(&base_url, &token, false);
+    let default_key = workbench.default_mcp_server_name(&selected_id, &base_url);
+    let custom_name = workbench.mcp_server_name_input.read(cx).value().to_string();
+    let effective_key = {
+        let trimmed = custom_name.trim();
+        if trimmed.is_empty() {
+            default_key.as_str()
+        } else {
+            trimmed
+        }
+    };
+    let display = build_mcp_presets(&base_url, &token, Some(effective_key), !reveal);
+    let raw = build_mcp_presets(&base_url, &token, Some(effective_key), false);
 
     let mut server_buttons = h_flex().w_full().gap_1p5().flex_wrap().items_center();
     for (srv_id, conn) in &workbench.servers {
@@ -1887,14 +1897,22 @@ fn render_mcp_section(
                     ButtonVariant::Secondary
                 })
                 .label(SharedString::from(conn.profile.name.clone()))
-                .on_click(cx.listener(move |this, _, _, cx| {
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    let prev_id = this
+                        .resolve_mcp_target(this.settings_modal.mcp_server_id.as_deref())
+                        .map(|(id, _, _)| id);
                     this.settings_modal.mcp_server_id = Some(click_id.clone());
-                    this.settings_modal.mcp_copied_key = None;
+                    if prev_id.as_deref() != Some(click_id.as_str()) {
+                        this.reset_mcp_server_name_input(window, cx);
+                    } else {
+                        this.settings_modal.mcp_copied_key = None;
+                    }
                     this.refresh_selected_mcp_status(cx);
                 })),
         );
     }
 
+    let node_meta_text = format_mcp_node_meta(workbench.settings_modal.mcp_status.server_identity());
     let (badge_text, badge_color, banner_text, protocols_text): (
         SharedString,
         gpui::Hsla,
@@ -1907,7 +1925,9 @@ fn render_mcp_section(
             None,
             None,
         ),
-        McpServerStatus::Enabled { protocol_versions } => {
+        McpServerStatus::Enabled {
+            protocol_versions, ..
+        } => {
             let protos = if protocol_versions.is_empty() {
                 None
             } else {
@@ -1924,7 +1944,7 @@ fn render_mcp_section(
                 protos,
             )
         }
-        McpServerStatus::Disabled => (
+        McpServerStatus::Disabled { .. } => (
             locale.t("MCP 已关闭", "MCP Disabled").into(),
             cx.theme().danger,
             Some(
@@ -1994,6 +2014,19 @@ fn render_mcp_section(
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .child(SharedString::from(protos))
+                }))
+                .children(node_meta_text.map(|meta| {
+                    div()
+                        .px_2()
+                        .py_0p5()
+                        .rounded(px(999.0))
+                        .bg(cx.theme().secondary.opacity(0.7))
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .font_family(cx.theme().mono_font_family.clone())
+                        .text_xs()
+                        .text_color(cx.theme().foreground)
+                        .child(SharedString::from(meta))
                 })),
         )
         .child(
@@ -2029,6 +2062,88 @@ fn render_mcp_section(
                             cx.notify();
                         })),
                 ),
+        );
+
+    let name_row = v_flex()
+        .w_full()
+        .min_w(px(0.0))
+        .p_3()
+        .gap_1p5()
+        .rounded(px(6.0))
+        .bg(cx.theme().secondary.opacity(0.45))
+        .border_1()
+        .border_color(cx.theme().border)
+        .child(
+            h_flex()
+                .w_full()
+                .min_w(px(0.0))
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .flex_wrap()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(cx.theme().foreground)
+                        .child(locale.t("MCP 服务器名称", "MCP Server Name")),
+                )
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(locale.t("默认：", "Default:")),
+                        )
+                        .child(
+                            div()
+                                .px_1p5()
+                                .py_0p5()
+                                .rounded(px(4.0))
+                                .bg(cx.theme().background)
+                                .border_1()
+                                .border_color(cx.theme().border)
+                                .font_family(cx.theme().mono_font_family.clone())
+                                .text_xs()
+                                .text_color(cx.theme().foreground)
+                                .child(SharedString::from(default_key.clone())),
+                        ),
+                ),
+        )
+        .child(
+            h_flex()
+                .w_full()
+                .min_w(px(0.0))
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .child(Input::new(&workbench.mcp_server_name_input).small()),
+                )
+                .children((!custom_name.is_empty()).then(|| {
+                    Button::new("mcp-reset-server-name")
+                        .xsmall()
+                        .ghost()
+                        .label(locale.t("恢复默认", "Reset"))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.reset_mcp_server_name_input(window, cx);
+                            cx.notify();
+                        }))
+                })),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(locale.t(
+                    "用于区分多个并行的 Gateterm 节点，留空则使用默认建议名。",
+                    "Distinguishes multiple parallel Gateterm peers; leave blank to use the suggested default.",
+                )),
         );
 
     let endpoint_card = mcp_card_shell(
@@ -2302,6 +2417,7 @@ fn render_mcp_section(
                         )),
                 ),
         )
+        .child(name_row)
         .child(endpoint_card)
         .child(json_card)
         .child(agents_card)
