@@ -12,7 +12,7 @@ use tokio::sync::broadcast;
 use crate::agent::store::{AgentSession, AnswerResult, Decision, PendingRequest};
 use crate::app::AppState;
 use crate::launcher::Launcher;
-use crate::session::pty::{ScreenSnapshot, Session, SessionOutput};
+use crate::session::pty::{HumanPresence, ScreenSnapshot, Session, SessionOutput};
 
 pub const MAX_SCROLLBACK_LINES: usize = 500;
 pub const MAX_WAIT_MS: u64 = 15_000;
@@ -62,6 +62,7 @@ pub struct SessionAgentSummary {
 pub struct SessionWithAgent {
     #[serde(flatten)]
     pub info: SessionInfo,
+    pub human: HumanPresence,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<SessionAgentSummary>,
 }
@@ -166,13 +167,15 @@ pub fn validate_command(command: Option<&[String]>) -> Result<(), ServiceError> 
 }
 
 pub async fn list_sessions(state: &AppState) -> Vec<SessionWithAgent> {
-    let sessions = state.manager.list();
+    let sessions = state.manager.list_sessions();
     let agents = state.agent_sessions.list();
     sessions
         .into_iter()
-        .map(|info| {
+        .map(|session| {
+            let info = session.info();
+            let human = session.human_presence();
             let agent = select_best_agent(&agents, info.id);
-            SessionWithAgent { info, agent }
+            SessionWithAgent { info, human, agent }
         })
         .collect()
 }

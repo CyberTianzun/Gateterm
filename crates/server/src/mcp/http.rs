@@ -5,9 +5,18 @@ use axum::extract::{Path, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use serde::Serialize;
 
 use crate::app::{bearer_ok, AppState};
 use crate::mcp::service::{self, NewSessionInput, SendInputArgs, ServiceError};
+use crate::mcp::ServerIdentity;
+
+#[derive(Serialize)]
+struct WithServer<T> {
+    server: ServerIdentity,
+    #[serde(flatten)]
+    body: T,
+}
 
 fn error_response(err: ServiceError) -> Response {
     let status = match &err {
@@ -55,7 +64,14 @@ pub async fn list_sessions(State(state): State<AppState>, headers: HeaderMap) ->
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let sessions = service::list_sessions(&state).await;
-    (StatusCode::OK, Json(serde_json::json!({ "sessions": sessions }))).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "server": ServerIdentity::from_state(&state),
+            "sessions": sessions,
+        })),
+    )
+        .into_response()
 }
 
 /// `POST /api/sessions`
@@ -76,7 +92,14 @@ pub async fn create_session(
         }
     };
     match service::new_session(&state, input).await {
-        Ok(session) => (StatusCode::CREATED, Json(serde_json::json!({ "session": session }))).into_response(),
+        Ok(session) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "server": ServerIdentity::from_state(&state),
+                "session": session,
+            })),
+        )
+            .into_response(),
         Err(e) => error_response(e),
     }
 }
@@ -100,7 +123,14 @@ pub async fn read_screen(
         Err(e) => return error_response(e),
     };
     match service::read_session(&state, id, scrollback_lines) {
-        Ok(snap) => (StatusCode::OK, Json(snap)).into_response(),
+        Ok(snap) => (
+            StatusCode::OK,
+            Json(WithServer {
+                server: ServerIdentity::from_state(&state),
+                body: snap,
+            }),
+        )
+            .into_response(),
         Err(e) => error_response(e),
     }
 }
@@ -124,7 +154,14 @@ pub async fn send_input(
         Err(e) => return error_response(e),
     };
     match service::send_input(&state, id, args).await {
-        Ok(res) => (StatusCode::OK, Json(res)).into_response(),
+        Ok(res) => (
+            StatusCode::OK,
+            Json(WithServer {
+                server: ServerIdentity::from_state(&state),
+                body: res,
+            }),
+        )
+            .into_response(),
         Err(e) => error_response(e),
     }
 }
@@ -143,7 +180,14 @@ pub async fn kill_session(
         Err(e) => return error_response(e),
     };
     match service::kill_session(&state, id) {
-        Ok(res) => (StatusCode::OK, Json(res)).into_response(),
+        Ok(res) => (
+            StatusCode::OK,
+            Json(WithServer {
+                server: ServerIdentity::from_state(&state),
+                body: res,
+            }),
+        )
+            .into_response(),
         Err(e) => error_response(e),
     }
 }
@@ -223,7 +267,10 @@ mod tests {
         assert_eq!(ok_list.status(), StatusCode::OK);
         let bytes = axum::body::to_bytes(ok_list.into_body(), 1024 * 16).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json, serde_json::json!({ "sessions": [] }));
+        assert_eq!(json["server"]["instance_id"], state.manager.instance_id());
+        assert_eq!(json["server"]["os"], std::env::consts::OS);
+        assert_eq!(json["server"]["arch"], std::env::consts::ARCH);
+        assert_eq!(json["sessions"], serde_json::json!([]));
 
         let bad_cmd = create_session(
             State(state.clone()),
@@ -268,6 +315,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let state = test_state();
+        let expected_instance_id = state.manager.instance_id().to_string();
         let server = tokio::spawn(async move {
             let _ = crate::app::serve(listener, state).await;
         });
@@ -304,10 +352,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(list.status(), 200);
-        assert_eq!(
-            list.json::<serde_json::Value>().await.unwrap(),
-            serde_json::json!({ "sessions": [] })
-        );
+        let list_json: serde_json::Value = list.json().await.unwrap();
+        assert_eq!(list_json["server"]["instance_id"], expected_instance_id);
+        assert_eq!(list_json["sessions"], serde_json::json!([]));
 
         let bad_cmd = client
             .post(format!("http://{addr}/api/sessions"))
@@ -353,5 +400,68 @@ mod tests {
         assert_eq!(missing_kill.status(), 404);
 
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn sessions_rest_responses_include_server_identity_and_human_presence() {
+        let mut state = test_state();
+        state.listen_port = 7683;
+        state.mcp.name = Some("rest-peer".into());
+        let expected_id = state.manager.instance_id().to_string();
+
+        let session = crate::session::pty::test_support::session();
+        let sid = session.id;
+        crate::session::pty::test_support::output(&session, b"rest-screen-line\r\n");
+        let vp = session.viewport(90, 28);
+        session.note_input(vp.id());
+        state.manager.insert_test_session(session);
+
+        let list_resp = list_sessions(State(state.clone()), auth_headers()).await;
+        assert_eq!(list_resp.status(), StatusCode::OK);
+        let list_json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(list_resp.into_body(), 1024 * 64)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(list_json["server"]["instance_id"], expected_id);
+        assert_eq!(list_json["server"]["name"], "rest-peer");
+        assert_eq!(list_json["server"]["port"], 7683);
+        assert_eq!(list_json["sessions"][0]["id"], sid);
+        assert_eq!(list_json["sessions"][0]["human"]["attached_clients"], 1);
+        assert!(list_json["sessions"][0]["human"]["last_input_secs"].as_u64().is_some());
+
+        let screen_resp = read_screen(
+            State(state.clone()),
+            auth_headers(),
+            Path(sid.to_string()),
+            RawQuery(None),
+        )
+        .await;
+        assert_eq!(screen_resp.status(), StatusCode::OK);
+        let screen_json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(screen_resp.into_body(), 1024 * 64)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(screen_json["server"]["instance_id"], expected_id);
+        assert_eq!(screen_json["session_id"], sid);
+        assert_eq!(screen_json["human"]["attached_clients"], 1);
+        assert!(screen_json["human"]["last_input_secs"].as_u64().is_some());
+        assert!(screen_json["text"].as_str().unwrap().contains("rest-screen-line"));
+
+        drop(vp);
+        let kill_resp = kill_session(State(state), auth_headers(), Path(sid.to_string())).await;
+        assert_eq!(kill_resp.status(), StatusCode::OK);
+        let kill_json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(kill_resp.into_body(), 1024 * 16)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(kill_json["server"]["instance_id"], expected_id);
+        assert_eq!(kill_json["killed"], true);
+        assert_eq!(kill_json["id"], sid);
     }
 }

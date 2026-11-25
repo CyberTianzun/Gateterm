@@ -18,8 +18,8 @@ use crate::mcp::service::{
     self, AnswerApprovalArgs, NewSessionInput, SendInputArgs, SendInputResult, ServiceError,
     SessionWithAgent,
 };
-use crate::mcp::{origin_allowed, SUPPORTED_PROTOCOL_VERSIONS};
-use crate::session::pty::ScreenSnapshot;
+use crate::mcp::{origin_allowed, ServerIdentity, SUPPORTED_PROTOCOL_VERSIONS};
+use crate::session::pty::{HumanPresence, ScreenSnapshot};
 
 const JSONRPC_VERSION: &str = "2.0";
 const DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
@@ -29,12 +29,33 @@ const ERR_INVALID_REQUEST: i64 = -32600;
 const ERR_METHOD_NOT_FOUND: i64 = -32601;
 const ERR_INVALID_PARAMS: i64 = -32602;
 
-const SERVER_INSTRUCTIONS: &str = "Gateterm MCP server exposing live terminal sessions and hosted coding-agent approvals. \
-Call `list_sessions` first to inspect existing sessions and identify any hosted agent in the `waiting` state. \
-Use `list_pending_approvals` and `answer_approval` to inspect and resolve pending approval requests. \
-Use `read_session` for compact plain-text screen snapshots, and `send_input` with `wait_ms` (e.g. 2000-5000 ms) \
-to receive immediate post-command screen output without polling. \
-Avoid calling `kill_session` on sessions you did not create or where a user or agent is actively working.";
+fn build_instructions(id: &ServerIdentity) -> String {
+    let mut out = format!(
+        "Gateterm node {:?} (instance_id={}",
+        id.name, id.instance_id
+    );
+    if let Some(ref host) = id.hostname {
+        let _ = write!(out, ", host={host}");
+    }
+    let _ = write!(out, ", os={}/{}", id.os, id.arch);
+    if let Some(port) = id.port {
+        let _ = write!(out, ", port={port}");
+    }
+    if let Some(ref desc) = id.description {
+        let _ = write!(out, ", role: {desc}");
+    }
+    out.push_str(
+        "). Multiple Gateterm peers may be connected in parallel; each node's `session_id` is local to that node only. \
+        If you are running inside a Gateterm PTY, compare `$GATETERM_SERVER_ID` and `$GATETERM_SESSION_ID` against this node's `instance_id` and session `id` to identify your own session and avoid input loops or killing yourself. \
+        Sessions report read-only `human` presence (`attached_clients` and `last_input_secs`); when a human is attached or recently typed, prefer observing or confirming before sending input rather than competing for the terminal. \
+        Call `list_sessions` first to inspect existing sessions and identify any hosted agent in the `waiting` state. \
+        Use `list_pending_approvals` and `answer_approval` to inspect and resolve pending approval requests. \
+        Use `read_session` for compact plain-text screen snapshots, and `send_input` with `wait_ms` (e.g. 2000-5000 ms) \
+        to receive immediate post-command screen output without polling. \
+        Avoid calling `kill_session` on sessions you did not create or where a human or agent is actively working.",
+    );
+    out
+}
 
 /// Outcome of dispatching a single JSON-RPC 2.0 request or notification object.
 #[derive(Debug, Clone, PartialEq)]
@@ -271,11 +292,30 @@ fn format_agent_state(state: AgentState) -> &'static str {
     }
 }
 
-fn format_sessions_text(sessions: &[SessionWithAgent]) -> String {
-    if sessions.is_empty() {
-        return "No active terminal sessions.".to_string();
+fn format_human_list_tag(human: &HumanPresence) -> Option<String> {
+    match (human.attached_clients, human.last_input_secs) {
+        (0, None) => None,
+        (0, Some(secs)) => Some(format!("[human: detached, last_input={secs}s ago]")),
+        (n, None) => Some(format!("[human: attached={n}]")),
+        (n, Some(secs)) => Some(format!("[human: attached={n}, last_input={secs}s ago]")),
     }
-    let mut out = format!("Sessions ({}):", sessions.len());
+}
+
+fn format_human_screen_suffix(human: &HumanPresence) -> Option<String> {
+    match (human.attached_clients, human.last_input_secs) {
+        (0, None) => None,
+        (0, Some(secs)) => Some(format!(" human=0({secs}s)")),
+        (n, None) => Some(format!(" human={n}")),
+        (n, Some(secs)) => Some(format!(" human={n}({secs}s)")),
+    }
+}
+
+fn format_sessions_text(id: &ServerIdentity, sessions: &[SessionWithAgent]) -> String {
+    let prefix = format!("[{} | instance={}]", id.text_tag(), id.instance_id);
+    if sessions.is_empty() {
+        return format!("{prefix} No active terminal sessions.");
+    }
+    let mut out = format!("{prefix} Sessions ({}):", sessions.len());
     for s in sessions {
         let _ = write!(
             out,
@@ -284,6 +324,9 @@ fn format_sessions_text(sessions: &[SessionWithAgent]) -> String {
         );
         if let Some(ref cwd) = s.info.cwd {
             let _ = write!(out, " cwd={cwd}");
+        }
+        if let Some(human_tag) = format_human_list_tag(&s.human) {
+            let _ = write!(out, " {human_tag}");
         }
         if let Some(ref agent) = s.agent {
             let _ = write!(
@@ -304,11 +347,12 @@ fn format_sessions_text(sessions: &[SessionWithAgent]) -> String {
     out
 }
 
-fn format_launchers_text(launchers: &[Launcher]) -> String {
+fn format_launchers_text(id: &ServerIdentity, launchers: &[Launcher]) -> String {
+    let tag = id.text_tag();
     if launchers.is_empty() {
-        return "No launchers available.".to_string();
+        return format!("[{tag}] No launchers available.");
     }
-    let mut out = format!("Launchers ({}):", launchers.len());
+    let mut out = format!("[{tag}] Launchers ({}):", launchers.len());
     for l in launchers {
         let _ = write!(out, "\n- {}: {} — {}", l.id, l.name, l.detail);
         if let Some(ref cwd) = l.cwd {
@@ -318,10 +362,14 @@ fn format_launchers_text(launchers: &[Launcher]) -> String {
     out
 }
 
-fn format_new_session_text(session: &SessionInfo) -> String {
+fn format_new_session_text(id: &ServerIdentity, session: &SessionInfo) -> String {
     let mut out = format!(
-        "Created session #{} {:?} ({}x{}).",
-        session.id, session.name, session.cols, session.rows
+        "[{}] Created session #{} {:?} ({}x{}).",
+        id.text_tag(),
+        session.id,
+        session.name,
+        session.cols,
+        session.rows
     );
     if let Some(ref cwd) = session.cwd {
         let _ = write!(out, " cwd={cwd}");
@@ -329,10 +377,16 @@ fn format_new_session_text(session: &SessionInfo) -> String {
     out
 }
 
-fn format_screen_text(snap: &ScreenSnapshot) -> String {
+fn format_screen_text(id: &ServerIdentity, snap: &ScreenSnapshot) -> String {
     let mut header = format!(
-        "[session #{} {}x{} cursor=({},{}) seq={}",
-        snap.session_id, snap.cols, snap.rows, snap.cursor.row, snap.cursor.col, snap.seq
+        "[{} session #{} {}x{} cursor=({},{}) seq={}",
+        id.text_tag(),
+        snap.session_id,
+        snap.cols,
+        snap.rows,
+        snap.cursor.row,
+        snap.cursor.col,
+        snap.seq
     );
     if snap.alt_screen {
         header.push_str(" alt_screen");
@@ -347,6 +401,9 @@ fn format_screen_text(snap: &ScreenSnapshot) -> String {
             snap.history_returned, snap.history_available
         );
     }
+    if let Some(human) = format_human_screen_suffix(&snap.human) {
+        header.push_str(&human);
+    }
     header.push(']');
     if snap.text.is_empty() {
         header
@@ -355,18 +412,24 @@ fn format_screen_text(snap: &ScreenSnapshot) -> String {
     }
 }
 
-fn format_send_input_text(res: &SendInputResult) -> String {
+fn format_send_input_text(id: &ServerIdentity, res: &SendInputResult) -> String {
+    let tag = id.text_tag();
     match res.screen {
-        Some(ref snap) => format!("Input sent (seq={}).\n{}", res.seq, format_screen_text(snap)),
-        None => format!("Input sent (seq={}).", res.seq),
+        Some(ref snap) => format!(
+            "[{tag}] Input sent (seq={}).\n{}",
+            res.seq,
+            format_screen_text(id, snap)
+        ),
+        None => format!("[{tag}] Input sent (seq={}).", res.seq),
     }
 }
 
-fn format_pending_text(pending: &[PendingRequest]) -> String {
+fn format_pending_text(id: &ServerIdentity, pending: &[PendingRequest]) -> String {
+    let tag = id.text_tag();
     if pending.is_empty() {
-        return "No pending approval requests.".to_string();
+        return format!("[{tag}] No pending approval requests.");
     }
-    let mut out = format!("Pending approvals ({}):", pending.len());
+    let mut out = format!("[{tag}] Pending approvals ({}):", pending.len());
     for p in pending {
         let _ = write!(out, "\n- id={} agent={}", p.id, p.agent_id);
         if let Some(sid) = p.session {
@@ -383,6 +446,17 @@ fn format_pending_text(pending: &[PendingRequest]) -> String {
     out
 }
 
+fn with_server_value<T: Serialize>(id: &ServerIdentity, body: &T) -> Value {
+    #[derive(Serialize)]
+    struct WithServer<'a, U> {
+        server: &'a ServerIdentity,
+        #[serde(flatten)]
+        body: &'a U,
+    }
+    serde_json::to_value(WithServer { server: id, body })
+        .expect("MCP structuredContent serialization")
+}
+
 fn call_tool_ok(text: String, structured: Value) -> Value {
     json!({
         "content": [{ "type": "text", "text": text }],
@@ -390,21 +464,22 @@ fn call_tool_ok(text: String, structured: Value) -> Value {
     })
 }
 
-fn call_tool_err(err: ServiceError) -> Value {
+fn call_tool_err(id: &ServerIdentity, err: ServiceError) -> Value {
     json!({
-        "content": [{ "type": "text", "text": format!("Error: {err}") }],
+        "content": [{ "type": "text", "text": format!("[{}] Error: {err}", id.text_tag()) }],
         "isError": true,
     })
 }
 
 fn finish_tool<T: Serialize>(
+    id: &ServerIdentity,
     res: Result<T, ServiceError>,
-    fmt_text: impl FnOnce(&T) -> String,
-    wrap_structured: impl FnOnce(&T) -> Value,
+    fmt_text: impl FnOnce(&ServerIdentity, &T) -> String,
+    wrap_structured: impl FnOnce(&ServerIdentity, &T) -> Value,
 ) -> Value {
     match res {
-        Ok(val) => call_tool_ok(fmt_text(&val), wrap_structured(&val)),
-        Err(err) => call_tool_err(err),
+        Ok(val) => call_tool_ok(fmt_text(id, &val), wrap_structured(id, &val)),
+        Err(err) => call_tool_err(id, err),
     }
 }
 
@@ -412,7 +487,7 @@ fn parse_tool_args<T: serde::de::DeserializeOwned>(args: Value) -> Result<T, Str
     serde_json::from_value(args).map_err(|e| format!("Invalid params: {e}"))
 }
 
-fn handle_initialize(id: Value, params: Option<Value>) -> RpcOutcome {
+fn handle_initialize(state: &AppState, id: Value, params: Option<Value>) -> RpcOutcome {
     if let Some(Value::Array(_)) = params {
         return RpcOutcome::Response(rpc_error(
             id,
@@ -426,6 +501,7 @@ fn handle_initialize(id: Value, params: Option<Value>) -> RpcOutcome {
         .and_then(Value::as_str)
         .filter(|v| SUPPORTED_PROTOCOL_VERSIONS.contains(v))
         .unwrap_or(DEFAULT_PROTOCOL_VERSION);
+    let identity = ServerIdentity::from_state(state);
 
     RpcOutcome::Response(rpc_result(
         id,
@@ -436,9 +512,10 @@ fn handle_initialize(id: Value, params: Option<Value>) -> RpcOutcome {
             },
             "serverInfo": {
                 "name": "gateterm",
+                "title": identity.title(),
                 "version": env!("CARGO_PKG_VERSION"),
             },
-            "instructions": SERVER_INSTRUCTIONS,
+            "instructions": build_instructions(&identity),
         }),
     ))
 }
@@ -463,31 +540,34 @@ async fn execute_tool(
     name: &str,
     args: Value,
 ) -> Result<Value, String> {
+    let identity = ServerIdentity::from_state(state);
     match name {
         "list_sessions" => {
             let _: EmptyArgs = parse_tool_args(args)?;
             let sessions = service::list_sessions(state).await;
             Ok(call_tool_ok(
-                format_sessions_text(&sessions),
-                json!({ "sessions": sessions }),
+                format_sessions_text(&identity, &sessions),
+                json!({ "server": &identity, "sessions": sessions }),
             ))
         }
         "list_launchers" => {
             let _: EmptyArgs = parse_tool_args(args)?;
             let res = service::list_launchers(state).await;
             Ok(finish_tool(
+                &identity,
                 res,
-                |l| format_launchers_text(l),
-                |l| json!({ "launchers": l }),
+                |id, l| format_launchers_text(id, l),
+                |id, l| json!({ "server": id, "launchers": l }),
             ))
         }
         "new_session" => {
             let input: NewSessionInput = parse_tool_args(args)?;
             let res = service::new_session(state, input).await;
             Ok(finish_tool(
+                &identity,
                 res,
                 format_new_session_text,
-                |s| json!({ "session": s }),
+                |id, s| json!({ "server": id, "session": s }),
             ))
         }
         "read_session" => {
@@ -498,35 +578,38 @@ async fn execute_tool(
                 parsed.scrollback_lines.unwrap_or(0),
             );
             Ok(finish_tool(
+                &identity,
                 res,
                 format_screen_text,
-                |s| serde_json::to_value(s).expect("ScreenSnapshot serialization"),
+                with_server_value,
             ))
         }
         "send_input" => {
             let parsed: SendInputToolArgs = parse_tool_args(args)?;
             let res = service::send_input(state, parsed.session_id, parsed.input).await;
             Ok(finish_tool(
+                &identity,
                 res,
                 format_send_input_text,
-                |r| serde_json::to_value(r).expect("SendInputResult serialization"),
+                with_server_value,
             ))
         }
         "kill_session" => {
             let parsed: SessionIdArgs = parse_tool_args(args)?;
             let res = service::kill_session(state, parsed.session_id);
             Ok(finish_tool(
+                &identity,
                 res,
-                |r| format!("Killed session #{}.", r.id),
-                |r| serde_json::to_value(r).expect("KillResult serialization"),
+                |id, r| format!("[{}] Killed session #{}.", id.text_tag(), r.id),
+                with_server_value,
             ))
         }
         "list_pending_approvals" => {
             let parsed: ListPendingArgs = parse_tool_args(args)?;
             let pending = service::list_pending_approvals(state, parsed.session_id);
             Ok(call_tool_ok(
-                format_pending_text(&pending),
-                json!({ "pending": pending }),
+                format_pending_text(&identity, &pending),
+                json!({ "server": &identity, "pending": pending }),
             ))
         }
         "answer_approval" => {
@@ -538,9 +621,17 @@ async fn execute_tool(
             }
             let res = service::answer_approval(state, parsed);
             Ok(finish_tool(
+                &identity,
                 res,
-                |r| format!("Submitted '{}' for pending request {}.", r.decision, r.pending_id),
-                |r| serde_json::to_value(r).expect("AnswerApprovalResult serialization"),
+                |id, r| {
+                    format!(
+                        "[{}] Submitted '{}' for pending request {}.",
+                        id.text_tag(),
+                        r.decision,
+                        r.pending_id
+                    )
+                },
+                with_server_value,
             ))
         }
         _ => Err(format!("Invalid params: unknown tool '{name}'")),
@@ -635,7 +726,7 @@ pub async fn dispatch_rpc(state: &AppState, value: Value) -> RpcOutcome {
     };
 
     match method.as_str() {
-        "initialize" => handle_initialize(id, params),
+        "initialize" => handle_initialize(state, id, params),
         "ping" => handle_object_or_empty_method(id, params, json!({})),
         "tools/list" => {
             handle_object_or_empty_method(id, params, json!({ "tools": tool_definitions() }))
@@ -797,9 +888,15 @@ mod tests {
             assert_eq!(result["protocolVersion"], requested);
             assert_eq!(result["capabilities"]["tools"], json!({}));
             assert_eq!(result["serverInfo"]["name"], "gateterm");
+            let identity = crate::mcp::ServerIdentity::from_state(&state);
+            assert_eq!(result["serverInfo"]["title"], identity.title());
             assert_eq!(result["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
             let instructions = result["instructions"].as_str().unwrap_or("");
             assert!(!instructions.is_empty());
+            assert!(instructions.contains(&identity.instance_id));
+            assert!(instructions.contains("GATETERM_SERVER_ID"));
+            assert!(instructions.contains("GATETERM_SESSION_ID"));
+            assert!(instructions.contains("attached_clients"));
             assert!(instructions.contains("list_sessions"));
             assert!(instructions.contains("list_pending_approvals"));
             assert!(instructions.contains("answer_approval"));
@@ -839,6 +936,48 @@ mod tests {
             panic!("expected response");
         };
         assert_eq!(omitted["result"]["protocolVersion"], "2025-06-18");
+    }
+
+    #[tokio::test]
+    async fn initialize_exposes_node_identity_port_description_and_guidance() {
+        let mut state = test_state(true);
+        state.listen_port = 7683;
+        state.mcp.name = Some("peer-alpha".into());
+        state.mcp.description = Some("macOS arm64 builder".into());
+        let identity = crate::mcp::ServerIdentity::from_state(&state);
+
+        let RpcOutcome::Response(resp) = dispatch_rpc(
+            &state,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 99,
+                "method": "initialize",
+                "params": { "protocolVersion": "2025-11-25" }
+            }),
+        )
+        .await
+        else {
+            panic!("expected initialize response");
+        };
+
+        let result = &resp["result"];
+        assert_eq!(result["serverInfo"]["name"], "gateterm");
+        let title = result["serverInfo"]["title"].as_str().unwrap();
+        assert!(title.contains("peer-alpha"), "title: {title:?}");
+        assert!(
+            title.contains(&format!("{}/{}", std::env::consts::OS, std::env::consts::ARCH)),
+            "title: {title:?}"
+        );
+
+        let instr = result["instructions"].as_str().unwrap();
+        assert!(instr.contains(&identity.instance_id), "instr: {instr:?}");
+        assert!(instr.contains("peer-alpha"), "instr: {instr:?}");
+        assert!(instr.contains("macOS arm64 builder"), "instr: {instr:?}");
+        assert!(instr.contains("port=7683"), "instr: {instr:?}");
+        assert!(instr.contains("GATETERM_SERVER_ID"), "instr: {instr:?}");
+        assert!(instr.contains("GATETERM_SESSION_ID"), "instr: {instr:?}");
+        assert!(instr.contains("attached_clients"), "instr: {instr:?}");
+        assert!(instr.contains("last_input_secs"), "instr: {instr:?}");
     }
 
     #[tokio::test]
@@ -1155,20 +1294,29 @@ mod tests {
         };
 
         assert!(resp.get("error").is_none(), "unexpected rpc error: {resp}");
+        let identity = crate::mcp::ServerIdentity::from_state(&state);
+        let tag = identity.text_tag();
         let result = &resp["result"];
         assert_ne!(result.get("isError"), Some(&json!(true)));
         let text = result["content"][0]["text"]
             .as_str()
             .expect("content[0].text");
+        assert!(
+            text.starts_with(&format!("[{tag} session #{sid}")),
+            "expected tagged screen header in {text:?}"
+        );
         assert!(text.contains(&format!("#{sid}")), "missing session id in {text:?}");
         assert!(text.contains("hello mcp"), "missing screen text in {text:?}");
 
         let sc = &result["structuredContent"];
+        assert_eq!(sc["server"]["instance_id"], identity.instance_id);
         assert_eq!(sc["session_id"], sid);
         assert_eq!(sc["cols"], 80);
         assert_eq!(sc["rows"], 24);
         assert!(sc["seq"].as_u64().unwrap() > 0);
         assert_eq!(sc["exited"], false);
+        assert_eq!(sc["human"]["attached_clients"], 0);
+        assert!(sc["human"].get("last_input_secs").is_none());
         assert!(sc["text"].as_str().unwrap().contains("hello mcp"));
 
         // Kill and verify missing session returns CallToolResult { isError: true }
@@ -1188,10 +1336,19 @@ mod tests {
         else {
             panic!("expected kill response");
         };
-        assert_eq!(
-            kill_resp["result"]["structuredContent"],
-            json!({ "killed": true, "id": sid })
+        assert!(
+            kill_resp["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .starts_with(&format!("[{tag}] ")),
+            "expected node tag prefix on kill_session: {kill_resp}"
         );
+        assert_eq!(
+            kill_resp["result"]["structuredContent"]["server"]["instance_id"],
+            identity.instance_id
+        );
+        assert_eq!(kill_resp["result"]["structuredContent"]["killed"], true);
+        assert_eq!(kill_resp["result"]["structuredContent"]["id"], sid);
 
         let RpcOutcome::Response(missing) = dispatch_rpc(
             &state,
@@ -1212,12 +1369,17 @@ mod tests {
         assert!(missing.get("error").is_none());
         assert_eq!(missing["result"]["isError"], json!(true));
         let err_text = missing["result"]["content"][0]["text"].as_str().unwrap();
-        assert!(err_text.starts_with("Error: "), "got {err_text:?}");
+        assert!(
+            err_text.starts_with(&format!("[{tag}] Error: ")),
+            "got {err_text:?}"
+        );
     }
 
     #[tokio::test]
     async fn all_eight_tools_dispatch_to_service_and_map_domain_errors_to_is_error() {
         let state = test_state(true);
+        let identity = crate::mcp::ServerIdentity::from_state(&state);
+        let tag = identity.text_tag();
         #[cfg(unix)]
         let cmd: Vec<String> = vec!["/bin/sh".into(), "-c".into(), "sleep 5".into()];
         #[cfg(windows)]
@@ -1240,6 +1402,14 @@ mod tests {
         else {
             panic!("expected new_session response");
         };
+        assert_eq!(
+            created["result"]["structuredContent"]["server"]["instance_id"],
+            identity.instance_id
+        );
+        assert!(created["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("[{tag}] ")));
         let sid = created["result"]["structuredContent"]["session"]["id"]
             .as_u64()
             .expect("created session id");
@@ -1262,6 +1432,10 @@ mod tests {
             panic!("expected response");
         };
         assert_eq!(bad_new["result"]["isError"], json!(true));
+        assert!(bad_new["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("[{tag}] Error: ")));
 
         // Attach waiting agent + pending approval
         let _ = state.agent_sessions.apply(
@@ -1300,16 +1474,26 @@ mod tests {
             panic!("expected response");
         };
         assert_eq!(
+            listed["result"]["structuredContent"]["server"]["instance_id"],
+            identity.instance_id
+        );
+        assert_eq!(
             listed["result"]["structuredContent"]["sessions"]
                 .as_array()
                 .unwrap()
                 .len(),
             1
         );
-        assert!(listed["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("claude-code"));
+        assert_eq!(
+            listed["result"]["structuredContent"]["sessions"][0]["human"]["attached_clients"],
+            0
+        );
+        let listed_text = listed["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            listed_text.starts_with(&format!("[{tag} | instance={}]", identity.instance_id)),
+            "listed_text: {listed_text:?}"
+        );
+        assert!(listed_text.contains("claude-code"));
 
         // list_launchers
         let RpcOutcome::Response(launchers) = dispatch_rpc(
@@ -1325,6 +1509,14 @@ mod tests {
         else {
             panic!("expected response");
         };
+        assert_eq!(
+            launchers["result"]["structuredContent"]["server"]["instance_id"],
+            identity.instance_id
+        );
+        assert!(launchers["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("[{tag}] ")));
         assert_eq!(
             launchers["result"]["structuredContent"]["launchers"][0]["id"],
             "static:echo"
@@ -1353,6 +1545,14 @@ mod tests {
         else {
             panic!("expected response");
         };
+        assert_eq!(
+            sent_fast["result"]["structuredContent"]["server"]["instance_id"],
+            identity.instance_id
+        );
+        assert!(sent_fast["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("[{tag}] ")));
         assert_eq!(sent_fast["result"]["structuredContent"]["ok"], json!(true));
         assert!(sent_fast["result"]["structuredContent"].get("screen").is_none());
 
@@ -1379,14 +1579,26 @@ mod tests {
             panic!("expected response");
         };
         emit_handle.await.unwrap();
+        assert_eq!(
+            sent_wait["result"]["structuredContent"]["server"]["instance_id"],
+            identity.instance_id
+        );
+        assert!(
+            sent_wait["result"]["structuredContent"]["screen"].get("server").is_none(),
+            "nested screen must not duplicate server"
+        );
+        assert_eq!(
+            sent_wait["result"]["structuredContent"]["screen"]["human"]["attached_clients"],
+            0
+        );
         assert!(sent_wait["result"]["structuredContent"]["screen"]["text"]
             .as_str()
             .unwrap()
             .contains("output-line"));
-        assert!(sent_wait["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("output-line"));
+        let sent_wait_text = sent_wait["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(sent_wait_text.starts_with(&format!("[{tag}] ")));
+        assert!(sent_wait_text.contains(&format!("\n[{tag} session #{sid}")));
+        assert!(sent_wait_text.contains("output-line"));
 
         // send_input domain error (unknown key / empty input) -> isError: true
         let RpcOutcome::Response(bad_key) = dispatch_rpc(
@@ -1442,6 +1654,14 @@ mod tests {
         else {
             panic!("expected response");
         };
+        assert_eq!(
+            pending["result"]["structuredContent"]["server"]["instance_id"],
+            identity.instance_id
+        );
+        assert!(pending["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("[{tag}] ")));
         assert_eq!(
             pending["result"]["structuredContent"]["pending"][0]["id"],
             "pend-1"
@@ -1503,10 +1723,17 @@ mod tests {
         else {
             panic!("expected response");
         };
+        assert!(answered["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("[{tag}] ")));
         assert_eq!(
-            answered["result"]["structuredContent"],
-            json!({ "ok": true, "pending_id": "pend-1", "decision": "allow" })
+            answered["result"]["structuredContent"]["server"]["instance_id"],
+            identity.instance_id
         );
+        assert_eq!(answered["result"]["structuredContent"]["ok"], true);
+        assert_eq!(answered["result"]["structuredContent"]["pending_id"], "pend-1");
+        assert_eq!(answered["result"]["structuredContent"]["decision"], "allow");
 
         // Answering again -> 409 Conflict mapped to isError: true
         let RpcOutcome::Response(dup_answer) = dispatch_rpc(
@@ -1526,8 +1753,118 @@ mod tests {
             panic!("expected response");
         };
         assert_eq!(dup_answer["result"]["isError"], json!(true));
+        assert!(dup_answer["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("[{tag}] Error: ")));
 
         let _ = state.manager.kill(sid);
+    }
+
+    #[test]
+    fn human_presence_formats_all_four_states_for_sessions_and_screens() {
+        let mut state = test_state(true);
+        state.listen_port = 7683;
+        state.mcp.name = Some("peer-fmt".into());
+        let id = ServerIdentity::from_state(&state);
+        let tag = id.text_tag();
+
+        assert_eq!(
+            format_sessions_text(&id, &[]),
+            format!("[{tag} | instance={}] No active terminal sessions.", id.instance_id)
+        );
+        assert_eq!(
+            format_launchers_text(&id, &[]),
+            format!("[{tag}] No launchers available.")
+        );
+        assert_eq!(
+            format_pending_text(&id, &[]),
+            format!("[{tag}] No pending approval requests.")
+        );
+
+        let mk_sess = |id_num: u64, attached_clients: usize, last_input_secs: Option<u64>| SessionWithAgent {
+            info: SessionInfo {
+                id: id_num,
+                name: format!("s{id_num}"),
+                cols: 80,
+                rows: 24,
+                created_at: 1,
+                cwd: None,
+            },
+            human: HumanPresence {
+                attached_clients,
+                last_input_secs,
+            },
+            agent: None,
+        };
+        let list_text = format_sessions_text(
+            &id,
+            &[
+                mk_sess(1, 0, None),
+                mk_sess(2, 1, None),
+                mk_sess(3, 2, Some(5)),
+                mk_sess(4, 0, Some(12)),
+            ],
+        );
+        let lines: Vec<&str> = list_text.lines().collect();
+        assert_eq!(
+            lines[0],
+            format!("[{tag} | instance={}] Sessions (4):", id.instance_id)
+        );
+        assert!(!lines[1].contains("[human:"), "line1: {:?}", lines[1]);
+        assert!(lines[2].contains("[human: attached=1]"), "line2: {:?}", lines[2]);
+        assert!(
+            lines[3].contains("[human: attached=2, last_input=5s ago]"),
+            "line3: {:?}",
+            lines[3]
+        );
+        assert!(
+            lines[4].contains("[human: detached, last_input=12s ago]"),
+            "line4: {:?}",
+            lines[4]
+        );
+
+        let mut snap = ScreenSnapshot {
+            session_id: 1,
+            cols: 80,
+            rows: 24,
+            cursor: crate::session::grid::CursorPos { row: 0, col: 0 },
+            alt_screen: false,
+            seq: 7,
+            exited: false,
+            history_available: 0,
+            history_returned: 0,
+            human: HumanPresence {
+                attached_clients: 0,
+                last_input_secs: None,
+            },
+            text: "hi".into(),
+        };
+
+        let s0 = format_screen_text(&id, &snap);
+        assert!(s0.starts_with(&format!("[{tag} session #1")), "s0: {s0:?}");
+        assert!(!s0.contains("human="), "unexpected human in {s0:?}");
+
+        snap.human = HumanPresence {
+            attached_clients: 1,
+            last_input_secs: None,
+        };
+        let s1 = format_screen_text(&id, &snap);
+        assert!(s1.contains(" human=1]"), "expected human=1 in {s1:?}");
+
+        snap.human = HumanPresence {
+            attached_clients: 2,
+            last_input_secs: Some(5),
+        };
+        let s2 = format_screen_text(&id, &snap);
+        assert!(s2.contains(" human=2(5s)]"), "expected human=2(5s) in {s2:?}");
+
+        snap.human = HumanPresence {
+            attached_clients: 0,
+            last_input_secs: Some(12),
+        };
+        let s3 = format_screen_text(&id, &snap);
+        assert!(s3.contains(" human=0(12s)]"), "expected human=0(12s) in {s3:?}");
     }
 
     #[tokio::test]

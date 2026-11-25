@@ -514,9 +514,11 @@ async fn mcp_and_rest_full_session_lifecycle_and_exited_session_error() {
         json!({ "session_id": launcher_sid }),
     )
     .await;
+    assert_eq!(killed_launcher["structuredContent"]["killed"], true);
+    assert_eq!(killed_launcher["structuredContent"]["id"], launcher_sid);
     assert_eq!(
-        killed_launcher["structuredContent"],
-        json!({ "killed": true, "id": launcher_sid })
+        killed_launcher["structuredContent"]["server"]["port"],
+        addr.port()
     );
 
     // 2. Short-lived explicit command: verify output, wait for natural exit, then verify
@@ -747,6 +749,8 @@ async fn mcp_and_rest_full_session_lifecycle_and_exited_session_error() {
         .unwrap();
     assert_eq!(rest_screen.status(), 200);
     let rest_snap: Value = rest_screen.json().await.unwrap();
+    assert_eq!(rest_snap["server"]["port"], addr.port());
+    assert_eq!(rest_snap["human"]["attached_clients"], 0);
     assert!(rest_snap["history_returned"].as_u64().unwrap() > 0);
     assert!(rest_snap["text"].as_str().unwrap().contains("SL_1"));
 
@@ -791,9 +795,9 @@ async fn mcp_and_rest_full_session_lifecycle_and_exited_session_error() {
         .await
         .unwrap();
     assert_eq!(create_rest.status(), 201);
-    let kill_id = create_rest.json::<Value>().await.unwrap()["session"]["id"]
-        .as_u64()
-        .unwrap();
+    let create_rest_json: Value = create_rest.json().await.unwrap();
+    assert_eq!(create_rest_json["server"]["port"], addr.port());
+    let kill_id = create_rest_json["session"]["id"].as_u64().unwrap();
 
     let killed = mcp_tool(
         &client,
@@ -804,10 +808,9 @@ async fn mcp_and_rest_full_session_lifecycle_and_exited_session_error() {
         json!({ "session_id": kill_id }),
     )
     .await;
-    assert_eq!(
-        killed["structuredContent"],
-        json!({ "killed": true, "id": kill_id })
-    );
+    assert_eq!(killed["structuredContent"]["killed"], true);
+    assert_eq!(killed["structuredContent"]["id"], kill_id);
+    assert_eq!(killed["structuredContent"]["server"]["port"], addr.port());
 
     let mcp_after_kill = mcp_tool(
         &client,
@@ -963,10 +966,10 @@ async fn session_list_surfaces_waiting_agent_and_approval_flow_unblocks_hook() {
     )
     .await;
     assert_ne!(approved.get("isError"), Some(&json!(true)));
-    assert_eq!(
-        approved["structuredContent"],
-        json!({ "ok": true, "pending_id": pending_id, "decision": "allow" })
-    );
+    assert_eq!(approved["structuredContent"]["ok"], true);
+    assert_eq!(approved["structuredContent"]["pending_id"], pending_id);
+    assert_eq!(approved["structuredContent"]["decision"], "allow");
+    assert_eq!(approved["structuredContent"]["server"]["port"], addr.port());
 
     let hook_resp = tokio::time::timeout(Duration::from_secs(3), hook_task)
         .await
@@ -1104,6 +1107,9 @@ async fn http_and_mcp_never_resize_attached_human_viewport_or_steal_clipboard_ow
         .unwrap();
     assert_eq!(rest_send.status(), 200);
     let rest_send_json: Value = rest_send.json().await.unwrap();
+    assert_eq!(rest_send_json["server"]["port"], addr.port());
+    assert!(rest_send_json["screen"].get("server").is_none());
+    assert_eq!(rest_send_json["screen"]["human"]["attached_clients"], 1);
     assert_eq!(rest_send_json["screen"]["cols"], 110);
     assert_eq!(rest_send_json["screen"]["rows"], 32);
     assert!(
@@ -1159,4 +1165,331 @@ async fn http_and_mcp_never_resize_attached_human_viewport_or_steal_clipboard_ow
     assert_eq!(clips_ws, vec![(1, "from-ws".to_string())]);
 
     ws.send(control(&ClientMsg::KillSession { id })).await.unwrap();
+}
+
+#[tokio::test]
+async fn mcp_exposes_node_identity_and_pty_gateterm_server_id_matches_instance_id() {
+    let token = "tok-identity";
+    let addr = start_test_server_with_mcp(
+        token,
+        McpConfig {
+            enabled: true,
+            name: Some("peer-alpha".into()),
+            description: Some("test peer".into()),
+        },
+    )
+    .await;
+    let client = reqwest::Client::new();
+
+    // 1. GET /api/mcp/status returns ServerIdentity.
+    let status_resp = client
+        .get(format!("http://{addr}/api/mcp/status"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(status_resp.status(), 200);
+    let status_json: Value = status_resp.json().await.unwrap();
+    let status_server = status_json["server"].clone();
+    let instance_id = status_server["instance_id"]
+        .as_str()
+        .expect("server.instance_id")
+        .to_string();
+    assert_eq!(instance_id.len(), 32);
+    assert_eq!(status_server["name"], "peer-alpha");
+    assert_eq!(status_server["description"], "test peer");
+    assert_eq!(status_server["port"], addr.port());
+    assert_eq!(status_server["os"], std::env::consts::OS);
+    assert_eq!(status_server["arch"], std::env::consts::ARCH);
+
+    // 2. MCP initialize surfaces serverInfo.title and dynamic instructions with node identity.
+    let init = mcp_rpc(
+        &client,
+        addr,
+        token,
+        1,
+        "initialize",
+        json!({
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": { "name": "identity-e2e", "version": "1.0" }
+        }),
+    )
+    .await;
+    assert_eq!(init["serverInfo"]["name"], "gateterm");
+    let title = init["serverInfo"]["title"].as_str().expect("serverInfo.title");
+    assert!(title.contains("peer-alpha"), "title: {title:?}");
+    let instr = init["instructions"].as_str().unwrap();
+    assert!(instr.contains(&instance_id), "instructions: {instr:?}");
+    assert!(instr.contains("peer-alpha"), "instructions: {instr:?}");
+    assert!(instr.contains("test peer"), "instructions: {instr:?}");
+    assert!(instr.contains("GATETERM_SERVER_ID"), "instructions: {instr:?}");
+    assert!(instr.contains("GATETERM_SESSION_ID"), "instructions: {instr:?}");
+    assert!(instr.contains("attached_clients"), "instructions: {instr:?}");
+
+    // 3. Create session via MCP and verify PTY env GATETERM_SERVER_ID & GATETERM_SESSION_ID match.
+    let created = mcp_tool(
+        &client,
+        addr,
+        token,
+        2,
+        "new_session",
+        json!({
+            "name": "env-probe",
+            "command": long_shell_cmd(),
+        }),
+    )
+    .await;
+    assert_eq!(created["structuredContent"]["server"], status_server);
+    let sid = created["structuredContent"]["session"]["id"]
+        .as_u64()
+        .unwrap();
+    wait_for_prompt(&client, addr, token, sid).await;
+
+    #[cfg(windows)]
+    let probe_cmd = "echo ID=%GATETERM_SERVER_ID%:%GATETERM_SESSION_ID%";
+    #[cfg(unix)]
+    let probe_cmd = r#"printf "ID=%s:%s\n" "$GATETERM_SERVER_ID" "$GATETERM_SESSION_ID""#;
+
+    let sent = mcp_tool(
+        &client,
+        addr,
+        token,
+        3,
+        "send_input",
+        json!({
+            "session_id": sid,
+            "text": probe_cmd,
+            "enter": true,
+            "wait_ms": 3000,
+        }),
+    )
+    .await;
+    assert_eq!(sent["structuredContent"]["server"], status_server);
+    assert!(sent["structuredContent"]["screen"].get("server").is_none());
+
+    let expected_marker = format!("ID={instance_id}:{sid}");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let snap = mcp_tool(
+            &client,
+            addr,
+            token,
+            4,
+            "read_session",
+            json!({ "session_id": sid, "scrollback_lines": 20 }),
+        )
+        .await;
+        assert_eq!(snap["structuredContent"]["server"], status_server);
+        if snap["structuredContent"]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains(&expected_marker)
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {expected_marker:?} in PTY screen"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // 4. list_sessions and REST /api/sessions expose matching ServerIdentity.
+    let listed = mcp_tool(&client, addr, token, 5, "list_sessions", json!({})).await;
+    assert_eq!(listed["structuredContent"]["server"], status_server);
+    assert!(
+        listed["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("instance={instance_id}"))
+    );
+
+    let rest_list: Value = client
+        .get(format!("http://{addr}/api/sessions"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(rest_list["server"], status_server);
+
+    let _ = mcp_tool(
+        &client,
+        addr,
+        token,
+        6,
+        "kill_session",
+        json!({ "session_id": sid }),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn mcp_reports_human_presence_advisory_only_across_ws_attach_input_and_detach() {
+    let token = "t";
+    let addr = start_test_server_with_mcp(
+        token,
+        McpConfig {
+            enabled: true,
+            name: Some("peer-human".into()),
+            description: None,
+        },
+    )
+    .await;
+    let client = reqwest::Client::new();
+
+    // 1. Create session via MCP; initially attached_clients == 0 and no last_input_secs.
+    let created = mcp_tool(
+        &client,
+        addr,
+        token,
+        1,
+        "new_session",
+        json!({
+            "name": "human-watch",
+            "command": long_shell_cmd(),
+        }),
+    )
+    .await;
+    let sid = created["structuredContent"]["session"]["id"]
+        .as_u64()
+        .unwrap();
+    wait_for_prompt(&client, addr, token, sid).await;
+
+    let listed0 = mcp_tool(&client, addr, token, 2, "list_sessions", json!({})).await;
+    let sess0 = listed0["structuredContent"]["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == sid)
+        .unwrap();
+    assert_eq!(sess0["human"]["attached_clients"], 0);
+    assert!(sess0["human"].get("last_input_secs").is_none());
+
+    let read0 = mcp_tool(&client, addr, token, 3, "read_session", json!({ "session_id": sid })).await;
+    assert_eq!(read0["structuredContent"]["human"]["attached_clients"], 0);
+    assert!(read0["structuredContent"]["human"].get("last_input_secs").is_none());
+
+    // 2. Attach WS client -> attached_clients == 1, still no last_input_secs.
+    let mut ws = connect(&format!("ws://{addr}/ws")).await;
+    attach_and_expect_initial_resize(&mut ws, sid, 1, 100, 30).await;
+
+    let listed1 = mcp_tool(&client, addr, token, 4, "list_sessions", json!({})).await;
+    let sess1 = listed1["structuredContent"]["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == sid)
+        .unwrap();
+    assert_eq!(sess1["human"]["attached_clients"], 1);
+    assert!(sess1["human"].get("last_input_secs").is_none());
+    assert!(
+        listed1["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("[human: attached=1]")
+    );
+
+    let read1 = mcp_tool(&client, addr, token, 5, "read_session", json!({ "session_id": sid })).await;
+    assert_eq!(read1["structuredContent"]["human"]["attached_clients"], 1);
+    assert!(read1["content"][0]["text"].as_str().unwrap().contains(" human=1]"));
+
+    // 3. Send WS input -> last_input_secs becomes Some(_).
+    ws.send(input_frame(1, b"echo WS_HUMAN_ACTIVE\r")).await.unwrap();
+    let (_, _, resizes1) = collect_ws_until(&mut ws, 1, "WS_HUMAN_ACTIVE").await;
+    assert!(resizes1.is_empty());
+
+    let listed2 = mcp_tool(&client, addr, token, 6, "list_sessions", json!({})).await;
+    let sess2 = listed2["structuredContent"]["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == sid)
+        .unwrap();
+    assert_eq!(sess2["human"]["attached_clients"], 1);
+    assert!(sess2["human"]["last_input_secs"].as_u64().is_some());
+    assert!(
+        listed2["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("[human: attached=1, last_input=")
+    );
+
+    let read2 = mcp_tool(&client, addr, token, 7, "read_session", json!({ "session_id": sid })).await;
+    assert_eq!(read2["structuredContent"]["human"]["attached_clients"], 1);
+    assert!(read2["structuredContent"]["human"]["last_input_secs"].as_u64().is_some());
+    assert!(read2["content"][0]["text"].as_str().unwrap().contains(" human=1("));
+
+    // 4. Advisory-only invariant: MCP send_input is NOT blocked while human is active,
+    //    and triggers no ServerMsg::Resized (T25).
+    let mcp_sent = mcp_tool(
+        &client,
+        addr,
+        token,
+        8,
+        "send_input",
+        json!({
+            "session_id": sid,
+            "text": "echo MCP_ADVISORY_OK",
+            "enter": true,
+            "wait_ms": 2500,
+        }),
+    )
+    .await;
+    assert_ne!(mcp_sent.get("isError"), Some(&json!(true)));
+    assert_eq!(mcp_sent["structuredContent"]["screen"]["human"]["attached_clients"], 1);
+    assert!(
+        mcp_sent["structuredContent"]["screen"]["human"]["last_input_secs"]
+            .as_u64()
+            .is_some()
+    );
+    let (_, _, resizes2) = collect_ws_until(&mut ws, 1, "MCP_ADVISORY_OK").await;
+    assert!(
+        resizes2.is_empty(),
+        "MCP send_input must not trigger ServerMsg::Resized: {resizes2:?}"
+    );
+
+    // 5. Detach WS -> attached_clients returns to 0 while last_input_secs remains Some(_).
+    ws.send(control(&ClientMsg::Detach { channel: 1 })).await.unwrap();
+    ws.send(control(&ClientMsg::ListSessions)).await.unwrap();
+    let _ = common::next_control(&mut ws).await;
+
+    let listed3 = mcp_tool(&client, addr, token, 9, "list_sessions", json!({})).await;
+    let sess3 = listed3["structuredContent"]["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == sid)
+        .unwrap();
+    assert_eq!(sess3["human"]["attached_clients"], 0);
+    assert!(sess3["human"]["last_input_secs"].as_u64().is_some());
+    assert!(
+        listed3["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("[human: detached, last_input=")
+    );
+
+    let read3 = mcp_tool(&client, addr, token, 10, "read_session", json!({ "session_id": sid })).await;
+    assert_eq!(read3["structuredContent"]["human"]["attached_clients"], 0);
+    assert!(read3["structuredContent"]["human"]["last_input_secs"].as_u64().is_some());
+    assert!(read3["content"][0]["text"].as_str().unwrap().contains(" human=0("));
+
+    // 6. Re-attach human and confirm kill_session is also NOT blocked (advisory only).
+    attach_and_expect_initial_resize(&mut ws, sid, 2, 100, 30).await;
+    let killed = mcp_tool(
+        &client,
+        addr,
+        token,
+        11,
+        "kill_session",
+        json!({ "session_id": sid }),
+    )
+    .await;
+    assert_ne!(killed.get("isError"), Some(&json!(true)));
+    assert_eq!(killed["structuredContent"]["killed"], true);
+    assert_eq!(killed["structuredContent"]["id"], sid);
 }
