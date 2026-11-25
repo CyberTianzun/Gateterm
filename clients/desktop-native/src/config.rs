@@ -83,6 +83,80 @@ impl ServerProfile {
     }
 }
 
+fn decode_form_component(raw: &str) -> Result<String> {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' => {
+                anyhow::ensure!(i + 2 < bytes.len(), "truncated percent-encoding");
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3])
+                    .map_err(|_| anyhow::anyhow!("invalid percent-encoding"))?;
+                anyhow::ensure!(
+                    hex.bytes().all(|b| b.is_ascii_hexdigit()),
+                    "invalid percent-encoding"
+                );
+                let byte = u8::from_str_radix(hex, 16)?;
+                out.push(byte);
+                i += 3;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).map_err(|_| anyhow::anyhow!("invalid UTF-8 in URL parameter"))
+}
+
+fn first_param(encoded: &str, target_key: &str) -> Result<Option<String>> {
+    for pair in encoded.split('&') {
+        let Some((raw_key, raw_val)) = pair.split_once('=') else {
+            continue;
+        };
+        if raw_key != target_key {
+            continue;
+        }
+        let decoded = decode_form_component(raw_val)?;
+        if !decoded.is_empty() {
+            return Ok(Some(decoded));
+        }
+    }
+    Ok(None)
+}
+
+fn param_from_url(parsed: &Url, key: &str) -> Result<Option<String>> {
+    if let Some(frag) = parsed.fragment()
+        && let Some(val) = first_param(frag, key)?
+    {
+        return Ok(Some(val));
+    }
+    if let Some(query) = parsed.query() {
+        return first_param(query, key);
+    }
+    Ok(None)
+}
+
+fn normalize_access_title(raw: &str) -> Option<String> {
+    let collapsed = raw.replace("\r\n", " ").replace(['\r', '\n'], " ");
+    let trimmed = collapsed.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let capped: String = trimmed.chars().take(128).collect();
+    let final_title = capped.trim_end().to_string();
+    if final_title.is_empty() {
+        None
+    } else {
+        Some(final_title)
+    }
+}
+
 /// Parses a Gateterm access URL like `http://127.0.0.1:7683/#token=abc` or `http://host:port?token=abc`
 pub fn parse_access_url(raw: &str) -> Result<(String, Option<String>, String)> {
     let input = raw.trim();
@@ -101,26 +175,12 @@ pub fn parse_access_url(raw: &str) -> Result<(String, Option<String>, String)> {
         _ => "http",
     };
     let base_url = format!("{scheme}://{host}{port_part}");
-    let display_name = format!("{host}{port_part}");
+    let host_display = format!("{host}{port_part}");
 
-    let mut token = None;
-    if let Some(frag) = parsed.fragment() {
-        for pair in frag.split('&') {
-            if let Some(val) = pair.strip_prefix("token=")
-                && !val.trim().is_empty()
-            {
-                token = Some(val.trim().to_string());
-            }
-        }
-    }
-    if token.is_none() {
-        for (k, v) in parsed.query_pairs() {
-            if k == "token" && !v.trim().is_empty() {
-                token = Some(v.trim().to_string());
-                break;
-            }
-        }
-    }
+    let token = param_from_url(&parsed, "token")?;
+    let raw_title = param_from_url(&parsed, "title")?;
+    let title = raw_title.as_deref().and_then(normalize_access_title);
+    let display_name = title.unwrap_or(host_display);
 
     Ok((base_url, token, display_name))
 }
@@ -335,6 +395,80 @@ mod tests {
         assert_eq!(base, "http://192.168.1.20:7683");
         assert_eq!(token.as_deref(), Some("my-secret-token"));
         assert_eq!(name, "192.168.1.20:7683");
+    }
+
+    #[test]
+    fn parses_fragment_token_and_title() {
+        let (base, token, name) = parse_access_url(
+            "http://192.168.1.20:7683/#token=a%2Bb+%26%3D%23%E5%AF%86%E7%A0%81&title=%E7%A0%94%E5%8F%91+1%E5%8F%B7",
+        )
+        .unwrap();
+        assert_eq!(base, "http://192.168.1.20:7683");
+        assert_eq!(token.as_deref(), Some("a+b &=#密码"));
+        assert_eq!(name, "研发 1号");
+    }
+
+    #[test]
+    fn parses_query_token_and_title_fallback() {
+        let (base, token, name) =
+            parse_access_url("http://192.168.1.20:7683/?token=qtok&title=Query+Box").unwrap();
+        assert_eq!(base, "http://192.168.1.20:7683");
+        assert_eq!(token.as_deref(), Some("qtok"));
+        assert_eq!(name, "Query Box");
+    }
+
+    #[test]
+    fn fragment_wins_over_query_when_both_exist() {
+        let (_, token, name) = parse_access_url(
+            "http://192.168.1.20:7683/?token=qtok&title=Query+Box#token=ftok&title=Frag+Box",
+        )
+        .unwrap();
+        assert_eq!(token.as_deref(), Some("ftok"));
+        assert_eq!(name, "Frag Box");
+    }
+
+    #[test]
+    fn blank_or_newline_title_falls_back_to_host_port() {
+        let (_, token, name) =
+            parse_access_url("http://192.168.1.20:7683/#token=tok&title=%20%0A").unwrap();
+        assert_eq!(token.as_deref(), Some("tok"));
+        assert_eq!(name, "192.168.1.20:7683");
+    }
+
+    #[test]
+    fn truncates_title_to_128_unicode_scalars() {
+        let long_title = "🚀".repeat(130);
+        let fragment = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("token", "tok")
+            .append_pair("title", &long_title)
+            .finish();
+        let raw_url = format!("http://192.168.1.20:7683/#{fragment}");
+        let (_, token, name) = parse_access_url(&raw_url).unwrap();
+        assert_eq!(token.as_deref(), Some("tok"));
+        assert_eq!(name.chars().count(), 128);
+        assert_eq!(name, "🚀".repeat(128));
+    }
+
+    #[test]
+    fn rejects_malformed_percent_escapes_and_invalid_utf8() {
+        assert!(parse_access_url("http://192.168.1.20:7683/#token=%ZZ").is_err());
+        assert!(parse_access_url("http://192.168.1.20:7683/#token=ok&title=%ZZ").is_err());
+        assert!(parse_access_url("http://192.168.1.20:7683/#token=ok&title=abc%2").is_err());
+        assert!(parse_access_url("http://192.168.1.20:7683/#token=ok&title=%FF").is_err());
+        assert!(parse_access_url("http://192.168.1.20:7683/?token=ok&title=%ZZ").is_err());
+    }
+
+    #[test]
+    fn server_profile_access_url_stays_token_only() {
+        let p = ServerProfile {
+            id: "s1".into(),
+            name: "Local Gateterm".into(),
+            base_url: "http://127.0.0.1:7683".into(),
+            token: "tok123".into(),
+            is_embedded: false,
+            auto_connect: true,
+        };
+        assert_eq!(p.access_url(), "http://127.0.0.1:7683/#token=tok123");
     }
 
     #[test]

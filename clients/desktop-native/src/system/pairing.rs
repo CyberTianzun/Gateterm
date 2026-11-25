@@ -35,6 +35,7 @@ impl QrMatrix {
 pub struct PairingState {
     pub listen: Option<SocketAddr>,
     pub token: String,
+    pub title: Option<String>,
     pub addresses: Vec<NetworkAddress>,
     pub selected: Option<IpAddr>,
     pub interface_error: bool,
@@ -42,15 +43,16 @@ pub struct PairingState {
 }
 
 impl PairingState {
-    pub fn new(listen: Option<SocketAddr>, token: Option<&str>) -> Self {
+    pub fn new(listen: Option<SocketAddr>, token: Option<&str>, title: Option<&str>) -> Self {
         let mut s = Self::default();
-        s.refresh(listen, token);
+        s.refresh(listen, token, title);
         s
     }
 
-    pub fn refresh(&mut self, listen: Option<SocketAddr>, token: Option<&str>) {
+    pub fn refresh(&mut self, listen: Option<SocketAddr>, token: Option<&str>, title: Option<&str>) {
         self.listen = listen;
         self.token = token.unwrap_or_default().into();
+        self.title = gateterm_server::config::normalize_web_title(title.map(str::to_string));
         let interfaces = if_addrs::get_if_addrs().map(|ifaces| {
             ifaces
                 .into_iter()
@@ -80,7 +82,12 @@ impl PairingState {
     pub fn selected_connection_url(&self) -> Option<String> {
         let listen = self.listen.filter(|_| !self.token.is_empty())?;
         let ip = self.selected?;
-        Some(connection_url(listen, ip, &self.token))
+        Some(connection_url(
+            listen,
+            ip,
+            &self.token,
+            self.title.as_deref(),
+        ))
     }
 
     pub fn selected_host_origin(&self) -> Option<String> {
@@ -204,10 +211,18 @@ fn probe_default_route_ip(ipv6: bool) -> Option<IpAddr> {
     (!ip.is_unspecified() && !ip.is_loopback()).then_some(ip)
 }
 
-pub fn connection_url(listen: SocketAddr, ip: IpAddr, token: &str) -> String {
-    let fragment = url::form_urlencoded::Serializer::new(String::new())
-        .append_pair("token", token)
-        .finish();
+pub fn connection_url(
+    listen: SocketAddr,
+    ip: IpAddr,
+    token: &str,
+    title: Option<&str>,
+) -> String {
+    let mut ser = url::form_urlencoded::Serializer::new(String::new());
+    ser.append_pair("token", token);
+    if let Some(t) = gateterm_server::config::normalize_web_title(title.map(str::to_string)) {
+        ser.append_pair("title", &t);
+    }
+    let fragment = ser.finish();
     format!("http://{}/#{fragment}", SocketAddr::new(ip, listen.port()))
 }
 
@@ -315,12 +330,81 @@ mod tests {
             "[::]:49152".parse().unwrap(),
             "fd00::2".parse().unwrap(),
             "a+b &=#密码",
+            None,
         );
         let parsed = url::Url::parse(&url).unwrap();
         assert_eq!(parsed.port(), Some(49152));
         assert_eq!(parsed.host_str(), Some("[fd00::2]"));
+        let pairs: Vec<(String, String)> =
+            url::form_urlencoded::parse(parsed.fragment().unwrap().as_bytes())
+                .into_owned()
+                .collect();
+        assert_eq!(pairs, vec![("token".to_string(), "a+b &=#密码".to_string())]);
         let matrix = qr_matrix(&url).unwrap();
         assert!(matrix.size > 20);
         assert!(matrix.modules.iter().any(|&dark| dark));
+    }
+
+    #[test]
+    fn link_includes_normalized_title_and_omits_blank_title() {
+        let url = connection_url(
+            "0.0.0.0:7683".parse().unwrap(),
+            "192.168.1.10".parse().unwrap(),
+            "a+b &=#密码",
+            Some("  研发\n1号+a&b=#测试  "),
+        );
+        let parsed = url::Url::parse(&url).unwrap();
+        let pairs: Vec<(String, String)> =
+            url::form_urlencoded::parse(parsed.fragment().unwrap().as_bytes())
+                .into_owned()
+                .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                ("token".to_string(), "a+b &=#密码".to_string()),
+                ("title".to_string(), "研发 1号+a&b=#测试".to_string()),
+            ]
+        );
+
+        let blank_url = connection_url(
+            "0.0.0.0:7683".parse().unwrap(),
+            "192.168.1.10".parse().unwrap(),
+            "a+b &=#密码",
+            Some(" \n "),
+        );
+        let parsed_blank = url::Url::parse(&blank_url).unwrap();
+        let blank_pairs: Vec<(String, String)> =
+            url::form_urlencoded::parse(parsed_blank.fragment().unwrap().as_bytes())
+                .into_owned()
+                .collect();
+        assert_eq!(
+            blank_pairs,
+            vec![("token".to_string(), "a+b &=#密码".to_string())]
+        );
+    }
+
+    #[test]
+    fn pairing_state_refresh_regenerates_qr_when_title_changes() {
+        let listen: SocketAddr = "0.0.0.0:7683".parse().unwrap();
+        let mut state = PairingState::new(Some(listen), Some("tok"), Some("Box A"));
+        assert_eq!(state.title.as_deref(), Some("Box A"));
+        if state.selected.is_some() {
+            let first_qr_url = state.cached_qr.as_ref().map(|(u, _)| u.clone()).unwrap();
+            assert!(first_qr_url.contains("title=Box+A"));
+
+            state.refresh(Some(listen), Some("tok"), Some("Box B"));
+            assert_eq!(state.title.as_deref(), Some("Box B"));
+            let second_qr_url = state.cached_qr.as_ref().map(|(u, _)| u.clone()).unwrap();
+            assert_ne!(first_qr_url, second_qr_url);
+            assert!(second_qr_url.contains("title=Box+B"));
+
+            state.refresh(Some(listen), Some("tok"), Some("  \n  "));
+            assert_eq!(state.title, None);
+            let cleared_qr_url = state.cached_qr.as_ref().map(|(u, _)| u.clone()).unwrap();
+            assert!(!cleared_qr_url.contains("title="));
+        } else {
+            state.refresh(Some(listen), Some("tok"), Some("Box B"));
+            assert_eq!(state.title.as_deref(), Some("Box B"));
+        }
     }
 }

@@ -29,6 +29,16 @@ pub fn display_host(ip: IpAddr) -> String {
     }
 }
 
+pub fn format_embedded_access_url(base_url: &str, token: &str, title: Option<&str>) -> String {
+    let mut ser = url::form_urlencoded::Serializer::new(String::new());
+    ser.append_pair("token", token);
+    if let Some(t) = gateterm_server::config::normalize_web_title(title.map(str::to_string)) {
+        ser.append_pair("title", &t);
+    }
+    let fragment = ser.finish();
+    format!("{}/#{fragment}", base_url.trim_end_matches('/'))
+}
+
 struct RunningListener {
     listen: SocketAddr,
     token: String,
@@ -103,10 +113,15 @@ impl LocalServerSupervisor {
         }
     }
 
+    pub fn web_title(&self) -> Option<String> {
+        self.web_title.get()
+    }
+
     pub fn access_url(&self) -> String {
         let base = self.base_url();
         let tok = self.token();
-        format!("{base}/#token={tok}")
+        let title = self.web_title();
+        format_embedded_access_url(&base, tok, title.as_deref())
     }
 
     pub fn token(&self) -> &str {
@@ -220,4 +235,44 @@ async fn bind_with_retry(addr: SocketAddr) -> Result<TcpListener> {
         }
     }
     Err(last_err.unwrap()).with_context(|| format!("Could not bind {addr}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_embedded_access_url_handles_optional_title() {
+        let no_title = format_embedded_access_url("http://127.0.0.1:17683", "tok+1", None);
+        assert_eq!(no_title, "http://127.0.0.1:17683/#token=tok%2B1");
+
+        let blank_title =
+            format_embedded_access_url("http://127.0.0.1:17683", "tok+1", Some(" \r\n "));
+        assert_eq!(blank_title, "http://127.0.0.1:17683/#token=tok%2B1");
+
+        let with_title =
+            format_embedded_access_url("http://127.0.0.1:17683", "tok+1", Some("Mac Studio"));
+        assert_eq!(
+            with_title,
+            "http://127.0.0.1:17683/#token=tok%2B1&title=Mac+Studio"
+        );
+
+        let special_title = format_embedded_access_url(
+            "http://127.0.0.1:17683",
+            "tok+1",
+            Some("  研发\n1号+a&b=#测试  "),
+        );
+        let parsed = url::Url::parse(&special_title).unwrap();
+        let pairs: Vec<(String, String)> =
+            url::form_urlencoded::parse(parsed.fragment().unwrap().as_bytes())
+                .into_owned()
+                .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                ("token".to_string(), "tok+1".to_string()),
+                ("title".to_string(), "研发 1号+a&b=#测试".to_string()),
+            ]
+        );
+    }
 }

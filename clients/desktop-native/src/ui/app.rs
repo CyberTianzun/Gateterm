@@ -371,6 +371,7 @@ impl GatetermWorkbench {
         settings_modal.pairing = crate::system::pairing::PairingState::new(
             init_listen,
             Some(config.embedded_token.as_str()),
+            None,
         );
 
         let (tray_tx, mut tray_rx) = mpsc::unbounded_channel();
@@ -596,9 +597,10 @@ impl GatetermWorkbench {
             .as_ref()
             .map(|s| s.token().to_string())
             .unwrap_or_else(|| self.config.embedded_token.clone());
+        let title = self.local_supervisor.as_ref().and_then(|s| s.web_title());
         self.settings_modal
             .pairing
-            .refresh(listen, Some(token.as_str()));
+            .refresh(listen, Some(token.as_str()), title.as_deref());
     }
 
     pub fn start_embedded_server_async(&mut self, cx: &mut Context<Self>) {
@@ -2043,8 +2045,19 @@ impl GatetermWorkbench {
             return;
         }
 
-        let (base_url, parsed_token, host_display) =
-            parse_access_url(&raw_url).unwrap_or((raw_url.clone(), None, raw_url.clone()));
+        let (base_url, parsed_token, host_display) = match parse_access_url(&raw_url) {
+            Ok(v) => v,
+            Err(err) => {
+                self.server_dialog.error = Some(
+                    self.locale
+                        .t("服务器 URL 格式无效", "Invalid server URL")
+                        .to_string(),
+                );
+                tracing::debug!(error = %err, "invalid access url");
+                cx.notify();
+                return;
+            }
+        };
         let token = if !raw_token.is_empty() {
             raw_token
         } else {
@@ -2082,6 +2095,7 @@ impl GatetermWorkbench {
             .insert(id.clone(), ServerConnection::new(profile));
         self.detach_all_tabs(cx);
         self.active_server_id = id.clone();
+        self.server_dialog.error = None;
         self.server_dialog.open = false;
         self.connect_server(&id, cx);
         cx.notify();
