@@ -52,9 +52,14 @@ function isLoopbackOrWildcardHost(host: string): boolean {
 
 /**
  * Validate the current page `href` and active `token`, returning a pairing URL
- * (`<base>#token=...`) suitable for QR encoding or a structured rejection reason.
+ * (`<base>#token=...` or `<base>#token=...&title=...` when a non-empty `title`
+ * is provided) suitable for QR encoding or a structured rejection reason.
  */
-export function buildPairingTarget(href: string, token: string): PairingTarget {
+export function buildPairingTarget(
+  href: string,
+  token: string,
+  title?: string | null,
+): PairingTarget {
   let parsed: URL;
   try {
     parsed = new URL(href);
@@ -89,10 +94,15 @@ export function buildPairingTarget(href: string, token: string): PairingTarget {
 
   const base = new URL(".", parsed).toString();
   const displayUrl = base.replace(/\/$/, "");
-  const fragment = new URLSearchParams([["token", token]]).toString();
+  const params = new URLSearchParams([["token", token]]);
+  const normalizedTitle =
+    typeof title === "string" ? title.replace(/[\r\n]+/g, " ").trim() : "";
+  if (normalizedTitle) {
+    params.append("title", normalizedTitle);
+  }
   return {
     ok: true,
-    url: `${base}#${fragment}`,
+    url: `${base}#${params.toString()}`,
     displayUrl,
   };
 }

@@ -102,3 +102,24 @@ test("an empty saved token prompts instead of authenticating with an empty strin
   assert.equal(readToken("Token:"), "manual-token");
   assert.deepEqual(prompts, ["Token:"]);
 });
+
+test("opening a pairing URL with token and title strips both from the address bar", () => {
+  const { storage } = browser("https://example.com/#token=secret&title=prod-01");
+  assert.equal(readToken("Token:"), "secret");
+  assert.equal(storage.get("gateterm-token"), "secret");
+  assert.equal(location.href, "https://example.com/");
+});
+
+test("stripping token and title preserves other fragment parameters alongside query and path", () => {
+  browser("https://example.com/web/?lang=zh#view=chat&token=secret&title=prod-01&session=7");
+  assert.equal(readToken("Token:"), "secret");
+  assert.equal(location.href, "https://example.com/web/?lang=zh#view=chat&session=7");
+});
+
+test("fragment title without token leaves location.href completely unchanged", () => {
+  const url = "https://example.com/web/#title=keep";
+  const { replacements } = browser(url, "saved-token");
+  assert.equal(readToken("Token:"), "saved-token");
+  assert.equal(location.href, url);
+  assert.deepEqual(replacements, []);
+});

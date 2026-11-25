@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { execSync } from "node:child_process";
 import { rmSync } from "node:fs";
+import { build } from "esbuild";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const buildOutfile = join(here, ".pairing.build.mjs");
@@ -26,6 +27,16 @@ const {
   renderQrSvg,
   createQrSvgElement,
 } = await import("./.pairing.build.mjs");
+
+const mcpBundle = await build({
+  entryPoints: [fileURLToPath(new URL("../src/mcp.ts", import.meta.url))],
+  bundle: true,
+  format: "esm",
+  write: false,
+});
+const { extractTitlePrefix } = await import(
+  `data:text/javascript;base64,${Buffer.from(mcpBundle.outputFiles[0].text).toString("base64")}`
+);
 
 test("buildPairingTarget accepts LAN IPv4, IPv6, HTTPS domain, and reverse-proxy subpaths", () => {
   assert.deepEqual(buildPairingTarget("http://192.168.1.20:7683/", "tok123"), {
@@ -66,6 +77,59 @@ test("buildPairingTarget round-trips special and Unicode tokens via URLSearchPar
   assert.equal(parsed.origin + parsed.pathname, "https://term.example.com/gateterm/");
   const fragmentParams = new URLSearchParams(parsed.hash.slice(1));
   assert.equal(fragmentParams.get("token"), token);
+});
+
+test("buildPairingTarget omits title when undefined, null, empty, or whitespace/newlines only", () => {
+  for (const title of [undefined, null, "", "  \r\n  "]) {
+    assert.deepEqual(
+      buildPairingTarget("https://term.example.com/gateterm/", "tok123", title),
+      {
+        ok: true,
+        url: "https://term.example.com/gateterm/#token=tok123",
+        displayUrl: "https://term.example.com/gateterm",
+      },
+    );
+  }
+});
+
+test("buildPairingTarget normalizes and round-trips special/Unicode titles via URLSearchParams", () => {
+  const res = buildPairingTarget(
+    "https://term.example.com/gateterm/",
+    "a+b &=#密码",
+    "  研发\r\n1号+a&b=#测试  ",
+  );
+  assert.equal(res.ok, true);
+  assert.equal(res.displayUrl, "https://term.example.com/gateterm");
+
+  const fragmentParams = new URLSearchParams(new URL(res.url).hash.slice(1));
+  assert.equal(fragmentParams.get("token"), "a+b &=#密码");
+  assert.equal(fragmentParams.get("title"), "研发 1号+a&b=#测试");
+});
+
+test("extractTitlePrefix + buildPairingTarget integration includes configured title and omits default titles", () => {
+  assert.deepEqual(
+    buildPairingTarget(
+      "https://term.example.com/",
+      "tok",
+      extractTitlePrefix("(3) prod-01 - gateterm"),
+    ),
+    {
+      ok: true,
+      url: "https://term.example.com/#token=tok&title=prod-01",
+      displayUrl: "https://term.example.com",
+    },
+  );
+
+  for (const docTitle of ["(2) gateterm", "gateterm"]) {
+    assert.deepEqual(
+      buildPairingTarget("https://term.example.com/", "tok", extractTitlePrefix(docTitle)),
+      {
+        ok: true,
+        url: "https://term.example.com/#token=tok",
+        displayUrl: "https://term.example.com",
+      },
+    );
+  }
 });
 
 test("buildPairingTarget rejects loopback and wildcard hosts", () => {

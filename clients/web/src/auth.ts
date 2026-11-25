@@ -4,6 +4,7 @@ export function readToken(promptMessage: string): string {
   const fromHash = params.get("token");
   if (params.has("token")) {
     params.delete("token");
+    params.delete("title");
     const hash = params.toString();
     history.replaceState(history.state, "", `${location.pathname}${location.search}${hash ? `#${hash}` : ""}`);
   }

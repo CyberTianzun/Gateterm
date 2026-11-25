@@ -550,7 +550,11 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
 
   function renderPairing(): HTMLElement {
     const wrap = el("div", "set-pane pairing-pane");
-    const target = buildPairingTarget(window.location.href, host.token());
+    const target = buildPairingTarget(
+      window.location.href,
+      host.token(),
+      extractTitlePrefix(document.title),
+    );
 
     if (!target.ok) {
       const notice = el("div", "pairing-notice");
