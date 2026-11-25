@@ -8,7 +8,18 @@ export interface McpEndpoints {
   apiBaseUrl: string;
 }
 
+export interface McpServerIdentity {
+  instanceId?: string;
+  name?: string;
+  hostname?: string;
+  os?: string;
+  arch?: string;
+  port?: number;
+  description?: string;
+}
+
 export interface McpPresets {
+  serverName: string;
   mcpUrl: string;
   authHeader: string;
   genericJson: string;
@@ -18,8 +29,8 @@ export interface McpPresets {
 }
 
 export type McpStatusResult =
-  | { state: "enabled"; protocolVersions: string[] }
-  | { state: "disabled" }
+  | { state: "enabled"; protocolVersions: string[]; server?: McpServerIdentity }
+  | { state: "disabled"; server?: McpServerIdentity }
   | { state: "unsupported" }
   | { state: "error" };
 
@@ -80,6 +91,118 @@ export function escapeTomlBasicString(s: string): string {
   return out;
 }
 
+const MAX_SERVER_KEY_LEN = 48;
+const BARE_KEY_RE = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Normalize an arbitrary string into a lowercase `[a-z0-9_-]` slug capped at
+ * 48 ASCII chars with no leading/trailing `-` or `_`. Returns `""` if empty.
+ */
+export function slugifyServerKey(raw: string): string {
+  const lowered = raw.replace(/[A-Z]/g, (ch) => ch.toLowerCase());
+  const collapsed = lowered.replace(/[^a-z0-9_-]+/g, "-");
+  const trimmed = collapsed.replace(/^[-_]+|[-_]+$/g, "");
+  if (!trimmed) return "";
+  return trimmed.slice(0, MAX_SERVER_KEY_LEN).replace(/[-_]+$/g, "");
+}
+
+function withGatetermPrefix(slug: string): string {
+  if (
+    slug === "gateterm" ||
+    slug.startsWith("gateterm-") ||
+    slug.startsWith("gateterm_") ||
+    slug.endsWith("-gateterm") ||
+    slug.endsWith("_gateterm")
+  ) {
+    return slug.slice(0, MAX_SERVER_KEY_LEN).replace(/[-_]+$/g, "");
+  }
+  return `gateterm-${slug}`.slice(0, MAX_SERVER_KEY_LEN).replace(/[-_]+$/g, "");
+}
+
+function hostPortHint(baseUrl: string): string {
+  if (!baseUrl) return "";
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return "";
+  }
+  const bareHost = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (!bareHost) return "";
+  const isLoopback = bareHost === "127.0.0.1" || bareHost === "localhost" || bareHost === "::1";
+  const port = parsed.port;
+  if (port && (isLoopback || (port !== "80" && port !== "443"))) {
+    return `${bareHost}-${port}`;
+  }
+  return bareHost;
+}
+
+/**
+ * Extract the server title prefix from a browser `document.title` formatted as
+ * `"<prefix> - gateterm"` (optionally preceded by a `"(n) "` badge count).
+ */
+export function extractTitlePrefix(documentTitle: string): string {
+  const stripped = documentTitle.trim().replace(/^\(\d+\)\s+/, "");
+  const suffix = " - gateterm";
+  if (!stripped.toLowerCase().endsWith(suffix)) {
+    return "";
+  }
+  return stripped.slice(0, stripped.length - suffix.length).trim();
+}
+
+/**
+ * Derive a conflict-free default MCP server key from ordered candidates
+ * (falling back to URL host[-port] and ultimately `"gateterm"`).
+ */
+export function deriveMcpServerKey(
+  candidates: Array<string | undefined | null>,
+  baseUrl: string,
+): string {
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const slug = slugifyServerKey(candidate);
+    if (slug) {
+      return withGatetermPrefix(slug);
+    }
+  }
+  const hint = hostPortHint(baseUrl);
+  if (hint) {
+    const slug = slugifyServerKey(hint);
+    if (slug) {
+      return withGatetermPrefix(slug);
+    }
+  }
+  return "gateterm";
+}
+
+/**
+ * Format a key for use under `[mcp_servers.<key>]` in TOML: bare when strictly
+ * `[A-Za-z0-9_-]+`, otherwise a TOML basic quoted string.
+ */
+export function formatTomlTableKey(key: string): string {
+  if (BARE_KEY_RE.test(key)) {
+    return key;
+  }
+  return `"${escapeTomlBasicString(key)}"`;
+}
+
+/**
+ * Format a server key argument for POSIX shell commands: bare when strictly
+ * `[A-Za-z0-9_-]+`, otherwise wrapped with `posixSingleQuote`.
+ */
+export function formatShellKeyArg(key: string): string {
+  if (BARE_KEY_RE.test(key)) {
+    return key;
+  }
+  return posixSingleQuote(key);
+}
+
+function normalizeServerName(raw?: string): string {
+  if (typeof raw !== "string") return "gateterm";
+  const cleaned = raw.replace(/[\r\n\t]+/g, " ").trim();
+  return cleaned || "gateterm";
+}
+
 /**
  * Build the 4 copyable MCP/HTTP presets (Endpoint & Header, generic Streamable
  * HTTP JSON, Claude Code CLI + Codex TOML, and REST API curl examples).
@@ -88,31 +211,36 @@ export function buildMcpPresets(opts: {
   mcpUrl: string;
   apiBaseUrl: string;
   token: string;
+  serverName?: string;
   masked?: boolean;
 }): McpPresets {
+  const serverName = normalizeServerName(opts.serverName);
   const displayToken = opts.masked ? maskToken(opts.token) : opts.token;
   const authHeader = `Bearer ${displayToken}`;
 
   const genericJson = JSON.stringify(
     {
-      mcpServers: {
-        gateterm: {
-          url: opts.mcpUrl,
-          headers: {
-            Authorization: authHeader,
+      mcpServers: Object.fromEntries([
+        [
+          serverName,
+          {
+            url: opts.mcpUrl,
+            headers: {
+              Authorization: authHeader,
+            },
           },
-        },
-      },
+        ],
+      ]),
     },
     null,
     2,
   );
 
   const authArg = posixSingleQuote(`Authorization: ${authHeader}`);
-  const claudeCodeCmd = `claude mcp add --transport http gateterm ${posixSingleQuote(opts.mcpUrl)} --header ${authArg}`;
+  const claudeCodeCmd = `claude mcp add --transport http ${formatShellKeyArg(serverName)} ${posixSingleQuote(opts.mcpUrl)} --header ${authArg}`;
 
   const codexToml = [
-    "[mcp_servers.gateterm]",
+    `[mcp_servers.${formatTomlTableKey(serverName)}]`,
     `url = "${escapeTomlBasicString(opts.mcpUrl)}"`,
     `http_headers = { Authorization = "${escapeTomlBasicString(authHeader)}" }`,
   ].join("\n");
@@ -134,6 +262,7 @@ export function buildMcpPresets(opts: {
   ].join("\n");
 
   return {
+    serverName,
     mcpUrl: opts.mcpUrl,
     authHeader,
     genericJson,
@@ -141,6 +270,26 @@ export function buildMcpPresets(opts: {
     codexToml,
     curlExamples,
   };
+}
+
+function parseServerIdentity(raw: unknown): McpServerIdentity | undefined {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  const proto = Object.getPrototypeOf(raw);
+  if (proto !== Object.prototype && proto !== null) {
+    return undefined;
+  }
+  const obj = raw as Record<string, unknown>;
+  const identity: McpServerIdentity = {};
+  if (typeof obj.instance_id === "string") identity.instanceId = obj.instance_id;
+  if (typeof obj.name === "string") identity.name = obj.name;
+  if (typeof obj.hostname === "string") identity.hostname = obj.hostname;
+  if (typeof obj.os === "string") identity.os = obj.os;
+  if (typeof obj.arch === "string") identity.arch = obj.arch;
+  if (typeof obj.port === "number" && Number.isFinite(obj.port)) identity.port = obj.port;
+  if (typeof obj.description === "string") identity.description = obj.description;
+  return identity;
 }
 
 /**
@@ -164,15 +313,20 @@ export async function fetchMcpStatus(
     if (!res.ok) {
       return { state: "error" };
     }
-    const body = (await res.json()) as { enabled?: unknown; protocol_versions?: unknown };
+    const body = (await res.json()) as {
+      enabled?: unknown;
+      protocol_versions?: unknown;
+      server?: unknown;
+    };
+    const server = parseServerIdentity(body?.server);
     if (body?.enabled === true) {
       const protocolVersions = Array.isArray(body.protocol_versions)
         ? body.protocol_versions.filter((v): v is string => typeof v === "string")
         : [];
-      return { state: "enabled", protocolVersions };
+      return server ? { state: "enabled", protocolVersions, server } : { state: "enabled", protocolVersions };
     }
     if (body?.enabled === false) {
-      return { state: "disabled" };
+      return server ? { state: "disabled", server } : { state: "disabled" };
     }
     return { state: "error" };
   } catch {
