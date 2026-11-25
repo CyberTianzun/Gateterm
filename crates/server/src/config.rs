@@ -165,17 +165,38 @@ impl Default for ClipboardConfig {
     }
 }
 
-/// `[mcp]` —— 外部 agent MCP server 与 HTTP API 开关。
-#[derive(Debug, Clone, Copy, Deserialize)]
+/// `[mcp]` —— 外部 agent MCP server 与 HTTP API 开关与节点身份元数据。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct McpConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 impl Default for McpConfig {
     fn default() -> Self {
-        Self { enabled: true }
+        Self {
+            enabled: true,
+            name: None,
+            description: None,
+        }
     }
+}
+
+/// 规范化 `[mcp]` 文本字段:将 `\r`/`\n`/`\t` 替换为空格、首尾 trim、截断至 `max_chars` 字符并再次 trim 尾部,空串视为 `None`。
+pub fn normalize_mcp_text(raw: Option<&str>, max_chars: usize) -> Option<String> {
+    let raw = raw?;
+    let cleaned = raw.replace(['\r', '\n', '\t'], " ");
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() || max_chars == 0 {
+        return None;
+    }
+    let truncated: String = trimmed.chars().take(max_chars).collect();
+    let final_str = truncated.trim_end();
+    (!final_str.is_empty()).then(|| final_str.to_string())
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -519,9 +540,34 @@ mod tests {
     fn mcp_config_defaults_to_enabled_and_parses_false() {
         let default_cfg: Config = toml::from_str("").unwrap();
         assert!(default_cfg.mcp.enabled);
+        assert_eq!(default_cfg.mcp.name, None);
+        assert_eq!(default_cfg.mcp.description, None);
 
         let disabled_cfg: Config = toml::from_str("[mcp]\nenabled = false\n").unwrap();
         assert!(!disabled_cfg.mcp.enabled);
+        assert_eq!(disabled_cfg.mcp.name, None);
+        assert_eq!(disabled_cfg.mcp.description, None);
+    }
+
+    #[test]
+    fn mcp_config_parses_name_and_description_and_normalizes_text() {
+        let cfg: Config = toml::from_str(
+            "[mcp]\nenabled = true\nname = \"  mac-build\\n \"\ndescription = \"\\tARM64\\r\\nbuilder  \"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            normalize_mcp_text(cfg.mcp.name.as_deref(), 64).as_deref(),
+            Some("mac-build")
+        );
+        assert_eq!(
+            normalize_mcp_text(cfg.mcp.description.as_deref(), 256).as_deref(),
+            Some("ARM64  builder")
+        );
+        assert_eq!(normalize_mcp_text(Some("   \r\n\t "), 64), None);
+        let long = "a".repeat(80);
+        assert_eq!(normalize_mcp_text(Some(&long), 64).unwrap().chars().count(), 64);
+        let cjk = "中".repeat(70);
+        assert_eq!(normalize_mcp_text(Some(&cjk), 64).unwrap().chars().count(), 64);
     }
 
     #[test]

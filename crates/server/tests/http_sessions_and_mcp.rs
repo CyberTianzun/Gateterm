@@ -265,8 +265,8 @@ async fn collect_ws_until(
 #[tokio::test]
 async fn auth_origin_and_mcp_enable_gate_are_enforced() {
     let token = "test-secret-token";
-    let enabled_addr = start_test_server_with_mcp(token, McpConfig { enabled: true }).await;
-    let disabled_addr = start_test_server_with_mcp(token, McpConfig { enabled: false }).await;
+    let enabled_addr = start_test_server_with_mcp(token, McpConfig { enabled: true, ..Default::default() }).await;
+    let disabled_addr = start_test_server_with_mcp(token, McpConfig { enabled: false, ..Default::default() }).await;
     let client = reqwest::Client::new();
 
     // 1. Missing, wrong, and ?token= query tokens must all return 401 across REST and /mcp.
@@ -435,7 +435,7 @@ async fn auth_origin_and_mcp_enable_gate_are_enforced() {
 #[tokio::test]
 async fn mcp_and_rest_full_session_lifecycle_and_exited_session_error() {
     let token = "tok-lifecycle";
-    let addr = start_test_server_with_mcp(token, McpConfig { enabled: true }).await;
+    let addr = start_test_server_with_mcp(token, McpConfig { enabled: true, ..Default::default() }).await;
     let client = reqwest::Client::new();
 
     // 1. initialize + notifications/initialized + tools/list + list_launchers
@@ -832,7 +832,7 @@ async fn mcp_and_rest_full_session_lifecycle_and_exited_session_error() {
 #[tokio::test]
 async fn session_list_surfaces_waiting_agent_and_approval_flow_unblocks_hook() {
     let token = "tok-approval";
-    let addr = start_test_server_with_mcp(token, McpConfig { enabled: true }).await;
+    let addr = start_test_server_with_mcp(token, McpConfig { enabled: true, ..Default::default() }).await;
     let client = reqwest::Client::new();
 
     // 1. Create a real long-lived PTY session.
@@ -1024,7 +1024,7 @@ async fn session_list_surfaces_waiting_agent_and_approval_flow_unblocks_hook() {
 #[tokio::test]
 async fn http_and_mcp_never_resize_attached_human_viewport_or_steal_clipboard_owner() {
     let token = "t";
-    let addr = start_test_server_with_mcp(token, McpConfig { enabled: true }).await;
+    let addr = start_test_server_with_mcp(token, McpConfig { enabled: true, ..Default::default() }).await;
     let ws_url = format!("ws://{addr}/ws");
     let mut ws = connect(&ws_url).await;
     let id = create_session(&mut ws, osc52_echo_cmd()).await;

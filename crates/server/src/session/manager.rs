@@ -18,6 +18,7 @@ pub(crate) enum AgentNotice {
 }
 
 pub struct SessionManager {
+    instance_id: String,
     buffer_cap: usize,
     window_size: WindowSize,
     clipboard: ClipboardConfig,
@@ -40,6 +41,7 @@ impl SessionManager {
         let (events, _) = broadcast::channel(64);
         let (agent_notices, _) = broadcast::channel(64);
         Arc::new(Self {
+            instance_id: uuid::Uuid::new_v4().simple().to_string(),
             buffer_cap,
             window_size,
             clipboard,
@@ -48,6 +50,10 @@ impl SessionManager {
             events,
             agent_notices,
         })
+    }
+
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
     }
 
     pub fn events(&self) -> broadcast::Receiver<ServerMsg> {

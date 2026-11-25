@@ -177,7 +177,7 @@ impl Supervisor {
             agent_sessions: self.agent_sessions.clone(),
             cloud: self.cloud.clone(),
             web_title: self.web_title.clone(),
-            mcp: self.mcp,
+            mcp: self.mcp.clone(),
         };
         gateterm_server::agent::history::start_index(&state, false);
         let join = tokio::spawn(async move {

@@ -747,7 +747,10 @@ mod tests {
             agent_sessions: Arc::new(crate::agent::store::AgentSessionStore::new()),
             cloud: Default::default(),
             web_title: Default::default(),
-            mcp: crate::config::McpConfig { enabled },
+            mcp: crate::config::McpConfig {
+                enabled,
+                ..Default::default()
+            },
         }
     }
 

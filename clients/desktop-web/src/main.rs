@@ -104,7 +104,7 @@ fn main() -> Result<()> {
         &config.launchers,
         config.agents,
         config.web_title.clone(),
-        config.mcp,
+        config.mcp.clone(),
         config.clipboard,
     );
     // 系统剪贴板监听跟 SessionManager 同寿命(见 gateterm_server::clipboard)

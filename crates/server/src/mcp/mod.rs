@@ -1,17 +1,75 @@
 use std::net::Ipv6Addr;
+use std::sync::OnceLock;
 
 use axum::extract::State;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use serde::Serialize;
 
 use crate::app::{bearer_ok, AppState};
+use crate::config::normalize_mcp_text;
 
 pub mod http;
 pub mod protocol;
 pub mod service;
 
 pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
+
+fn cached_hostname() -> Option<String> {
+    static HOSTNAME: OnceLock<Option<String>> = OnceLock::new();
+    HOSTNAME
+        .get_or_init(|| normalize_mcp_text(sysinfo::System::host_name().as_deref(), 64))
+        .clone()
+}
+
+/// Resolved identity metadata for this gateterm-server process.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ServerIdentity {
+    pub instance_id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    pub os: &'static str,
+    pub arch: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+impl ServerIdentity {
+    /// Resolves server identity from runtime `AppState` (`[mcp].name` -> `web_title` -> OS hostname -> `"gateterm"`).
+    pub fn from_state(state: &AppState) -> Self {
+        let hostname = cached_hostname();
+        let name = normalize_mcp_text(state.mcp.name.as_deref(), 64)
+            .or_else(|| normalize_mcp_text(state.web_title.get().as_deref(), 64))
+            .or_else(|| hostname.clone())
+            .unwrap_or_else(|| "gateterm".to_string());
+        let port = (state.listen_port > 0).then_some(state.listen_port);
+        let description = normalize_mcp_text(state.mcp.description.as_deref(), 256);
+        Self {
+            instance_id: state.manager.instance_id().to_string(),
+            name,
+            hostname,
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            port,
+            description,
+        }
+    }
+
+    pub fn text_tag(&self) -> String {
+        match self.port {
+            Some(port) => format!("{} | {}:{}", self.name, self.os, port),
+            None => format!("{} | {}", self.name, self.os),
+        }
+    }
+
+    pub fn title(&self) -> String {
+        format!("Gateterm ({} · {}/{})", self.name, self.os, self.arch)
+    }
+}
 
 fn parse_port(raw: &str) -> Option<u16> {
     if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_digit()) {
@@ -127,6 +185,7 @@ pub async fn status(State(state): State<AppState>, headers: HeaderMap) -> Respon
             "enabled": state.mcp.enabled,
             "protocol_versions": SUPPORTED_PROTOCOL_VERSIONS,
             "endpoint": "/mcp",
+            "server": ServerIdentity::from_state(&state),
         })),
     )
         .into_response()
@@ -236,8 +295,50 @@ mod tests {
             agent_sessions: Arc::new(crate::agent::store::AgentSessionStore::new()),
             cloud: Default::default(),
             web_title: Default::default(),
-            mcp: crate::config::McpConfig { enabled },
+            mcp: crate::config::McpConfig {
+                enabled,
+                ..Default::default()
+            },
         }
+    }
+
+    #[test]
+    fn server_identity_resolves_priority_hot_web_title_port_tag_and_unique_instance_ids() {
+        let mut state = test_state(true);
+        state.listen_port = 7683;
+        state.web_title.set(Some("web-box".into()));
+        let id_web = ServerIdentity::from_state(&state);
+        assert_eq!(id_web.name, "web-box");
+        assert_eq!(id_web.port, Some(7683));
+        assert_eq!(id_web.os, std::env::consts::OS);
+        assert_eq!(id_web.arch, std::env::consts::ARCH);
+        assert_eq!(id_web.instance_id.len(), 32);
+        assert_eq!(id_web.text_tag(), format!("web-box | {}:7683", std::env::consts::OS));
+
+        // Hot web_title update reflects immediately when mcp.name is unset.
+        state.web_title.set(Some("renamed-box".into()));
+        let id_hot = ServerIdentity::from_state(&state);
+        assert_eq!(id_hot.name, "renamed-box");
+        assert_eq!(id_hot.instance_id, id_web.instance_id);
+
+        // Explicit [mcp].name overrides web_title; description is normalized.
+        state.mcp.name = Some("  mac-build\n".into());
+        state.mcp.description = Some("  iOS\tbuilder  ".into());
+        let id_mcp = ServerIdentity::from_state(&state);
+        assert_eq!(id_mcp.name, "mac-build");
+        assert_eq!(id_mcp.description.as_deref(), Some("iOS builder"));
+
+        // Two managers on the same host (e.g. :7683 and :17683) have distinct instance_ids and port tags.
+        let mut state2 = test_state(true);
+        state2.listen_port = 17683;
+        let id2 = ServerIdentity::from_state(&state2);
+        assert_ne!(id_mcp.instance_id, id2.instance_id);
+        assert!(id2.text_tag().ends_with(":17683"));
+
+        // Port 0 omits port in JSON and text_tag.
+        let zero_port = ServerIdentity::from_state(&test_state(true));
+        assert_eq!(zero_port.port, None);
+        assert!(!zero_port.text_tag().contains(':'));
     }
 
     #[tokio::test]
@@ -254,7 +355,7 @@ mod tests {
 
         let mut ok_headers = HeaderMap::new();
         ok_headers.insert(header::AUTHORIZATION, "Bearer secret".parse().unwrap());
-        let ok = status(State(state), ok_headers.clone()).await;
+        let ok = status(State(state.clone()), ok_headers.clone()).await;
         assert_eq!(ok.status(), StatusCode::OK);
         assert_eq!(
             ok.headers().get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()),
@@ -262,20 +363,28 @@ mod tests {
         );
         let bytes = axum::body::to_bytes(ok.into_body(), 1024 * 16).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["enabled"], true);
         assert_eq!(
-            json,
-            serde_json::json!({
-                "enabled": true,
-                "protocol_versions": SUPPORTED_PROTOCOL_VERSIONS,
-                "endpoint": "/mcp",
-            })
+            json["protocol_versions"],
+            serde_json::json!(SUPPORTED_PROTOCOL_VERSIONS)
         );
+        assert_eq!(json["endpoint"], "/mcp");
+        assert_eq!(json["server"]["instance_id"], state.manager.instance_id());
+        assert_eq!(json["server"]["os"], std::env::consts::OS);
+        assert_eq!(json["server"]["arch"], std::env::consts::ARCH);
 
-        let disabled = status(State(test_state(false)), ok_headers).await;
+        let disabled_state = test_state(false);
+        let disabled = status(State(disabled_state.clone()), ok_headers).await;
         assert_eq!(disabled.status(), StatusCode::OK);
         let bytes = axum::body::to_bytes(disabled.into_body(), 1024 * 16).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(json["enabled"], false);
+        assert_eq!(
+            json["server"]["instance_id"],
+            disabled_state.manager.instance_id()
+        );
+        assert_eq!(json["server"]["os"], std::env::consts::OS);
+        assert_eq!(json["server"]["arch"], std::env::consts::ARCH);
     }
 
     #[tokio::test]
@@ -283,6 +392,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let state = test_state(true);
+        let expected_instance_id = state.manager.instance_id().to_string();
         let server = tokio::spawn(async move {
             let _ = crate::app::serve(listener, state).await;
         });
@@ -314,14 +424,15 @@ mod tests {
             Some("no-store")
         );
         let body: serde_json::Value = ok.json().await.unwrap();
+        assert_eq!(body["enabled"], true);
         assert_eq!(
-            body,
-            serde_json::json!({
-                "enabled": true,
-                "protocol_versions": SUPPORTED_PROTOCOL_VERSIONS,
-                "endpoint": "/mcp",
-            })
+            body["protocol_versions"],
+            serde_json::json!(SUPPORTED_PROTOCOL_VERSIONS)
         );
+        assert_eq!(body["endpoint"], "/mcp");
+        assert_eq!(body["server"]["instance_id"], expected_instance_id);
+        assert_eq!(body["server"]["os"], std::env::consts::OS);
+        assert_eq!(body["server"]["arch"], std::env::consts::ARCH);
 
         server.abort();
     }
