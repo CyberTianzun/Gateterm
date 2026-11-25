@@ -1177,6 +1177,19 @@ ul.md-list ul.md-list ul.md-list { list-style: square; }
   font-size: 12px;
   color: var(--dim);
 }
+.mcp-node-meta {
+  font-family: var(--term-font, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--dim);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .mcp-reveal {
   margin-left: auto;
   font-size: 12px;
@@ -1294,4 +1307,41 @@ ul.md-list ul.md-list ul.md-list { list-style: square; }
 .mcp-copy-btn.is-copied {
   border-color: var(--accent);
   color: var(--accent);
+}
+.mcp-name-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.mcp-name-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+.mcp-name-input {
+  min-width: 0;
+  width: 100%;
+  font-family: var(--term-font, ui-monospace, monospace);
+  font-size: 12.5px;
+}
+.mcp-name-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.mcp-name-hint {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--dim);
+  line-height: 1.4;
+}
+@media (max-width: 560px) {
+  .mcp-name-row {
+    grid-template-columns: 1fr;
+  }
 }

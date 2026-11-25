@@ -22,7 +22,14 @@ import { knownThemes, loadCatalog, catalogLoaded, resolveTheme } from "./theme-c
 import { LOCALES, LOCALE_NAMES, type LocalePref, type MsgKey, localeTag, subscribe, t } from "./i18n";
 import { createIcon } from "./icons";
 import { writeClipboard } from "./clipboard";
-import { buildMcpPresets, deriveEndpoints, fetchMcpStatus } from "./mcp";
+import {
+  type McpServerIdentity,
+  buildMcpPresets,
+  deriveEndpoints,
+  deriveMcpServerKey,
+  extractTitlePrefix,
+  fetchMcpStatus,
+} from "./mcp";
 import { PROTO_VERSION } from "./protocol";
 import { WEB_VERSION, fetchVersionStatus } from "./update";
 import { buildPairingTarget, buildQrSvgModel, createQrSvgElement } from "./pairing";
@@ -625,16 +632,33 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
   let revealMcpToken = false;
   let mcpRenderSeq = 0;
 
+  function formatMcpNodeMeta(server?: McpServerIdentity): string {
+    if (!server) return "";
+    const label = server.name?.trim() || server.hostname?.trim() || "";
+    const os = server.os?.trim() || "";
+    const arch = server.arch?.trim() || "";
+    const platform = [os, arch].filter(Boolean).join("/");
+    return [label, platform].filter(Boolean).join(" · ");
+  }
+
   function renderMcp(): HTMLElement {
     const wrap = el("div", "set-pane mcp-pane");
     const renderSeq = ++mcpRenderSeq;
     const endpoints = deriveEndpoints(window.location.href);
+
+    let defaultServerName = deriveMcpServerKey(
+      [extractTitlePrefix(document.title)],
+      endpoints.apiBaseUrl,
+    );
+    let customServerName = "";
+    const effectiveServerName = () => customServerName.trim() || defaultServerName;
 
     const presetsFor = (masked: boolean) =>
       buildMcpPresets({
         mcpUrl: endpoints.mcpUrl,
         apiBaseUrl: endpoints.apiBaseUrl,
         token: host.token(),
+        serverName: effectiveServerName(),
         masked,
       });
 
@@ -643,9 +667,11 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     badge.dataset.state = "loading";
     const protoSpan = el("span", "mcp-protocols");
     protoSpan.hidden = true;
+    const nodeMeta = el("span", "mcp-node-meta");
+    nodeMeta.hidden = true;
     const revealBtn = el("button", "mcp-reveal");
     revealBtn.type = "button";
-    toolbar.append(badge, protoSpan, revealBtn);
+    toolbar.append(badge, protoSpan, nodeMeta, revealBtn);
 
     const banner = el("div", "mcp-banner");
     banner.hidden = true;
@@ -655,6 +681,18 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     const copyError = el("div", "mcp-copy-error");
     copyError.hidden = true;
     copyError.setAttribute("role", "status");
+
+    const nameRow = el("div", "mcp-name-row");
+    const nameLabel = el("label", "mcp-name-label", t("mcp.serverName.label"));
+    const nameInput = el("input", "mcp-name-input");
+    nameInput.type = "text";
+    nameInput.id = "mcp-server-name-input";
+    nameInput.placeholder = defaultServerName;
+    nameInput.autocomplete = "off";
+    nameInput.spellcheck = false;
+    nameLabel.htmlFor = nameInput.id;
+    const nameHint = el("div", "mcp-name-hint", t("mcp.serverName.hint"));
+    nameRow.append(nameLabel, nameInput, nameHint);
 
     const COPY_FEEDBACK_MS = 1600;
     const makeCopyButton = (getCopyText: () => string): HTMLButtonElement => {
@@ -770,12 +808,28 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
       revealMcpToken = !revealMcpToken;
       updatePreviews();
     });
+    nameInput.addEventListener("input", () => {
+      customServerName = nameInput.value;
+      updatePreviews();
+    });
     updatePreviews();
 
-    wrap.append(toolbar, banner, securityHint, copyError, endpointCard, jsonCard, agentsCard, curlCard);
+    wrap.append(toolbar, banner, securityHint, copyError, nameRow, endpointCard, jsonCard, agentsCard, curlCard);
 
     void fetchMcpStatus(host.token(), undefined, endpoints.apiBaseUrl).then((res) => {
       if (renderSeq !== mcpRenderSeq || !wrap.isConnected) return;
+      const serverIdentity = res.state === "enabled" || res.state === "disabled" ? res.server : undefined;
+      const nodeMetaText = formatMcpNodeMeta(serverIdentity);
+      nodeMeta.textContent = nodeMetaText;
+      nodeMeta.hidden = !nodeMetaText;
+      if (serverIdentity) {
+        defaultServerName = deriveMcpServerKey(
+          [serverIdentity.name, serverIdentity.hostname, extractTitlePrefix(document.title)],
+          endpoints.apiBaseUrl,
+        );
+        nameInput.placeholder = defaultServerName;
+        updatePreviews();
+      }
       if (res.state === "enabled") {
         badge.dataset.state = "enabled";
         badge.textContent = t("mcp.status.enabled");
