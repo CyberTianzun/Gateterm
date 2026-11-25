@@ -18,7 +18,7 @@ object ConnectionQr {
             if (parsed.isLoopback || parsed.isWildcardBind || host.startsWith("127.") || host.startsWith("::ffff:127.")) {
                 throw ConnectionUrlException("qr")
             }
-            ScannedConnection(parsed.webSocketUrl, parsed.token.orEmpty(), parsed.displayHost)
+            ScannedConnection(parsed.webSocketUrl, parsed.token.orEmpty(), parsed.title ?: parsed.displayHost)
         } catch (_: IllegalArgumentException) {
             throw ConnectionUrlException("qr")
         } catch (_: java.net.URISyntaxException) {

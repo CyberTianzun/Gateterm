@@ -151,7 +151,7 @@ final class AppModel {
         next.url = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if let parsed = try? ConnectionUrl.parse(raw) {
             if let token = parsed.token { next.token = token }
-            if next.name.trimmingCharacters(in: .whitespaces).isEmpty { next.name = parsed.displayHost }
+            if next.name.trimmingCharacters(in: .whitespaces).isEmpty { next.name = parsed.title ?? parsed.displayHost }
         }
         return next
     }

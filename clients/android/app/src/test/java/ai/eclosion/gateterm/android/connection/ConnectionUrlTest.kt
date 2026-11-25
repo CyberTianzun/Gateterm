@@ -3,6 +3,7 @@ package ai.eclosion.gateterm.android.connection
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -14,6 +15,7 @@ class ConnectionUrlTest {
         assertEquals("http://192.168.1.10:7683", parsed.httpOrigin())
         assertEquals("s3cret", parsed.token)
         assertEquals("192.168.1.10:7683", parsed.displayHost)
+        assertNull(parsed.title)
         assertFalse(parsed.isLoopback)
     }
 
@@ -67,5 +69,65 @@ class ConnectionUrlTest {
     @Test(expected = ConnectionUrlException::class)
     fun rejectsEmpty() {
         ConnectionUrl.parse("   ")
+    }
+
+    @Test
+    fun parsesFragmentTitleWithSpacesSpecialCharsAndCjk() {
+        val parsed = ConnectionUrl.parse(
+            "http://192.168.1.2:49152/#token=a%2Bb+%26%3D%23%E5%AF%86%E7%A0%81&title=%E7%A0%94%E5%8F%91+1%E5%8F%B7%2Ba%26b%3D%23%E6%B5%8B%E8%AF%95",
+        )
+        assertEquals("a+b &=#密码", parsed.token)
+        assertEquals("研发 1号+a&b=#测试", parsed.title)
+    }
+
+    @Test
+    fun readsTitleFromQueryFallbackAndPrefersFragment() {
+        val queryOnly = ConnectionUrl.parse("http://192.168.1.2:7683/?token=t&title=Query+Box")
+        assertEquals("t", queryOnly.token)
+        assertEquals("Query Box", queryOnly.title)
+
+        val both = ConnectionUrl.parse("http://192.168.1.2:7683/?token=qt&title=Query+Box#token=ft&title=Fragment+Box")
+        assertEquals("ft", both.token)
+        assertEquals("Fragment Box", both.title)
+
+        val withOverride = ConnectionUrl.parse("http://192.168.1.2:7683/#token=old&title=Studio", "new")
+        assertEquals("new", withOverride.token)
+        assertEquals("Studio", withOverride.title)
+    }
+
+    @Test
+    fun normalizesNewlinesAndBlankTitles() {
+        assertNull(ConnectionUrl.parse("http://192.168.1.2:7683/#token=t&title=%20%0D%0A").title)
+        assertNull(ConnectionUrl.parse("http://192.168.1.2:7683/#token=t&title=").title)
+        assertEquals("Mac Studio", ConnectionUrl.parse("http://192.168.1.2:7683/#token=t&title=Mac%0D%0AStudio").title)
+        assertEquals("Mac Mini Pro", ConnectionUrl.parse("http://192.168.1.2:7683/#token=t&title=++Mac%0AMini%0DPro++").title)
+    }
+
+    @Test
+    fun truncatesTitleTo128CodePointsWithoutSplittingSurrogatePairs() {
+        val encoded130 = "%F0%9F%9A%80".repeat(130)
+        val parsed = ConnectionUrl.parse("http://192.168.1.2:7683/#token=t&title=$encoded130")
+        val title = parsed.title!!
+        assertEquals(128, title.codePointCount(0, title.length))
+        assertEquals("🚀".repeat(128), title)
+
+        val trimmedAfterCap = ConnectionUrl.parse(
+            "http://192.168.1.2:7683/#token=t&title=${"a".repeat(127)}+b",
+        )
+        assertEquals("a".repeat(127), trimmedAfterCap.title)
+    }
+
+    @Test
+    fun rejectsMalformedPercentEncodingAndInvalidUtf8InTokenOrTitle() {
+        for (bad in listOf(
+            "http://192.168.1.2:7683/#token=ok&title=%ZZ",
+            "http://192.168.1.2:7683/#token=ok&title=%FF",
+            "http://192.168.1.2:7683/#token=ok&title=%E",
+            "http://192.168.1.2:7683/#token=%ZZ",
+            "http://192.168.1.2:7683/#token=%FF",
+        )) {
+            val err = assertThrows(bad, ConnectionUrlException::class.java) { ConnectionUrl.parse(bad) }
+            assertEquals(bad, "malformed", err.message)
+        }
     }
 }

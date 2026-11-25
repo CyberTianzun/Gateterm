@@ -71,6 +71,7 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(parsed.httpOrigin(), "http://192.168.1.10:7683")
         XCTAssertEqual(parsed.token, "s3cret")
         XCTAssertEqual(parsed.displayHost, "192.168.1.10:7683")
+        XCTAssertNil(parsed.title)
         XCTAssertFalse(parsed.isLoopback)
     }
 
@@ -87,6 +88,51 @@ final class ProtocolTests: XCTestCase {
         XCTAssertTrue(ConnectionUrl.looksLikeURL("  https://x/#token=1 "))
         XCTAssertFalse(ConnectionUrl.looksLikeURL("not a url"))
         XCTAssertThrowsError(try ConnectionUrl.parse("   "))
+
+        let withTitle = try ConnectionUrl.parse(
+            "http://192.168.1.2:49152/#token=a%2Bb+%26%3D%23%E5%AF%86%E7%A0%81&title=%E7%A0%94%E5%8F%91+1%E5%8F%B7%2Ba%26b%3D%23%E6%B5%8B%E8%AF%95"
+        )
+        XCTAssertEqual(withTitle.token, "a+b &=#密码")
+        XCTAssertEqual(withTitle.title, "研发 1号+a&b=#测试")
+
+        let queryTitle = try ConnectionUrl.parse("http://192.168.1.2:7683/?token=t&title=Query+Box")
+        XCTAssertEqual(queryTitle.token, "t")
+        XCTAssertEqual(queryTitle.title, "Query Box")
+
+        let bothTitles = try ConnectionUrl.parse("http://192.168.1.2:7683/?token=qt&title=Query+Box#token=ft&title=Fragment+Box")
+        XCTAssertEqual(bothTitles.token, "ft")
+        XCTAssertEqual(bothTitles.title, "Fragment Box")
+
+        let withOverride = try ConnectionUrl.parse("http://192.168.1.2:7683/#token=old&title=Studio", tokenOverride: "new")
+        XCTAssertEqual(withOverride.token, "new")
+        XCTAssertEqual(withOverride.title, "Studio")
+
+        XCTAssertNil(try ConnectionUrl.parse("http://192.168.1.2:7683/#token=t&title=%20%0D%0A").title)
+        XCTAssertNil(try ConnectionUrl.parse("http://192.168.1.2:7683/#token=t&title=").title)
+        XCTAssertEqual(try ConnectionUrl.parse("http://192.168.1.2:7683/#token=t&title=Mac%0D%0AStudio").title, "Mac Studio")
+        XCTAssertEqual(try ConnectionUrl.parse("http://192.168.1.2:7683/#token=t&title=++Mac%0AMini%0DPro++").title, "Mac Mini Pro")
+
+        let emoji130 = String(repeating: "%F0%9F%9A%80", count: 130)
+        let capped = try ConnectionUrl.parse("http://192.168.1.2:7683/#token=t&title=\(emoji130)")
+        XCTAssertEqual(capped.title?.unicodeScalars.count, 128)
+        XCTAssertEqual(capped.title, String(repeating: "🚀", count: 128))
+
+        let trimmedAfterCap = try ConnectionUrl.parse(
+            "http://192.168.1.2:7683/#token=t&title=\(String(repeating: "a", count: 127))+b"
+        )
+        XCTAssertEqual(trimmedAfterCap.title, String(repeating: "a", count: 127))
+
+        for bad in [
+            "http://192.168.1.2:7683/#token=ok&title=%ZZ",
+            "http://192.168.1.2:7683/#token=ok&title=%FF",
+            "http://192.168.1.2:7683/#token=ok&title=%E",
+            "http://192.168.1.2:7683/#token=%ZZ",
+            "http://192.168.1.2:7683/#token=%FF",
+        ] {
+            XCTAssertThrowsError(try ConnectionUrl.parse(bad), bad) { error in
+                XCTAssertEqual(error as? ConnectionUrlError, ConnectionUrlError(reason: "malformed"), bad)
+            }
+        }
     }
 
     func testQrFillsAddressAndTokenSeparately() throws {
@@ -95,13 +141,36 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(try ConnectionQr.parse("http://[fd00::2]:9000/#token=t").url, "ws://[fd00::2]:9000/ws")
         XCTAssertEqual(try ConnectionQr.parse("https://term.example:9443/#token=t").url, "wss://term.example:9443/ws")
         XCTAssertEqual(try ConnectionQr.parse("http://192.168.1.2:7683/").token, "")
+
+        let titled = try ConnectionQr.parse(
+            "http://192.168.1.2:49152/#token=a%2Bb+%26%3D%23%E5%AF%86%E7%A0%81&title=%E7%A0%94%E5%8F%91+1%E5%8F%B7%2Ba%26b%3D%23%E6%B5%8B%E8%AF%95"
+        )
+        XCTAssertEqual(
+            titled,
+            ScannedConnection(url: "ws://192.168.1.2:49152/ws", token: "a+b &=#密码", name: "研发 1号+a&b=#测试")
+        )
+        XCTAssertEqual(try ConnectionQr.parse("http://192.168.1.2:7683/#token=t&title=%20%0D%0A").name, "192.168.1.2:7683")
+        XCTAssertEqual(try ConnectionQr.parse("http://192.168.1.2:7683/?token=t&title=Query+Box").name, "Query Box")
+        XCTAssertEqual(
+            try ConnectionQr.parse("http://192.168.1.2:7683/?token=t&title=Query+Box#token=t&title=Fragment+Box").name,
+            "Fragment Box"
+        )
+        let emoji130 = String(repeating: "%F0%9F%9A%80", count: 130)
+        XCTAssertEqual(
+            try ConnectionQr.parse("http://192.168.1.2:7683/#token=t&title=\(emoji130)").name,
+            String(repeating: "🚀", count: 128)
+        )
     }
 
     func testQrRejectsNonConnectionCodesAndNonRoutableTargets() {
         for raw in ["not a url", "javascript:alert(1)", "file:///etc/passwd", "http://0.0.0.0/", "http://127.0.0.1/",
                     "http://127.4.3.2/", "http://localhost/", "http://[::1]/", "http://[::]/", "http://user:pass@192.168.1.2/",
-                    "http://host:0/", "http://host:70000/", "http://host/#token=%ZZ", "http://host/#token=" + String(repeating: "x", count: 8192)] {
-            XCTAssertThrowsError(try ConnectionQr.parse(raw), raw)
+                    "http://host:0/", "http://host:70000/", "http://host/#token=%ZZ", "http://host/#token=%FF",
+                    "http://192.168.1.2:7683/#token=ok&title=%ZZ", "http://192.168.1.2:7683/#token=ok&title=%FF",
+                    "http://host/#token=" + String(repeating: "x", count: 8192)] {
+            XCTAssertThrowsError(try ConnectionQr.parse(raw), raw) { error in
+                XCTAssertEqual(error as? ConnectionUrlError, ConnectionUrlError(reason: "qr"), raw)
+            }
         }
     }
 

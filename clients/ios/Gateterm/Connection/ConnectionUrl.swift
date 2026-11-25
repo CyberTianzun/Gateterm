@@ -7,6 +7,25 @@ struct ParsedEndpoint: Equatable {
     let displayHost: String
     let isLoopback: Bool
     let isWildcardBind: Bool
+    let title: String?
+
+    init(
+        webSocketURL: String,
+        token: String?,
+        host: String,
+        displayHost: String,
+        isLoopback: Bool,
+        isWildcardBind: Bool,
+        title: String? = nil
+    ) {
+        self.webSocketURL = webSocketURL
+        self.token = token
+        self.host = host
+        self.displayHost = displayHost
+        self.isLoopback = isLoopback
+        self.isWildcardBind = isWildcardBind
+        self.title = title
+    }
 
     /// `GET /api/...` 用的源站。WebSocket 地址换成 http(s),去掉路径。
     func httpOrigin() -> String {
@@ -23,7 +42,7 @@ struct ConnectionUrlError: Error, Equatable {
 }
 
 /// Same rules as Android `ConnectionUrl` and the web client: accept http(s)/ws(s) or a bare host,
-/// append `/ws`, and read the token from `#token=` (preferred) or `?token=`.
+/// append `/ws`, and read `token` / `title` from `#fragment` (preferred) or `?query`.
 enum ConnectionUrl {
     static func looksLikeURL(_ raw: String) -> Bool {
         let lower = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -54,7 +73,10 @@ enum ConnectionUrl {
         let rawFragment = hash.map { String(normalized[normalized.index(after: $0)...]) }
         let beforeHash = normalized[..<(hash ?? normalized.endIndex)]
         let rawQuery = beforeHash.firstIndex(of: "?").map { String(beforeHash[beforeHash.index(after: $0)...]) }
-        let token = try (override?.isEmpty == false ? override : nil) ?? firstToken(rawFragment) ?? firstToken(rawQuery)
+        let token = try (override?.isEmpty == false ? override : nil)
+            ?? firstParam(rawFragment, key: "token")
+            ?? firstParam(rawQuery, key: "token")
+        let title = try normalizeTitle(firstParam(rawFragment, key: "title") ?? firstParam(rawQuery, key: "title"))
         let bare = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
         let hostForURL = bare.contains(":") ? "[\(bare)]" : bare
         return ParsedEndpoint(
@@ -63,7 +85,8 @@ enum ConnectionUrl {
             host: bare,
             displayHost: hostForURL + portSuffix,
             isLoopback: ["localhost", "127.0.0.1", "::1"].contains(bare.lowercased()),
-            isWildcardBind: ["0.0.0.0", "::"].contains(bare.lowercased())
+            isWildcardBind: ["0.0.0.0", "::"].contains(bare.lowercased()),
+            title: title
         )
     }
 
@@ -81,15 +104,32 @@ enum ConnectionUrl {
     }
 
     /// Like `URLDecoder`: `+` is a space and a malformed escape is an error, not a silent miss.
-    private static func firstToken(_ encoded: String?) throws -> String? {
+    private static func firstParam(_ encoded: String?, key targetKey: String) throws -> String? {
         guard let encoded, !encoded.isEmpty else { return nil }
         for part in encoded.split(separator: "&") {
-            guard let eq = part.firstIndex(of: "="), eq != part.startIndex, part[..<eq] == "token" else { continue }
+            guard let eq = part.firstIndex(of: "="), eq != part.startIndex, String(part[..<eq]) == targetKey else { continue }
             let value = String(part[part.index(after: eq)...]).replacingOccurrences(of: "+", with: " ")
             guard let decoded = value.removingPercentEncoding else { throw ConnectionUrlError(reason: "malformed") }
             if !decoded.isEmpty { return decoded }
         }
         return nil
+    }
+
+    private static func normalizeTitle(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let collapsed = raw
+            .replacingOccurrences(of: "\r\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+        let trimmed = collapsed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        var result = trimmed.unicodeScalars.count > 128
+            ? String(trimmed.unicodeScalars.prefix(128))
+            : trimmed
+        while let last = result.unicodeScalars.last, CharacterSet.whitespacesAndNewlines.contains(last) {
+            result.unicodeScalars.removeLast()
+        }
+        return result.isEmpty ? nil : result
     }
 }
 
@@ -109,11 +149,16 @@ enum ConnectionQr {
               components.user == nil, components.password == nil, components.port != 0 else {
             throw ConnectionUrlError(reason: "qr")
         }
-        let parsed = try ConnectionUrl.parse(text)
+        let parsed: ParsedEndpoint
+        do {
+            parsed = try ConnectionUrl.parse(text)
+        } catch {
+            throw ConnectionUrlError(reason: "qr")
+        }
         let host = parsed.host.lowercased()
         if parsed.isLoopback || parsed.isWildcardBind || host.hasPrefix("127.") || host.hasPrefix("::ffff:127.") {
             throw ConnectionUrlError(reason: "qr")
         }
-        return ScannedConnection(url: parsed.webSocketURL, token: parsed.token ?? "", name: parsed.displayHost)
+        return ScannedConnection(url: parsed.webSocketURL, token: parsed.token ?? "", name: parsed.title ?? parsed.displayHost)
     }
 }

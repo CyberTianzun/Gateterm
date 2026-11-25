@@ -381,12 +381,7 @@ class ConnectionController(
             current.copy(
                 screen = editing ?: AppScreen.Editor(null),
                 showAddSheet = false,
-                editor = base.copy(
-                    url = connection.url, token = connection.token,
-                    name = base.name.ifBlank { connection.name },
-                    urlError = null, tokenError = null,
-                    loopbackWarning = false, wildcardWarning = false,
-                ),
+                editor = applyScannedState(base, connection),
             )
         }
     }
@@ -1610,25 +1605,7 @@ class ConnectionController(
     }
 
     private fun applyPrefill(base: EditorState, rawUrl: String) {
-        val parsed = try {
-            ConnectionUrl.parse(rawUrl)
-        } catch (_: ConnectionUrlException) {
-            _state.update {
-                it.copy(
-                    screen = AppScreen.Editor(null),
-                    editor = refreshWarnings(base.copy(url = rawUrl)),
-                    showAddSheet = false,
-                )
-            }
-            return
-        }
-        val filled = refreshWarnings(
-            base.copy(
-                url = rawUrl.trim(),
-                token = parsed.token ?: base.token,
-                name = base.name.ifBlank { parsed.displayHost },
-            ),
-        )
+        val filled = applyPrefillState(base, rawUrl)
         _state.update {
             it.copy(
                 screen = AppScreen.Editor(null),
@@ -1638,17 +1615,7 @@ class ConnectionController(
         }
     }
 
-    private fun refreshWarnings(editor: EditorState): EditorState {
-        val parsed = try {
-            ConnectionUrl.parse(editor.url, editor.token)
-        } catch (_: ConnectionUrlException) {
-            return editor.copy(loopbackWarning = false, wildcardWarning = false)
-        }
-        return editor.copy(
-            loopbackWarning = parsed.isLoopback,
-            wildcardWarning = parsed.isWildcardBind,
-        )
-    }
+    private fun refreshWarnings(editor: EditorState): EditorState = refreshWarningsState(editor)
 
     private fun persist(items: List<ServerConnection>) {
         store.save(items)
@@ -1705,6 +1672,46 @@ class ConnectionController(
 
         internal fun resolveNotificationMissingServerScreen(current: AppScreen): AppScreen =
             if (current is AppScreen.Onboarding) AppScreen.List else current
+
+        internal fun applyScannedState(
+            base: EditorState,
+            connection: ai.eclosion.gateterm.android.connection.ScannedConnection,
+        ): EditorState = base.copy(
+            url = connection.url,
+            token = connection.token,
+            name = base.name.ifBlank { connection.name },
+            urlError = null,
+            tokenError = null,
+            loopbackWarning = false,
+            wildcardWarning = false,
+        )
+
+        internal fun applyPrefillState(base: EditorState, rawUrl: String): EditorState {
+            val parsed = try {
+                ConnectionUrl.parse(rawUrl)
+            } catch (_: ConnectionUrlException) {
+                return refreshWarningsState(base.copy(url = rawUrl))
+            }
+            return refreshWarningsState(
+                base.copy(
+                    url = rawUrl.trim(),
+                    token = parsed.token ?: base.token,
+                    name = base.name.ifBlank { parsed.title ?: parsed.displayHost },
+                ),
+            )
+        }
+
+        internal fun refreshWarningsState(editor: EditorState): EditorState {
+            val parsed = try {
+                ConnectionUrl.parse(editor.url, editor.token)
+            } catch (_: ConnectionUrlException) {
+                return editor.copy(loopbackWarning = false, wildcardWarning = false)
+            }
+            return editor.copy(
+                loopbackWarning = parsed.isLoopback,
+                wildcardWarning = parsed.isWildcardBind,
+            )
+        }
 
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
