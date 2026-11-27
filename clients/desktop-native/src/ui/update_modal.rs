@@ -135,7 +135,13 @@ impl UpdateModalState {
             return true;
         }
 
-        if self.is_downloading_or_preparing() || self.phase == UpdateModalPhase::Checking {
+        if self.open
+            || self.is_downloading_or_preparing()
+            || matches!(
+                self.phase,
+                UpdateModalPhase::Checking | UpdateModalPhase::Error { .. }
+            )
+        {
             return false;
         }
 
@@ -143,8 +149,8 @@ impl UpdateModalState {
             Ok(CheckOutcome::UpdateAvailable { update, skipped }) => {
                 self.update = Some(update);
                 self.last_checked_at = Some(now_unix_secs());
-                if is_startup && self.check_generation == 0 && !self.open {
-                    self.phase = UpdateModalPhase::Available;
+                self.phase = UpdateModalPhase::Available;
+                if is_startup && self.check_generation == 0 {
                     match should_present_auto_update(window_hidden_to_tray, skipped) {
                         AutoPresentAction::ShowNow => {
                             self.open = true;
@@ -154,17 +160,13 @@ impl UpdateModalState {
                         }
                         AutoPresentAction::Suppress => {}
                     }
-                } else if !self.open {
-                    self.phase = UpdateModalPhase::Available;
                 }
             }
             Ok(CheckOutcome::UpToDate { checked_at, .. }) => {
                 self.update = None;
                 self.last_checked_at = Some(checked_at);
                 self.pending_on_show = false;
-                if !self.open {
-                    self.phase = UpdateModalPhase::UpToDate;
-                }
+                self.phase = UpdateModalPhase::UpToDate;
             }
             Err(_) => {}
         }
@@ -1120,5 +1122,93 @@ mod tests {
             },
         );
         assert!(!err_msg.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)));
+    }
+
+    #[test]
+    fn background_check_preserves_rollback_error_and_open_available_modal() {
+        let update = sample_update(true);
+
+        // 1. Deferred rollback error while hidden to tray (pending_on_show = true, open = false):
+        // arriving startup UpdateAvailable or UpToDate must not overwrite Error or clear pending_on_show.
+        let mut hidden_rollback = UpdateModalState::default();
+        hidden_rollback.set_error("rollback failed".to_owned(), Some(DEFAULT_RELEASES_URL.to_owned()));
+        hidden_rollback.pending_on_show = true;
+
+        assert!(!hidden_rollback.apply_check_result(
+            0,
+            false,
+            true,
+            true,
+            Locale::En,
+            Ok(CheckOutcome::UpdateAvailable {
+                update: update.clone(),
+                skipped: false,
+            }),
+        ));
+        assert!(matches!(hidden_rollback.phase, UpdateModalPhase::Error { .. }));
+        assert!(hidden_rollback.pending_on_show);
+        assert!(hidden_rollback.update.is_none());
+
+        assert!(!hidden_rollback.apply_check_result(
+            0,
+            false,
+            true,
+            true,
+            Locale::En,
+            Ok(CheckOutcome::UpToDate {
+                current_version: "1.0.3".to_owned(),
+                checked_at: 123,
+            }),
+        ));
+        assert!(matches!(hidden_rollback.phase, UpdateModalPhase::Error { .. }));
+        assert!(hidden_rollback.pending_on_show);
+        assert!(!hidden_rollback.open);
+
+        // 2. Visible rollback error (open = true, phase = Error):
+        // arriving startup UpdateAvailable must not inject update/title/notes into the error modal.
+        let mut visible_rollback = UpdateModalState::default();
+        visible_rollback.set_error("rollback failed".to_owned(), Some(DEFAULT_RELEASES_URL.to_owned()));
+        visible_rollback.open = true;
+
+        assert!(!visible_rollback.apply_check_result(
+            0,
+            false,
+            true,
+            false,
+            Locale::En,
+            Ok(CheckOutcome::UpdateAvailable {
+                update: update.clone(),
+                skipped: false,
+            }),
+        ));
+        assert!(matches!(visible_rollback.phase, UpdateModalPhase::Error { .. }));
+        assert!(visible_rollback.update.is_none());
+        assert!(visible_rollback.open);
+
+        // 3. Open Available modal during a 24h background check returning UpToDate:
+        // must not blank out self.update while the user is viewing the modal.
+        let mut open_available = UpdateModalState {
+            open: true,
+            phase: UpdateModalPhase::Available,
+            update: Some(update.clone()),
+            ..Default::default()
+        };
+        assert!(!open_available.apply_check_result(
+            0,
+            false,
+            false,
+            false,
+            Locale::En,
+            Ok(CheckOutcome::UpToDate {
+                current_version: "1.0.3".to_owned(),
+                checked_at: 456,
+            }),
+        ));
+        assert!(open_available.open);
+        assert_eq!(open_available.phase, UpdateModalPhase::Available);
+        assert_eq!(
+            open_available.update.as_ref().map(|u| u.version.as_str()),
+            Some("1.0.4")
+        );
     }
 }
