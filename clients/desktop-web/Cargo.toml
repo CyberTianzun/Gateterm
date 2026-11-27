@@ -27,6 +27,7 @@ fs4 = { version = "1", features = ["sync"] }
 if-addrs = { version = "0.15", features = ["link-local"] }
 gateterm-cloud-client = { path = "../../crates/cloud-client" }
 gateterm-server = { path = "../../crates/server" }
+gateterm-updater = { path = "../../crates/updater" }
 open = "5"
 # 版本与 crates/server/Cargo.toml 保持一致,不要升级(那边已经在用它解析 iTerm2 的偏好设置)。
 plist = "1"

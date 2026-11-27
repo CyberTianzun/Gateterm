@@ -14,15 +14,24 @@ use winit::event_loop::EventLoopProxy;
 use crate::app::{MenuAction, UserEvent};
 use crate::i18n::Locale;
 
-const ACTIONS: [MenuAction; 5] =
-    [MenuAction::OpenWeb, MenuAction::CopyUrl, MenuAction::Settings, MenuAction::ViewLogs, MenuAction::Quit];
+const ACTIONS: [MenuAction; 6] = [
+    MenuAction::OpenWeb,
+    MenuAction::CopyUrl,
+    MenuAction::Settings,
+    MenuAction::CheckForUpdates,
+    MenuAction::ViewLogs,
+    MenuAction::Quit,
+];
 
-fn labels(locale: Locale) -> [&'static str; 5] {
-    [locale.text("打开 Web 客户端", "Open web client"),
-     locale.text("复制访问链接", "Copy access link"),
-     locale.text("设置…", "Settings…"),
-     locale.text("查看日志…", "View logs…"),
-     locale.text("退出", "Quit")]
+fn labels(locale: Locale) -> [&'static str; 6] {
+    [
+        locale.text("打开 Web 客户端", "Open web client"),
+        locale.text("复制访问链接", "Copy access link"),
+        locale.text("设置…", "Settings…"),
+        locale.text("检查更新…", "Check for Updates…"),
+        locale.text("查看日志…", "View logs…"),
+        locale.text("退出", "Quit"),
+    ]
 }
 
 fn starting_text(locale: Locale) -> &'static str {
@@ -55,7 +64,7 @@ mod imp {
     pub struct Tray {
         icon: TrayIcon,
         status: MenuItem,
-        items: [MenuItem; 5],
+        items: [MenuItem; 6],
     }
 
     fn decode_icon() -> Result<Icon> {
@@ -76,7 +85,7 @@ mod imp {
             let items = labels(locale).map(|text| MenuItem::new(text, true, None));
             let ids: Vec<(MenuId, MenuAction)> =
                 items.iter().map(|item| item.id().clone()).zip(ACTIONS).collect();
-            let [open_web, copy_url, settings, view_logs, quit] = &items;
+            let [open_web, copy_url, settings, check_updates, view_logs, quit] = &items;
 
             let menu = Menu::new();
             menu.append_items(&[
@@ -86,6 +95,7 @@ mod imp {
                 copy_url,
                 &PredefinedMenuItem::separator(),
                 settings,
+                check_updates,
                 view_logs,
                 &PredefinedMenuItem::separator(),
                 quit,
@@ -163,7 +173,7 @@ mod imp {
         proxy: EventLoopProxy<UserEvent>,
         icons: Vec<ksni::Icon>,
         status: String,
-        labels: [&'static str; 5],
+        labels: [&'static str; 6],
     }
 
     impl ksni::Tray for SniTray {
@@ -206,8 +216,9 @@ mod imp {
                 ksni::MenuItem::Separator,
                 item(2),
                 item(3),
-                ksni::MenuItem::Separator,
                 item(4),
+                ksni::MenuItem::Separator,
+                item(5),
             ]
         }
     }
@@ -265,6 +276,15 @@ mod tests {
     #[test]
     fn every_menu_label_has_an_action() {
         assert_eq!(labels(Locale::En).len(), ACTIONS.len());
+        assert_eq!(labels(Locale::ZhCn).len(), ACTIONS.len());
+        assert!(ACTIONS.contains(&MenuAction::CheckForUpdates));
+        for label in labels(Locale::En) {
+            assert!(!label.is_empty());
+            assert!(
+                !label.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
+                "English tray label leaked Chinese: {label}"
+            );
+        }
     }
 
     #[test]

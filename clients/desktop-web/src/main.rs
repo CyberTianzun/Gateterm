@@ -35,6 +35,9 @@ fn main() -> Result<()> {
         let code = args.next().map_or(0, |url| gateterm_server::agent::hook_cli::run(&url));
         std::process::exit(code);
     }
+    if let Some(code) = gateterm_updater::apply::try_run_from_env() {
+        std::process::exit(code);
+    }
 
     let language = configfile::language();
     let web_host = configfile::web_host();
@@ -46,7 +49,7 @@ fn main() -> Result<()> {
         or_report(failed_to_start, locale.text("无法确定配置目录。", "Cannot locate the configuration directory."), configfile::default_path())?;
     let lock_path = config_path.with_file_name("gateterm.lock");
     let lock = single_instance::acquire(&lock_path);
-    let _guard = match or_report(failed_to_start, locale.text("无法获取单实例锁。", "Could not acquire the application lock."), lock)? {
+    let guard = match or_report(failed_to_start, locale.text("无法获取单实例锁。", "Could not acquire the application lock."), lock)? {
         Some(g) => g,
         None => {
             // 这不是错误,是正常分支 —— 但必须吭一声。托盘常驻应用被重复启动是家常
@@ -152,10 +155,26 @@ fn main() -> Result<()> {
     let event_loop =
         or_report(failed_to_start, locale.text("无法创建事件循环。", "Could not create the event loop."), builder.build().context("Could not create the event loop"))?;
     let proxy = event_loop.create_proxy();
+    // 清理上次更新残留(.bak 与临时解压目录)并检查是否发生过回滚:放在独立线程里以免阻塞启动。
+    {
+        let cleanup_proxy = proxy.clone();
+        std::thread::spawn(move || {
+            let Ok(current_exe) = std::env::current_exe() else {
+                return;
+            };
+            let Ok(cache_root) = gateterm_updater::updates_cache_dir() else {
+                return;
+            };
+            if let Some(err_msg) = gateterm_updater::cleanup_after_start(&current_exe, &cache_root) {
+                tracing::warn!(error = %err_msg, "上次自更新失败并已回滚");
+                let _ = cleanup_proxy.send_event(UserEvent::RollbackNotice(err_msg));
+            }
+        });
+    }
     // config 在 Supervisor::new 里只是被借用,这里把整份连同两条启动失败原因
     // 一起交给 App:配置做只读展示,错误做横幅 + 状态行。
     let startup = Startup { language, web_host, config, config_error, listen_error };
-    let mut app = App::new(rt, sup, proxy, log_path, startup);
+    let mut app = App::new(rt, sup, proxy, log_path, startup, guard);
     // 事件循环异常退出时托盘也跟着没了,同样得说一声 —— 否则用户看到的是图标凭空消失。
     let ran = event_loop.run_app(&mut app).map_err(Into::into);
     or_report(locale.text("gateterm 已退出", "gateterm has exited"), locale.text("事件循环异常退出。", "The event loop stopped unexpectedly."), ran)?;

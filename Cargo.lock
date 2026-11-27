@@ -1641,6 +1641,7 @@ dependencies = [
  "gateterm-cloud-client",
  "gateterm-protocol",
  "gateterm-server",
+ "gateterm-updater",
  "if-addrs",
  "ksni",
  "open",

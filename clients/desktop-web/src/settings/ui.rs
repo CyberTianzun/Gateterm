@@ -34,6 +34,7 @@ pub enum Outcome {
     OpenConfigFile,
     RegenerateToken,
     RefreshWebAddrs,
+    CheckForUpdates,
     Agents(AgentUiAction),
     Cloud(CloudAction),
 }
@@ -58,6 +59,8 @@ pub struct View {
     pub cloud_busy: bool,
     /// 最近一次 Cloud 操作的结果。和 `message`(保存结果)分开,两者互不覆盖。
     pub cloud_message: Option<Message>,
+    pub update_status_line: String,
+    pub update_checking: bool,
 }
 
 const OK_COLOR: egui::Color32 = egui::Color32::from_rgb(60, 140, 60);
@@ -249,6 +252,28 @@ fn draw_general(ui: &mut egui::Ui, view: &mut View, locale: Locale) -> Outcome {
                 });
             }
         });
+
+    ui.add_space(8.0);
+    ui.separator();
+    ui.horizontal_wrapped(|ui| {
+        ui.label(locale.text("版本与更新", "Version & Updates"));
+        ui.small(concat!("v", env!("CARGO_PKG_VERSION")));
+        if view.update_checking {
+            ui.spinner();
+        }
+        if ui
+            .add_enabled(
+                !view.update_checking,
+                egui::Button::new(locale.text("检查更新…", "Check for Updates…")),
+            )
+            .clicked()
+        {
+            outcome = Outcome::CheckForUpdates;
+        }
+    });
+    if !view.update_status_line.is_empty() {
+        ui.small(view.update_status_line.as_str());
+    }
 
     // 「重新生成」也算改动:token 已经不是保存时那个了。
     if edited || outcome == Outcome::RegenerateToken {

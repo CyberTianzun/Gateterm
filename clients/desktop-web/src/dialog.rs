@@ -6,9 +6,6 @@
 //!
 //! 这里的函数都是同步模态的:弹着的时候调用线程整个卡住,后台服务继续运行。
 
-use crate::i18n::Locale;
-use crate::tr;
-
 /// 报一条致命错误。调用方在这之后应当结束进程 —— 不要报完继续跑。
 pub fn fatal(title: &str, body: &str) {
     rfd::MessageDialog::new()
@@ -27,28 +24,4 @@ pub fn notice(title: &str, body: &str) {
         .set_description(body)
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
-}
-
-/// Returns true only when the user chooses to open the new release in their browser.
-pub fn confirm_update(
-    current_version: &str,
-    update: &gateterm_server::update::ReleaseUpdate,
-    locale: Locale,
-) -> bool {
-    let update_label = locale.text("立刻更新", "Update now");
-    let result = rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Info)
-        .set_title(locale.text("gateterm 有新版本", "gateterm update available"))
-        .set_description(tr!(locale,
-            "发现新版本 {} (当前版本 {})。\n\n点击“立刻更新”将在浏览器中打开 Release 页面。\n\n{}",
-            "Version {} is available (current: {}).\n\nChoose Update now to open the release page in your browser.\n\n{}",
-            update.version, current_version, update.url
-        ))
-        .set_buttons(rfd::MessageButtons::OkCancelCustom(
-            update_label.into(),
-            locale.text("取消", "Cancel").into(),
-        ))
-        .show();
-    matches!(result, rfd::MessageDialogResult::Custom(ref label) if label == update_label)
-        || result == rfd::MessageDialogResult::Ok
 }

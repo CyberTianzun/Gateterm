@@ -10,24 +10,29 @@ use gateterm_desktop_web::settings::{
     ui::{SettingsTab, View, draw},
     web_addr::WebAddrPicker,
 };
+use gateterm_desktop_web::update_ui::{self, UpdatePhase, UpdateView};
 use gateterm_server::agent::{
     AgentStatus, Confidence, Detected, Integration,
     ops::{AgentPlanSummary, PlanGroup},
 };
+use gateterm_updater::{ArchiveFormat, AvailableUpdate, DownloadProgress, TargetArtifact};
 
-fn collect_text(shape: &egui::Shape, texts: &mut Vec<String>) {
+fn collect_text(shape: &egui::Shape, texts: &mut Vec<String>, max_width: f32) {
     match shape {
         egui::Shape::Text(text) => {
             assert!(
-                text.pos.x + text.galley.size().x <= 600.5,
-                "settings text overflows the window (x={}, width={}): {}",
+                text.pos.x + text.galley.size().x <= max_width + 0.5,
+                "text overflows the window (x={}, width={}, max={}): {}",
                 text.pos.x,
                 text.galley.size().x,
+                max_width,
                 text.galley.text()
             );
             texts.push(text.galley.text().to_owned());
         }
-        egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect_text(shape, texts)),
+        egui::Shape::Vec(shapes) => shapes
+            .iter()
+            .for_each(|shape| collect_text(shape, texts, max_width)),
         _ => {}
     }
 }
@@ -48,7 +53,7 @@ fn render_view(ctx: &egui::Context, view: &mut View, locale: Locale, height: f32
         output.textures_delta.clear();
         texts.clear();
         for shape in &output.shapes {
-            collect_text(&shape.shape, &mut texts);
+            collect_text(&shape.shape, &mut texts, 600.0);
         }
     }
     if locale == Locale::En {
@@ -57,6 +62,41 @@ fn render_view(ctx: &egui::Context, view: &mut View, locale: Locale, height: f32
                 .iter()
                 .any(|text| text.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))),
             "Locale::En rendered CJK characters: {texts:?}"
+        );
+    }
+    texts
+}
+
+fn render_update_view(
+    ctx: &egui::Context,
+    view: &mut UpdateView,
+    locale: Locale,
+    height: f32,
+) -> Vec<String> {
+    let mut texts = vec![];
+    for _ in 0..2 {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(520.0, height),
+            )),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            update_ui::draw(ui, view, locale);
+        });
+        output.textures_delta.clear();
+        texts.clear();
+        for shape in &output.shapes {
+            collect_text(&shape.shape, &mut texts, 520.0);
+        }
+    }
+    if locale == Locale::En {
+        assert!(
+            !texts
+                .iter()
+                .any(|text| text.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))),
+            "Locale::En rendered CJK characters in update window: {texts:?}"
         );
     }
     texts
@@ -204,6 +244,8 @@ fn settings_switch_language_in_place_and_fit_the_window() {
             cloud_status: CloudStatus::LoggedOut,
             cloud_busy: false,
             cloud_message: None,
+            update_status_line: "v1.0.3".into(),
+            update_checking: false,
         };
         for locale in [Locale::En, Locale::ZhCn, Locale::En] {
             view.tab = SettingsTab::General;
@@ -230,6 +272,24 @@ fn settings_switch_language_in_place_and_fit_the_window() {
                 general_texts
                     .iter()
                     .any(|text| text == locale.text("网页标题", "Web title")),
+                "{general_texts:?}"
+            );
+            assert!(
+                general_texts
+                    .iter()
+                    .any(|text| text == locale.text("版本与更新", "Version & Updates")),
+                "{general_texts:?}"
+            );
+            assert!(
+                general_texts
+                    .iter()
+                    .any(|text| text.contains(env!("CARGO_PKG_VERSION"))),
+                "{general_texts:?}"
+            );
+            assert!(
+                general_texts
+                    .iter()
+                    .any(|text| text == locale.text("检查更新…", "Check for Updates…")),
                 "{general_texts:?}"
             );
             assert!(
@@ -323,6 +383,8 @@ fn agents_tab_warnings_fit_without_chinese_in_english() {
         cloud_status: CloudStatus::LoggedOut,
         cloud_busy: false,
         cloud_message: None,
+        update_status_line: "v1.0.3".into(),
+        update_checking: false,
     };
 
     for locale in [Locale::En, Locale::ZhCn] {
@@ -370,6 +432,8 @@ fn agents_tab_clearing_feedback_on_locale_switch_removes_prior_chinese_text() {
         cloud_status: CloudStatus::LoggedOut,
         cloud_busy: false,
         cloud_message: None,
+        update_status_line: "v1.0.3".into(),
+        update_checking: false,
     };
 
     let _zh_texts = render_view(&ctx, &mut view, Locale::ZhCn, 1800.0);
@@ -377,4 +441,213 @@ fn agents_tab_clearing_feedback_on_locale_switch_removes_prior_chinese_text() {
     let en_texts = render_view(&ctx, &mut view, Locale::En, 1800.0);
     assert!(!en_texts.iter().any(|t| t.contains("permission denied")));
     assert!(!en_texts.iter().any(|t| t.contains("未知")));
+}
+
+fn mock_available_update(can_self_apply: bool) -> AvailableUpdate {
+    AvailableUpdate {
+        version: "1.0.4".into(),
+        tag: "release-v1.0.4".into(),
+        pub_date: "2026-11-27T08:00:00Z".into(),
+        release_url: "https://github.com/CyberTianzun/Gateterm/releases/tag/release-v1.0.4".into(),
+        notes: "## What's Changed\n- Fast Sparkle-style self-update\n- Stability improvements"
+            .into(),
+        artifact: can_self_apply.then(|| TargetArtifact {
+            url: "https://github.com/CyberTianzun/Gateterm/releases/download/release-v1.0.4/gateterm-desktop-web-v1.0.4-x86_64-pc-windows-msvc.zip".into(),
+            sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            size: 14_820_352,
+            format: ArchiveFormat::Zip,
+            binary_path: "gateterm-desktop-web.exe".into(),
+        }),
+        can_self_apply,
+    }
+}
+
+#[test]
+fn update_window_available_self_apply_renders_notes_session_warning_and_three_buttons() {
+    let ctx = egui::Context::default();
+    gateterm_desktop_web::fonts::install(&ctx);
+    let mut view = UpdateView {
+        current_version: "1.0.3".into(),
+        update: Some(mock_available_update(true)),
+        phase: UpdatePhase::Available,
+        active_sessions: 3,
+    };
+
+    for locale in [Locale::ZhCn, Locale::En] {
+        let texts = render_update_view(&ctx, &mut view, locale, 480.0);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("v1.0.3") && t.contains("v1.0.4")),
+            "{texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("Fast Sparkle-style self-update")),
+            "{texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains('3')
+                && t.contains(locale.text("本地终端会话", "local terminal sessions"))),
+            "{texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t == locale.text("更新并重启", "Update & Restart")),
+            "{texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == locale.text("取消", "Cancel")),
+            "{texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t == locale.text("跳过此版本", "Skip This Version")),
+            "{texts:?}"
+        );
+    }
+}
+
+#[test]
+fn update_window_available_macos_fallback_shows_open_download_page_without_restart() {
+    let ctx = egui::Context::default();
+    gateterm_desktop_web::fonts::install(&ctx);
+    let mut view = UpdateView {
+        current_version: "1.0.3".into(),
+        update: Some(mock_available_update(false)),
+        phase: UpdatePhase::Available,
+        active_sessions: 3,
+    };
+
+    for locale in [Locale::ZhCn, Locale::En] {
+        let texts = render_update_view(&ctx, &mut view, locale, 480.0);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t == locale.text("前往下载页面", "Open Download Page")),
+            "{texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == locale.text("取消", "Cancel")),
+            "{texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t == locale.text("跳过此版本", "Skip This Version")),
+            "{texts:?}"
+        );
+        assert!(
+            !texts
+                .iter()
+                .any(|t| t == "Update & Restart" || t == "更新并重启"),
+            "macOS fallback must not show self-apply restart button: {texts:?}"
+        );
+    }
+}
+
+#[test]
+fn update_window_downloading_uptodate_and_error_render_without_cjk_in_english() {
+    let ctx = egui::Context::default();
+    gateterm_desktop_web::fonts::install(&ctx);
+
+    let mut checking = UpdateView {
+        current_version: "1.0.3".into(),
+        update: None,
+        phase: UpdatePhase::Checking,
+        active_sessions: 0,
+    };
+    for locale in [Locale::ZhCn, Locale::En] {
+        let texts = render_update_view(&ctx, &mut checking, locale, 480.0);
+        assert!(texts.iter().any(|t| t.contains("1.0.3")), "{texts:?}");
+        assert!(
+            texts.iter().any(|t| t == locale.text("取消", "Cancel")),
+            "{texts:?}"
+        );
+    }
+
+    let mut downloading = UpdateView {
+        current_version: "1.0.3".into(),
+        update: Some(mock_available_update(true)),
+        phase: UpdatePhase::Downloading(DownloadProgress {
+            downloaded: 6_710_886,
+            total: 14_820_352,
+        }),
+        active_sessions: 0,
+    };
+    for locale in [Locale::ZhCn, Locale::En] {
+        let texts = render_update_view(&ctx, &mut downloading, locale, 480.0);
+        assert!(texts.iter().any(|t| t.contains("6.4 MB")), "{texts:?}");
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains(locale.text("关闭所有本地终端会话", "close any local terminal sessions"))),
+            "{texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == locale.text("取消", "Cancel")),
+            "{texts:?}"
+        );
+    }
+
+    let mut preparing = UpdateView {
+        current_version: "1.0.3".into(),
+        update: Some(mock_available_update(true)),
+        phase: UpdatePhase::Preparing,
+        active_sessions: 1,
+    };
+    for locale in [Locale::ZhCn, Locale::En] {
+        let texts = render_update_view(&ctx, &mut preparing, locale, 480.0);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains(locale.text("1 个本地终端会话", "1 running local terminal session"))),
+            "{texts:?}"
+        );
+    }
+
+    let mut up_to_date = UpdateView {
+        current_version: "1.0.3".into(),
+        update: None,
+        phase: UpdatePhase::UpToDate,
+        active_sessions: 0,
+    };
+    for locale in [Locale::ZhCn, Locale::En] {
+        let texts = render_update_view(&ctx, &mut up_to_date, locale, 480.0);
+        assert!(texts.iter().any(|t| t.contains("1.0.3")), "{texts:?}");
+    }
+
+    let mut errored = UpdateView {
+        current_version: "1.0.3".into(),
+        update: Some(mock_available_update(true)),
+        phase: UpdatePhase::Error {
+            message: "Target directory is not writable".into(),
+            fallback_url: Some(
+                "https://github.com/CyberTianzun/Gateterm/releases/tag/release-v1.0.4".into(),
+            ),
+        },
+        active_sessions: 1,
+    };
+    for locale in [Locale::ZhCn, Locale::En] {
+        let texts = render_update_view(&ctx, &mut errored, locale, 480.0);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("Target directory is not writable")),
+            "{texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == locale.text("重试", "Retry")),
+            "{texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t == locale.text("前往 GitHub 手动下载", "Open GitHub Release")),
+            "{texts:?}"
+        );
+    }
 }

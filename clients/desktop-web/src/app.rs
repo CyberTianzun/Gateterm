@@ -26,8 +26,16 @@ pub enum MenuAction {
     OpenWeb,
     CopyUrl,
     Settings,
+    CheckForUpdates,
     ViewLogs,
     Quit,
+}
+
+#[derive(Debug, Clone)]
+pub struct StagedApplyBundle {
+    pub staged: gateterm_updater::StagedUpdate,
+    pub canonical_target: PathBuf,
+    pub cache_root: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -48,7 +56,21 @@ pub enum UserEvent {
         crate::settings::agents::AgentActionKind,
         Result<String, String>,
     ),
-    UpdateAvailable(gateterm_server::update::ReleaseUpdate),
+    UpdateChecked {
+        generation: u64,
+        manual: bool,
+        is_startup: bool,
+        result: Result<gateterm_updater::CheckOutcome, String>,
+    },
+    UpdateDownloadProgress {
+        generation: u64,
+        progress: gateterm_updater::DownloadProgress,
+    },
+    UpdateStaged {
+        generation: u64,
+        result: Result<StagedApplyBundle, String>,
+    },
+    RollbackNotice(String),
 }
 
 /// 托盘第 `failures` 次创建失败之后,隔多久再试一次;`None` 表示不再试了。
@@ -87,6 +109,7 @@ pub struct App {
     agents_generation: u64,
     rt: Runtime,
     sup: Supervisor,
+    lock_guard: Option<crate::single_instance::Guard>,
     tray: Option<Tray>,
     /// 托盘至今失败了几次。兼作「已经试过了」的标记:`resumed` 只负责发起第一次
     /// 尝试,后续重试由 `new_events` 接管,这个计数一旦非零就再也不归零。
@@ -105,6 +128,11 @@ pub struct App {
     settings_window: Option<EguiWindow>,
     /// 设置窗口的界面状态,和 `settings_window` 同生共死(开窗时建、关窗时清)。
     view: Option<crate::settings::ui::View>,
+    update_window: Option<EguiWindow>,
+    update_view: Option<crate::update_ui::UpdateView>,
+    update_tracker: UpdateTracker,
+    download_cancel: Option<tokio::sync::watch::Sender<bool>>,
+    update_daily_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl App {
@@ -114,6 +142,7 @@ impl App {
         proxy: EventLoopProxy<UserEvent>,
         log_path: PathBuf,
         startup: Startup,
+        lock_guard: crate::single_instance::Guard,
     ) -> Self {
         let resolved_web_host = sup
             .listen()
@@ -126,6 +155,7 @@ impl App {
             agents_generation: 0,
             rt,
             sup,
+            lock_guard: Some(lock_guard),
             tray: None,
             tray_failures: 0,
             tray_retry_at: None,
@@ -134,6 +164,11 @@ impl App {
             startup,
             settings_window: None,
             view: None,
+            update_window: None,
+            update_view: None,
+            update_tracker: UpdateTracker::default(),
+            download_cancel: None,
+            update_daily_task: None,
         }
     }
 
@@ -202,6 +237,8 @@ impl App {
             cloud_status: crate::settings::cloud::status_from(Self::cloud_creds()),
             cloud_busy: self.cloud_task.is_some(),
             cloud_message: None,
+            update_status_line: self.update_tracker.summary.status_line(self.locale),
+            update_checking: self.update_tracker.checking,
         }
     }
 
@@ -424,9 +461,15 @@ impl App {
             if let Some(window) = &self.settings_window {
                 window.set_title(locale.text("gateterm 设置", "gateterm Settings"));
             }
+            if let Some(window) = &self.update_window {
+                window.set_title(locale.text("gateterm 更新", "gateterm Update"));
+                window.request_redraw();
+            }
             if let Some(view) = self.view.as_mut() {
                 view.cloud_message = None;
                 view.form.web_title = self.sup.web_title().unwrap_or_default();
+                view.update_checking = self.update_tracker.checking;
+                view.update_status_line = self.update_tracker.summary.status_line(self.locale);
             }
         }
 
@@ -567,18 +610,385 @@ impl App {
         });
     }
 
-    /// Start daily checks after the tray is ready; only the startup result opens a dialog.
-    fn check_for_updates(&self) {
+    /// Start daily checks after the tray is ready; only a non-skipped startup result opens the update window.
+    fn check_for_updates(&mut self) {
+        let cfg = match gateterm_updater::CheckConfig::for_app(
+            gateterm_updater::AppKind::DesktopWeb,
+            env!("CARGO_PKG_VERSION"),
+        ) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                tracing::warn!(error = %format!("{e:#}"), "无法初始化更新检查配置");
+                return;
+            }
+        };
+        let proxy = self.proxy.clone();
+        let _rt = self.rt.enter();
+        self.update_daily_task = Some(gateterm_updater::start_daily_checks(cfg, move |is_startup, result| {
+            if let Err(e) = &result {
+                tracing::debug!(error = %format!("{e:#}"), is_startup, "后台检查更新失败");
+            }
+            let _ = proxy.send_event(UserEvent::UpdateChecked {
+                generation: 0,
+                manual: false,
+                is_startup,
+                result: result.map_err(|e| format!("{e:#}")),
+            });
+        }));
+    }
+
+    fn sync_settings_update_status(&mut self) {
+        if let Some(view) = self.view.as_mut() {
+            view.update_checking = self.update_tracker.checking;
+            view.update_status_line = self.update_tracker.summary.status_line(self.locale);
+        }
+        if let Some(w) = &self.settings_window {
+            w.request_redraw();
+        }
+    }
+
+    fn open_or_focus_update_window(&mut self, event_loop: &ActiveEventLoop) {
+        if self.update_window.is_none() {
+            match EguiWindow::open(
+                event_loop,
+                self.locale.text("gateterm 更新", "gateterm Update"),
+                (520, 480),
+            ) {
+                Ok(w) => {
+                    self.update_window = Some(w);
+                }
+                Err(e) => {
+                    tracing::error!(error = %format!("{e:#}"), "无法打开更新窗口");
+                    self.cancel_active_download();
+                    cancel_update_state(&mut self.update_tracker, &mut self.update_view);
+                    self.sync_settings_update_status();
+                    return;
+                }
+            }
+        }
+        if let Some(w) = &self.update_window {
+            w.focus();
+            w.request_redraw();
+        }
+    }
+
+    fn cancel_active_download(&mut self) {
+        if let Some(tx) = self.download_cancel.take() {
+            let _ = tx.send(true);
+        }
+    }
+
+    fn cancel_and_close_update(&mut self) {
+        self.cancel_active_download();
+        cancel_update_state(&mut self.update_tracker, &mut self.update_view);
+        self.update_window = None;
+        self.sync_settings_update_status();
+    }
+
+    fn start_manual_update_check(&mut self, event_loop: &ActiveEventLoop) {
+        if self.download_cancel.is_some()
+            || self.update_view.as_ref().is_some_and(|v| {
+                matches!(
+                    v.phase,
+                    crate::update_ui::UpdatePhase::Downloading(_)
+                        | crate::update_ui::UpdatePhase::Preparing
+                )
+            })
+        {
+            self.open_or_focus_update_window(event_loop);
+            return;
+        }
+
+        let active_sessions = self.sup.manager().list().len();
+        let Some(generation) = prepare_manual_update_check(
+            &mut self.update_tracker,
+            &mut self.update_view,
+            env!("CARGO_PKG_VERSION"),
+            active_sessions,
+        ) else {
+            return;
+        };
+        self.sync_settings_update_status();
+        self.open_or_focus_update_window(event_loop);
+
+        let cfg = match gateterm_updater::CheckConfig::for_app(
+            gateterm_updater::AppKind::DesktopWeb,
+            env!("CARGO_PKG_VERSION"),
+        ) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                let _ = self.proxy.send_event(UserEvent::UpdateChecked {
+                    generation,
+                    manual: true,
+                    is_startup: false,
+                    result: Err(format!("{e:#}")),
+                });
+                return;
+            }
+        };
         let proxy = self.proxy.clone();
         self.rt.spawn(async move {
-            gateterm_server::update::start_daily_checks(env!("CARGO_PKG_VERSION"), move |result| match result {
-                Ok(Some(update)) => {
-                    proxy.send_event(UserEvent::UpdateAvailable(update)).ok();
-                }
-                Ok(None) => {}
-                Err(e) => tracing::debug!(error = %e, "检查更新失败"),
+            let result = gateterm_updater::check_now(&cfg, true)
+                .await
+                .map_err(|e| format!("{e:#}"));
+            let _ = proxy.send_event(UserEvent::UpdateChecked {
+                generation,
+                manual: true,
+                is_startup: false,
+                result,
             });
         });
+    }
+
+    fn start_update_download(&mut self) {
+        if self.download_cancel.is_some() {
+            return;
+        }
+        let Some(update) = self.update_view.as_ref().and_then(|v| v.update.clone()) else {
+            return;
+        };
+        if !update.can_self_apply {
+            return;
+        }
+        let Some(artifact) = update.artifact.clone() else {
+            return;
+        };
+
+        let generation =
+            prepare_update_download(&mut self.update_tracker, &mut self.update_view, artifact.size);
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        self.download_cancel = Some(cancel_tx);
+        if let Some(w) = &self.update_window {
+            w.request_redraw();
+        }
+
+        let locale = self.locale;
+        let proxy = self.proxy.clone();
+        let version = update.version.clone();
+        self.rt.spawn(async move {
+            let preflight = tokio::task::spawn_blocking(move || -> Result<(PathBuf, PathBuf), String> {
+                let current_exe = std::env::current_exe()
+                    .map_err(|e| format_current_exe_error(locale, &e))?;
+                let canonical_target = gateterm_updater::preflight_writable(&current_exe)
+                    .map_err(|e| format_download_error(locale, &e))?;
+                let cache_root = gateterm_updater::updates_cache_dir()
+                    .map_err(|e| format_cache_dir_error(locale, &e))?;
+                Ok((canonical_target, cache_root))
+            })
+            .await;
+
+            let (canonical_target, cache_root) = match preflight {
+                Ok(Ok(paths)) => paths,
+                Ok(Err(msg)) => {
+                    let _ = proxy.send_event(UserEvent::UpdateStaged {
+                        generation,
+                        result: Err(msg),
+                    });
+                    return;
+                }
+                Err(e) => {
+                    let _ = proxy.send_event(UserEvent::UpdateStaged {
+                        generation,
+                        result: Err(tr!(locale, "后台任务失败：{e}", "Background task failed: {e}")),
+                    });
+                    return;
+                }
+            };
+
+            let client = match gateterm_updater::build_http_client(env!("CARGO_PKG_VERSION"), false) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = proxy.send_event(UserEvent::UpdateStaged {
+                        generation,
+                        result: Err(tr!(
+                            locale,
+                            "无法初始化下载客户端：{e:#}",
+                            "Could not initialize HTTP client: {e:#}"
+                        )),
+                    });
+                    return;
+                }
+            };
+
+            let last_sent = std::sync::atomic::AtomicU64::new(0);
+            let progress_proxy = proxy.clone();
+            let staged_res = gateterm_updater::download_and_stage(
+                &client,
+                gateterm_updater::AppKind::DesktopWeb,
+                &version,
+                &artifact,
+                &cache_root,
+                cancel_rx,
+                move |progress| {
+                    let prev = last_sent.load(std::sync::atomic::Ordering::Relaxed);
+                    if progress.downloaded == 0
+                        || progress.downloaded >= progress.total
+                        || progress.downloaded.saturating_sub(prev) >= 64 * 1024
+                    {
+                        last_sent.store(progress.downloaded, std::sync::atomic::Ordering::Relaxed);
+                        let _ = progress_proxy.send_event(UserEvent::UpdateDownloadProgress {
+                            generation,
+                            progress,
+                        });
+                    }
+                },
+            )
+            .await;
+
+            let result = match staged_res {
+                Ok(staged) => Ok(StagedApplyBundle {
+                    staged,
+                    canonical_target,
+                    cache_root,
+                }),
+                Err(err) => Err(format_download_error(locale, &err)),
+            };
+            let _ = proxy.send_event(UserEvent::UpdateStaged { generation, result });
+        });
+    }
+
+    fn handle_settings_window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        event: WindowEvent,
+    ) {
+        let Some(w) = self.settings_window.as_mut() else {
+            return;
+        };
+        // 先喂给 egui:它要靠这些事件维护自己的输入状态(按键、光标、缩放因子),
+        // 返回值说明它有没有把这个事件吃掉。这里我们只关心窗口生命周期,不用管。
+        let _consumed = w.on_window_event(&event);
+        match event {
+            WindowEvent::CloseRequested => {
+                // 关窗口只是关窗口,程序继续常驻。置 None 触发 Drop,GPU 资源当场
+                // 还回去——不是 set_visible(false) 那种「藏起来留着」。
+                self.close_settings();
+            }
+            WindowEvent::RedrawRequested => {
+                use crate::settings::ui::{draw, Outcome};
+                // 这个闭包同一帧里可能被调用多次(Grid 之类的容器会让 egui 重跑一
+                // 趟),所以只能描述界面、只能往 outcome 上赋值,一次性的副作用
+                // 全部挪到闭包外做一次。
+                let mut outcome = Outcome::None;
+                if let Some(view) = self.view.as_mut() {
+                    w.redraw_ui(|ui| outcome = draw(ui, view, self.locale));
+                }
+                let closed = w.close_requested();
+                let acted = outcome != Outcome::None;
+                match outcome {
+                    Outcome::None => {}
+                    Outcome::Save => self.apply_settings(),
+                    Outcome::Cancel => self.close_settings(),
+                    Outcome::OpenConfigFile => match crate::configfile::default_path() {
+                        Ok(p) => {
+                            if let Err(e) = open::that_detached(&p) {
+                                tracing::error!(error = %format!("{e:#}"), "打开配置文件失败");
+                            }
+                        }
+                        Err(e) => tracing::error!(error = %format!("{e:#}"), "无法确定配置文件位置"),
+                    },
+                    Outcome::RegenerateToken => {
+                        if let Some(view) = self.view.as_mut() {
+                            // 和 server 的 resolve_token 用同一种格式(32 位十六进制)
+                            view.form.token = uuid::Uuid::new_v4().simple().to_string();
+                        }
+                    }
+                    Outcome::RefreshWebAddrs => {
+                        if let Some(view) = self.view.as_mut() {
+                            view.web_addr.refresh(self.sup.listen());
+                            self.resolved_web_host = self
+                                .sup
+                                .listen()
+                                .map(|listen| view.web_addr.resolved(listen, self.startup.web_host));
+                        } else {
+                            self.refresh_resolved_web_host();
+                        }
+                        self.refresh_status();
+                    }
+                    Outcome::CheckForUpdates => self.start_manual_update_check(event_loop),
+                    Outcome::Agents(action) => self.handle_agent_action(action),
+                    Outcome::Cloud(action) => self.start_cloud(action),
+                }
+                // 界面里 `send_viewport_cmd(ViewportCommand::Close)` 的结果从这里
+                // 出来:窗口自己关不掉自己,得由持有它的这一层置 None。设置界面
+                // 目前不发这条命令(「取消」走的是 `Outcome::Cancel`),但
+                // `EguiWindow` 的约定要求每帧看一眼,漏了以后加就会静默失效。
+                if closed {
+                    self.close_settings();
+                }
+                // 保存结果、重新生成的 token 这些都是刚刚才写进 view 的,而这一帧
+                // 已经画完了 —— 不主动再要一帧,用户点完按钮会看不到任何变化。
+                if acted
+                    && let Some(w) = &self.settings_window
+                {
+                    w.request_redraw();
+                }
+            }
+            _ => w.request_redraw(),
+        }
+    }
+
+    fn handle_update_window_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
+        let Some(w) = self.update_window.as_mut() else {
+            return;
+        };
+        let _consumed = w.on_window_event(&event);
+        match event {
+            WindowEvent::CloseRequested => {
+                self.cancel_and_close_update();
+            }
+            WindowEvent::RedrawRequested => {
+                use crate::update_ui::{draw, UpdateOutcome};
+                let mut outcome = UpdateOutcome::None;
+                if let Some(view) = self.update_view.as_mut() {
+                    w.redraw_ui(|ui| outcome = draw(ui, view, self.locale));
+                }
+                let closed = w.close_requested();
+                let acted = outcome != UpdateOutcome::None;
+                match outcome {
+                    UpdateOutcome::None => {}
+                    UpdateOutcome::UpdateAndRestart => self.start_update_download(),
+                    UpdateOutcome::OpenDownloadPage(url) => {
+                        if let Err(e) = open::that_detached(&url) {
+                            tracing::error!(error = %e, "打开 Release 页面失败");
+                            crate::dialog::notice(
+                                self.locale.text("无法打开 Release 页面", "Could not open the release page"),
+                                &tr!(
+                                    self.locale,
+                                    "请在浏览器中打开以下链接:\n\n{url}\n\n{e}",
+                                    "Open this link in your browser:\n\n{url}\n\n{e}"
+                                ),
+                            );
+                        } else {
+                            self.cancel_and_close_update();
+                        }
+                    }
+                    UpdateOutcome::SkipVersion(version) => {
+                        if let Ok(path) = gateterm_updater::UpdateState::default_path(
+                            gateterm_updater::AppKind::DesktopWeb,
+                        ) {
+                            let mut state = gateterm_updater::UpdateState::load(&path);
+                            state.skipped_version = Some(version);
+                            if let Err(e) = state.save(&path) {
+                                tracing::warn!(error = %format!("{e:#}"), "保存跳过版本状态失败");
+                            }
+                        }
+                        self.cancel_and_close_update();
+                    }
+                    UpdateOutcome::Cancel => self.cancel_and_close_update(),
+                    UpdateOutcome::RetryCheck => self.start_manual_update_check(event_loop),
+                }
+                if closed {
+                    self.cancel_and_close_update();
+                }
+                if acted
+                    && let Some(w) = &self.update_window
+                {
+                    w.request_redraw();
+                }
+            }
+            _ => w.request_redraw(),
+        }
     }
 
     /// 建托盘。成功了顺手把随之而来的一次性初始化做掉,失败了排重试、退避用完就
@@ -637,6 +1047,7 @@ impl App {
                         // 和「退出」菜单走同一条收尾:先关 HTTP 层再杀会话。这里不问
                         // 用户 —— 托盘都没起来,谈不上有会话在跑,也没地方让他确认。
                         shutdown(&mut self.sup);
+                        self.lock_guard.take();
                         event_loop.exit();
                         crate::dialog::fatal(
                             self.locale.text("gateterm 无法启动", "gateterm could not start"),
@@ -775,7 +1186,15 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
-            UserEvent::SessionsChanged => self.refresh_status(),
+            UserEvent::SessionsChanged => {
+                self.refresh_status();
+                if let Some(view) = self.update_view.as_mut() {
+                    view.active_sessions = self.sup.manager().list().len();
+                    if let Some(w) = &self.update_window {
+                        w.request_redraw();
+                    }
+                }
+            }
             UserEvent::CloudDone(generation, action, result) => {
                 if generation != self.cloud_generation {
                     return;
@@ -857,16 +1276,146 @@ impl ApplicationHandler<UserEvent> for App {
                     w.request_redraw();
                 }
             }
-            UserEvent::UpdateAvailable(update) => {
-                if crate::dialog::confirm_update(env!("CARGO_PKG_VERSION"), &update, self.locale)
-                    && let Err(e) = open::that_detached(&update.url)
-                {
-                    tracing::error!(error = %e, "打开 Release 页面失败");
-                    crate::dialog::notice(
-                        self.locale.text("无法打开 Release 页面", "Could not open the release page"),
-                        &tr!(self.locale, "请在浏览器中打开以下链接:\n\n{}\n\n{e}", "Open this link in your browser:\n\n{}\n\n{e}", update.url),
+            UserEvent::UpdateChecked {
+                generation,
+                manual,
+                is_startup,
+                result,
+            } => {
+                if let Ok(outcome) = &result {
+                    let release_update = match outcome {
+                        gateterm_updater::CheckOutcome::UpdateAvailable { update, .. } => {
+                            Some(gateterm_server::update::ReleaseUpdate {
+                                version: update.version.clone(),
+                                url: update.release_url.clone(),
+                            })
+                        }
+                        gateterm_updater::CheckOutcome::UpToDate { .. } => None,
+                    };
+                    gateterm_server::update::record_external_status(
+                        env!("CARGO_PKG_VERSION"),
+                        release_update,
                     );
                 }
+
+                let active_sessions = self.sup.manager().list().len();
+                let transition = apply_update_checked(
+                    &mut self.update_tracker,
+                    &mut self.update_view,
+                    generation,
+                    manual,
+                    is_startup,
+                    env!("CARGO_PKG_VERSION"),
+                    active_sessions,
+                    self.locale,
+                    &result,
+                );
+                self.sync_settings_update_status();
+                match transition {
+                    CheckTransition::Ignored | CheckTransition::NoWindow => {}
+                    CheckTransition::OpenWindow => self.open_or_focus_update_window(event_loop),
+                    CheckTransition::RedrawWindow => {
+                        if let Some(w) = &self.update_window {
+                            w.request_redraw();
+                        }
+                    }
+                }
+            }
+            UserEvent::UpdateDownloadProgress {
+                generation,
+                progress,
+            } => {
+                if apply_download_progress(
+                    &self.update_tracker,
+                    &mut self.update_view,
+                    generation,
+                    progress,
+                ) && let Some(w) = &self.update_window
+                {
+                    w.request_redraw();
+                }
+            }
+            UserEvent::UpdateStaged { generation, result } => {
+                if generation != self.update_tracker.download_generation {
+                    if let Ok(bundle) = result {
+                        std::thread::spawn(move || {
+                            let _ = std::fs::remove_dir_all(&bundle.staged.staging_dir);
+                        });
+                    }
+                    return;
+                }
+                self.download_cancel = None;
+                match apply_update_staged(
+                    &self.update_tracker,
+                    &mut self.update_view,
+                    generation,
+                    result,
+                ) {
+                    StagedTransition::Ignored => {}
+                    StagedTransition::Failed => {
+                        if let Some(w) = &self.update_window {
+                            w.request_redraw();
+                        }
+                    }
+                    StagedTransition::ReadyToApply(bundle) => {
+                        if let Err(err) =
+                            gateterm_updater::preflight_writable(&bundle.canonical_target)
+                        {
+                            let msg = format_download_error(self.locale, &err);
+                            if let Some(view) = self.update_view.as_mut() {
+                                let fallback_url =
+                                    view.update.as_ref().map(|u| u.release_url.clone());
+                                view.phase = crate::update_ui::UpdatePhase::Error {
+                                    message: msg,
+                                    fallback_url,
+                                };
+                            }
+                            if let Some(w) = &self.update_window {
+                                w.request_redraw();
+                            }
+                            return;
+                        }
+
+                        self.cancel_and_close_update();
+                        self.settings_window = None;
+                        self.view = None;
+                        if let Some(task) = self.update_daily_task.take() {
+                            task.abort();
+                        }
+                        shutdown(&mut self.sup);
+                        drop(self.lock_guard.take());
+                        if let Err(err) = gateterm_updater::spawn_apply_helper(
+                            &bundle.staged,
+                            &bundle.canonical_target,
+                            &bundle.cache_root,
+                        ) {
+                            let reason = format!("{err:#}");
+                            tracing::error!(error = %reason, "无法启动更新替换进程");
+                            event_loop.exit();
+                            crate::dialog::fatal(
+                                self.locale.text("gateterm 更新失败", "gateterm update failed"),
+                                &tr!(
+                                    self.locale,
+                                    "后台服务已停止，但无法启动更新程序。\n\n{reason}\n\n请重新启动 gateterm，或前往 GitHub Release 页面手动下载安装。",
+                                    "Background services were stopped, but the updater helper could not be started.\n\n{reason}\n\nPlease restart gateterm or download the latest release from GitHub."
+                                ),
+                            );
+                            return;
+                        }
+                        event_loop.exit();
+                    }
+                }
+            }
+            UserEvent::RollbackNotice(err_msg) => {
+                crate::dialog::notice(
+                    self.locale
+                        .text("gateterm 更新未完成", "gateterm update did not complete"),
+                    &tr!(
+                        self.locale,
+                        "上次应用更新未能完成，已自动恢复为当前版本。\n\n{err_msg}",
+                        "The previous update could not be applied and was rolled back to this version.\n\n{err_msg}"
+                    ),
+                );
             }
             UserEvent::MenuClicked(MenuAction::OpenWeb) => match self.url() {
                 Some(url) => {
@@ -913,6 +1462,9 @@ impl ApplicationHandler<UserEvent> for App {
                     w.request_redraw();
                 }
             }
+            UserEvent::MenuClicked(MenuAction::CheckForUpdates) => {
+                self.start_manual_update_check(event_loop);
+            }
             UserEvent::MenuClicked(MenuAction::Quit) => {
                 // 「会话在断连后存活」正是这个项目的卖点,而内嵌模型下退出会把它们
                 // 全杀掉 —— 这一下必须显眼。没有会话时不打扰用户。
@@ -923,85 +1475,24 @@ impl ApplicationHandler<UserEvent> for App {
                 if n > 0 && !confirm_quit(n, self.locale) {
                     return;
                 }
+                self.cancel_and_close_update();
+                self.settings_window = None;
+                self.view = None;
+                if let Some(task) = self.update_daily_task.take() {
+                    task.abort();
+                }
                 shutdown(&mut self.sup);
+                self.lock_guard.take();
                 event_loop.exit();
             }
         }
     }
 
-    fn window_event(&mut self, _: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-        let Some(w) = self.settings_window.as_mut().filter(|w| w.id() == id) else {
-            return;
-        };
-        // 先喂给 egui:它要靠这些事件维护自己的输入状态(按键、光标、缩放因子),
-        // 返回值说明它有没有把这个事件吃掉。这里我们只关心窗口生命周期,不用管。
-        let _consumed = w.on_window_event(&event);
-        match event {
-            WindowEvent::CloseRequested => {
-                // 关窗口只是关窗口,程序继续常驻。置 None 触发 Drop,GPU 资源当场
-                // 还回去——不是 set_visible(false) 那种「藏起来留着」。
-                self.close_settings();
-            }
-            WindowEvent::RedrawRequested => {
-                use crate::settings::ui::{draw, Outcome};
-                // 这个闭包同一帧里可能被调用多次(Grid 之类的容器会让 egui 重跑一
-                // 趟),所以只能描述界面、只能往 outcome 上赋值,一次性的副作用
-                // 全部挪到闭包外做一次。
-                let mut outcome = Outcome::None;
-                if let Some(view) = self.view.as_mut() {
-                    w.redraw_ui(|ui| outcome = draw(ui, view, self.locale));
-                }
-                let closed = w.close_requested();
-                let acted = outcome != Outcome::None;
-                match outcome {
-                    Outcome::None => {}
-                    Outcome::Save => self.apply_settings(),
-                    Outcome::Cancel => self.close_settings(),
-                    Outcome::OpenConfigFile => match crate::configfile::default_path() {
-                        Ok(p) => {
-                            if let Err(e) = open::that_detached(&p) {
-                                tracing::error!(error = %format!("{e:#}"), "打开配置文件失败");
-                            }
-                        }
-                        Err(e) => tracing::error!(error = %format!("{e:#}"), "无法确定配置文件位置"),
-                    },
-                    Outcome::RegenerateToken => {
-                        if let Some(view) = self.view.as_mut() {
-                            // 和 server 的 resolve_token 用同一种格式(32 位十六进制)
-                            view.form.token = uuid::Uuid::new_v4().simple().to_string();
-                        }
-                    }
-                    Outcome::RefreshWebAddrs => {
-                        if let Some(view) = self.view.as_mut() {
-                            view.web_addr.refresh(self.sup.listen());
-                            self.resolved_web_host = self
-                                .sup
-                                .listen()
-                                .map(|listen| view.web_addr.resolved(listen, self.startup.web_host));
-                        } else {
-                            self.refresh_resolved_web_host();
-                        }
-                        self.refresh_status();
-                    }
-                    Outcome::Agents(action) => self.handle_agent_action(action),
-                    Outcome::Cloud(action) => self.start_cloud(action),
-                }
-                // 界面里 `send_viewport_cmd(ViewportCommand::Close)` 的结果从这里
-                // 出来:窗口自己关不掉自己,得由持有它的这一层置 None。设置界面
-                // 目前不发这条命令(「取消」走的是 `Outcome::Cancel`),但
-                // `EguiWindow` 的约定要求每帧看一眼,漏了以后加就会静默失效。
-                if closed {
-                    self.close_settings();
-                }
-                // 保存结果、重新生成的 token 这些都是刚刚才写进 view 的,而这一帧
-                // 已经画完了 —— 不主动再要一帧,用户点完按钮会看不到任何变化。
-                if acted
-                    && let Some(w) = &self.settings_window
-                {
-                    w.request_redraw();
-                }
-            }
-            _ => w.request_redraw(),
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if self.settings_window.as_ref().is_some_and(|w| w.id() == id) {
+            self.handle_settings_window_event(event_loop, event);
+        } else if self.update_window.as_ref().is_some_and(|w| w.id() == id) {
+            self.handle_update_window_event(event_loop, event);
         }
     }
 
@@ -1019,6 +1510,9 @@ impl ApplicationHandler<UserEvent> for App {
         if let Some(w) = &self.settings_window {
             w.request_redraw();
         }
+        if let Some(w) = &self.update_window {
+            w.request_redraw();
+        }
     }
 
     /// 每轮事件处理完、真正去睡之前决定「睡多久」。
@@ -1027,9 +1521,13 @@ impl ApplicationHandler<UserEvent> for App {
     /// 空闲,不能靠 `Poll` 忙转。有窗口且 egui 排了定时重绘、或者托盘还欠一次重试
     /// 时才 `WaitUntil`,到点由上面的 `new_events` 处理。
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // 两个排期取更早的那个,谁都不能被对方拖晚。
-        let repaint_at = self.settings_window.as_ref().and_then(|w| w.repaint_at());
-        let deadline = [repaint_at, self.tray_retry_at].into_iter().flatten().min();
+        // 排期取最早的那个,谁都不能被对方拖晚。
+        let settings_repaint = self.settings_window.as_ref().and_then(|w| w.repaint_at());
+        let update_repaint = self.update_window.as_ref().and_then(|w| w.repaint_at());
+        let deadline = [settings_repaint, update_repaint, self.tray_retry_at]
+            .into_iter()
+            .flatten()
+            .min();
         let flow = match deadline {
             Some(at) => ControlFlow::WaitUntil(at),
             None => ControlFlow::Wait,
@@ -1214,6 +1712,304 @@ fn apply_agent_action_done(
     true
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+enum UpdateCheckSummary {
+    #[default]
+    NotChecked,
+    Checking,
+    UpToDate,
+    Available(String),
+    Failed(String),
+}
+
+impl UpdateCheckSummary {
+    fn status_line(&self, locale: Locale) -> String {
+        match self {
+            Self::NotChecked => locale.text("尚未检查更新", "Not checked yet").to_owned(),
+            Self::Checking => locale
+                .text("正在检查更新…", "Checking for updates…")
+                .to_owned(),
+            Self::UpToDate => tr!(
+                locale,
+                "已是最新版本（v{}）",
+                "Up to date (v{})",
+                env!("CARGO_PKG_VERSION")
+            ),
+            Self::Available(v) => tr!(locale, "发现新版本 v{v}", "Update available: v{v}"),
+            Self::Failed(e) => tr!(locale, "检查失败：{e}", "Update check failed: {e}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct UpdateTracker {
+    check_generation: u64,
+    download_generation: u64,
+    checking: bool,
+    summary: UpdateCheckSummary,
+    latest_update: Option<gateterm_updater::AvailableUpdate>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CheckTransition {
+    Ignored,
+    OpenWindow,
+    RedrawWindow,
+    NoWindow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StagedTransition<T> {
+    Ignored,
+    ReadyToApply(T),
+    Failed,
+}
+
+fn prepare_manual_update_check(
+    tracker: &mut UpdateTracker,
+    update_view: &mut Option<crate::update_ui::UpdateView>,
+    current_version: &str,
+    active_sessions: usize,
+) -> Option<u64> {
+    tracker.check_generation = tracker.check_generation.wrapping_add(1);
+    tracker.checking = true;
+    tracker.summary = UpdateCheckSummary::Checking;
+    *update_view = Some(crate::update_ui::UpdateView {
+        current_version: current_version.to_owned(),
+        update: None,
+        phase: crate::update_ui::UpdatePhase::Checking,
+        active_sessions,
+    });
+    Some(tracker.check_generation)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_update_checked(
+    tracker: &mut UpdateTracker,
+    update_view: &mut Option<crate::update_ui::UpdateView>,
+    event_generation: u64,
+    manual: bool,
+    is_startup: bool,
+    current_version: &str,
+    active_sessions: usize,
+    locale: Locale,
+    result: &Result<gateterm_updater::CheckOutcome, String>,
+) -> CheckTransition {
+    if manual {
+        if event_generation != tracker.check_generation || update_view.is_none() {
+            return CheckTransition::Ignored;
+        }
+        tracker.checking = false;
+        match result {
+            Ok(gateterm_updater::CheckOutcome::UpdateAvailable { update, .. }) => {
+                tracker.latest_update = Some(update.clone());
+                tracker.summary = UpdateCheckSummary::Available(update.version.clone());
+                *update_view = Some(crate::update_ui::UpdateView {
+                    current_version: current_version.to_owned(),
+                    update: Some(update.clone()),
+                    phase: crate::update_ui::UpdatePhase::Available,
+                    active_sessions,
+                });
+            }
+            Ok(gateterm_updater::CheckOutcome::UpToDate { .. }) => {
+                tracker.latest_update = None;
+                tracker.summary = UpdateCheckSummary::UpToDate;
+                *update_view = Some(crate::update_ui::UpdateView {
+                    current_version: current_version.to_owned(),
+                    update: None,
+                    phase: crate::update_ui::UpdatePhase::UpToDate,
+                    active_sessions,
+                });
+            }
+            Err(err_msg) => {
+                tracker.summary = UpdateCheckSummary::Failed(err_msg.clone());
+                let fallback_url = tracker
+                    .latest_update
+                    .as_ref()
+                    .map(|u| u.release_url.clone())
+                    .or_else(|| {
+                        Some("https://github.com/CyberTianzun/Gateterm/releases/latest".to_owned())
+                    });
+                *update_view = Some(crate::update_ui::UpdateView {
+                    current_version: current_version.to_owned(),
+                    update: None,
+                    phase: crate::update_ui::UpdatePhase::Error {
+                        message: tr!(
+                            locale,
+                            "检查更新失败：{err_msg}",
+                            "Update check failed: {err_msg}"
+                        ),
+                        fallback_url,
+                    },
+                    active_sessions,
+                });
+            }
+        }
+        return CheckTransition::RedrawWindow;
+    }
+
+    match result {
+        Ok(gateterm_updater::CheckOutcome::UpdateAvailable { update, skipped }) => {
+            tracker.latest_update = Some(update.clone());
+            if !tracker.checking {
+                tracker.summary = UpdateCheckSummary::Available(update.version.clone());
+            }
+            if is_startup && !skipped && tracker.check_generation == 0 && update_view.is_none() {
+                *update_view = Some(crate::update_ui::UpdateView {
+                    current_version: current_version.to_owned(),
+                    update: Some(update.clone()),
+                    phase: crate::update_ui::UpdatePhase::Available,
+                    active_sessions,
+                });
+                return CheckTransition::OpenWindow;
+            }
+        }
+        Ok(gateterm_updater::CheckOutcome::UpToDate { .. }) => {
+            tracker.latest_update = None;
+            if !tracker.checking {
+                tracker.summary = UpdateCheckSummary::UpToDate;
+            }
+        }
+        Err(_) => {}
+    }
+    CheckTransition::NoWindow
+}
+
+fn prepare_update_download(
+    tracker: &mut UpdateTracker,
+    update_view: &mut Option<crate::update_ui::UpdateView>,
+    expected_total: u64,
+) -> u64 {
+    tracker.download_generation = tracker.download_generation.wrapping_add(1);
+    if let Some(view) = update_view.as_mut() {
+        view.phase = crate::update_ui::UpdatePhase::Downloading(
+            gateterm_updater::DownloadProgress {
+                downloaded: 0,
+                total: expected_total,
+            },
+        );
+    }
+    tracker.download_generation
+}
+
+fn apply_download_progress(
+    tracker: &UpdateTracker,
+    update_view: &mut Option<crate::update_ui::UpdateView>,
+    event_generation: u64,
+    progress: gateterm_updater::DownloadProgress,
+) -> bool {
+    if event_generation != tracker.download_generation {
+        return false;
+    }
+    let Some(view) = update_view.as_mut() else {
+        return false;
+    };
+    if !matches!(view.phase, crate::update_ui::UpdatePhase::Downloading(_)) {
+        return false;
+    }
+    view.phase = crate::update_ui::UpdatePhase::Downloading(progress);
+    true
+}
+
+fn apply_update_staged<T>(
+    tracker: &UpdateTracker,
+    update_view: &mut Option<crate::update_ui::UpdateView>,
+    event_generation: u64,
+    result: Result<T, String>,
+) -> StagedTransition<T> {
+    if event_generation != tracker.download_generation {
+        return StagedTransition::Ignored;
+    }
+    let Some(view) = update_view.as_mut() else {
+        return StagedTransition::Ignored;
+    };
+    match result {
+        Ok(staged) => {
+            view.phase = crate::update_ui::UpdatePhase::Preparing;
+            StagedTransition::ReadyToApply(staged)
+        }
+        Err(message) => {
+            let fallback_url = view.update.as_ref().map(|u| u.release_url.clone());
+            view.phase = crate::update_ui::UpdatePhase::Error {
+                message,
+                fallback_url,
+            };
+            StagedTransition::Failed
+        }
+    }
+}
+
+fn cancel_update_state(
+    tracker: &mut UpdateTracker,
+    update_view: &mut Option<crate::update_ui::UpdateView>,
+) {
+    tracker.check_generation = tracker.check_generation.wrapping_add(1);
+    tracker.download_generation = tracker.download_generation.wrapping_add(1);
+    tracker.checking = false;
+    if tracker.summary == UpdateCheckSummary::Checking {
+        tracker.summary = match &tracker.latest_update {
+            Some(u) => UpdateCheckSummary::Available(u.version.clone()),
+            None => UpdateCheckSummary::NotChecked,
+        };
+    }
+    *update_view = None;
+}
+
+fn format_current_exe_error(locale: Locale, err: &std::io::Error) -> String {
+    tr!(
+        locale,
+        "无法定位当前可执行文件路径：{err}",
+        "Could not locate current executable path: {err}"
+    )
+}
+
+fn format_cache_dir_error(locale: Locale, err: &anyhow::Error) -> String {
+    tr!(
+        locale,
+        "无法定位更新缓存目录：{err:#}",
+        "Could not locate update cache directory: {err:#}"
+    )
+}
+
+fn format_download_error(locale: Locale, err: &gateterm_updater::DownloadError) -> String {
+    use gateterm_updater::DownloadError;
+    match err {
+        DownloadError::NotWritable { path, source } => tr!(
+            locale,
+            "当前安装目录不可写（{}）：{source}\n\n请点击下方按钮前往 GitHub 手动下载安装。",
+            "The installation directory is not writable ({}): {source}\n\nPlease download the update manually from GitHub.",
+            path.display()
+        ),
+        DownloadError::Cancelled => locale.text("已取消下载。", "Download cancelled.").to_owned(),
+        DownloadError::SizeMismatch { expected, actual } => tr!(
+            locale,
+            "安装包大小校验失败（预期 {expected} 字节，实际 {actual} 字节）。",
+            "Downloaded archive size mismatch (expected {expected} bytes, got {actual} bytes)."
+        ),
+        DownloadError::HashMismatch { .. } => locale
+            .text(
+                "安装包 SHA-256 校验失败，文件可能已损坏或被篡改。",
+                "Downloaded archive SHA-256 verification failed. The file may be corrupted.",
+            )
+            .to_owned(),
+        DownloadError::UnsafeArchivePath(entry) => tr!(
+            locale,
+            "更新包包含不安全路径：{entry}",
+            "Update archive contains an unsafe entry path: {entry}"
+        ),
+        DownloadError::BinaryNotFound(binary) => tr!(
+            locale,
+            "更新包中未找到可执行文件：{binary}",
+            "Expected executable not found in update archive: {binary}"
+        ),
+        DownloadError::Other(inner) => tr!(
+            locale,
+            "下载或解压更新失败：{inner:#}",
+            "Failed to download or extract update: {inner:#}"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1330,5 +2126,161 @@ mod tests {
             Some(9000)
         ));
         assert_eq!(agents.listen_port, Some(9000));
+    }
+
+    #[test]
+    fn stale_check_download_and_staged_events_after_cancel_are_ignored() {
+        let update = gateterm_updater::AvailableUpdate {
+            version: "1.0.4".into(),
+            tag: "release-v1.0.4".into(),
+            pub_date: "2026-11-27T08:00:00Z".into(),
+            release_url: "https://github.com/CyberTianzun/Gateterm/releases/tag/release-v1.0.4"
+                .into(),
+            notes: "Bug fixes".into(),
+            artifact: Some(gateterm_updater::TargetArtifact {
+                url: "https://github.com/CyberTianzun/Gateterm/releases/download/release-v1.0.4/app.zip"
+                    .into(),
+                sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+                size: 1024,
+                format: gateterm_updater::ArchiveFormat::Zip,
+                binary_path: "gateterm-desktop-web.exe".into(),
+            }),
+            can_self_apply: true,
+        };
+
+        let mut tracker = UpdateTracker::default();
+        let mut update_view: Option<crate::update_ui::UpdateView> = None;
+
+        // 1. Background non-startup and skipped checks must not open the window.
+        assert_eq!(
+            apply_update_checked(
+                &mut tracker,
+                &mut update_view,
+                0,
+                false,
+                false,
+                "1.0.3",
+                1,
+                Locale::En,
+                &Ok(gateterm_updater::CheckOutcome::UpdateAvailable {
+                    update: update.clone(),
+                    skipped: false,
+                }),
+            ),
+            CheckTransition::NoWindow
+        );
+        assert!(update_view.is_none());
+
+        assert_eq!(
+            apply_update_checked(
+                &mut tracker,
+                &mut update_view,
+                0,
+                false,
+                true,
+                "1.0.3",
+                1,
+                Locale::En,
+                &Ok(gateterm_updater::CheckOutcome::UpdateAvailable {
+                    update: update.clone(),
+                    skipped: true,
+                }),
+            ),
+            CheckTransition::NoWindow
+        );
+        assert!(update_view.is_none());
+
+        // Startup non-skipped check opens the update window when no check has run yet.
+        let mut startup_tracker = UpdateTracker::default();
+        let mut startup_view = None;
+        assert_eq!(
+            apply_update_checked(
+                &mut startup_tracker,
+                &mut startup_view,
+                0,
+                false,
+                true,
+                "1.0.3",
+                1,
+                Locale::En,
+                &Ok(gateterm_updater::CheckOutcome::UpdateAvailable {
+                    update: update.clone(),
+                    skipped: false,
+                }),
+            ),
+            CheckTransition::OpenWindow
+        );
+        assert!(startup_view.is_some());
+
+        // 2. Manual check starts with check_generation = 1; Cancel bumps it and closes view.
+        let check_gen =
+            prepare_manual_update_check(&mut tracker, &mut update_view, "1.0.3", 2).unwrap();
+        assert_eq!(check_gen, 1);
+        assert!(update_view.is_some());
+
+        cancel_update_state(&mut tracker, &mut update_view);
+        assert!(update_view.is_none());
+
+        // Late check event from check_gen=1 after Cancel is ignored and does not re-open window.
+        assert_eq!(
+            apply_update_checked(
+                &mut tracker,
+                &mut update_view,
+                check_gen,
+                true,
+                false,
+                "1.0.3",
+                2,
+                Locale::En,
+                &Ok(gateterm_updater::CheckOutcome::UpdateAvailable {
+                    update: update.clone(),
+                    skipped: false,
+                }),
+            ),
+            CheckTransition::Ignored
+        );
+        assert!(update_view.is_none());
+
+        // 3. Start fresh manual check -> Available -> Download -> Cancel -> stale progress & staged ignored.
+        let check_gen2 =
+            prepare_manual_update_check(&mut tracker, &mut update_view, "1.0.3", 2).unwrap();
+        assert_eq!(
+            apply_update_checked(
+                &mut tracker,
+                &mut update_view,
+                check_gen2,
+                true,
+                false,
+                "1.0.3",
+                2,
+                Locale::En,
+                &Ok(gateterm_updater::CheckOutcome::UpdateAvailable {
+                    update: update.clone(),
+                    skipped: false,
+                }),
+            ),
+            CheckTransition::RedrawWindow
+        );
+
+        let dl_gen = prepare_update_download(&mut tracker, &mut update_view, 1024);
+        assert!(dl_gen > 0);
+
+        cancel_update_state(&mut tracker, &mut update_view);
+        assert!(update_view.is_none());
+
+        assert!(!apply_download_progress(
+            &tracker,
+            &mut update_view,
+            dl_gen,
+            gateterm_updater::DownloadProgress {
+                downloaded: 512,
+                total: 1024,
+            },
+        ));
+        assert!(matches!(
+            apply_update_staged(&tracker, &mut update_view, dl_gen, Ok("staged-handle")),
+            StagedTransition::Ignored
+        ));
+        assert!(update_view.is_none());
     }
 }
