@@ -33,6 +33,7 @@ gateterm-protocol = { path = "../../crates/protocol" }
 gateterm-client-core = { path = "../../crates/client-core" }
 gateterm-server = { path = "../../crates/server" }
 gateterm-cloud-client = { path = "../../crates/cloud-client" }
+gateterm-updater = { path = "../../crates/updater" }
 
 # Terminal & Async
 alacritty_terminal = "0.25"
@@ -79,6 +80,7 @@ gateterm-protocol = { workspace = true }
 gateterm-client-core = { workspace = true }
 gateterm-server = { workspace = true }
 gateterm-cloud-client = { workspace = true }
+gateterm-updater = { workspace = true }
 alacritty_terminal = { workspace = true }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }

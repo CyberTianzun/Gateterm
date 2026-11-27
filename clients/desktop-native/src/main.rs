@@ -28,9 +28,26 @@ fn main() {
             std::process::exit(code);
         }
     }
+    if let Some(code) = gateterm_updater::apply::try_run_from_env() {
+        std::process::exit(code);
+    }
 
     let _ = gateterm_desktop_native::system::logs::init();
     tracing::info!("gateterm-desktop-native starting");
+
+    let (rollback_tx, rollback_rx) = tokio::sync::oneshot::channel::<String>();
+    std::thread::spawn(move || {
+        let Ok(current_exe) = std::env::current_exe() else {
+            return;
+        };
+        let Ok(cache_root) = gateterm_updater::updates_cache_dir() else {
+            return;
+        };
+        if let Some(err_msg) = gateterm_updater::cleanup_after_start(&current_exe, &cache_root) {
+            tracing::warn!(error = %err_msg, "Previous self-update failed and rolled back");
+            let _ = rollback_tx.send(err_msg);
+        }
+    });
 
     let app = gpui_platform::application()
         .with_assets(gateterm_desktop_native::ui::icons::GatetermAssets);
@@ -81,16 +98,25 @@ fn main() {
         };
 
         cx.spawn(async move |cx| {
+            let mut workbench_handle = None;
             cx.open_window(window_options, |window, cx| {
                 window.activate_window();
                 gateterm_desktop_native::system::window_ext::show_and_focus_window(window, cx);
                 let workbench = cx.new(|cx| GatetermWorkbench::new(window, cx));
+                workbench_handle = Some(workbench.clone());
                 cx.new(|cx| Root::new(workbench, window, cx))
             })
             .expect("Failed to open Gateterm Desktop window");
             let _ = cx.update(|cx| {
                 cx.activate(true);
             });
+            if let Some(workbench) = workbench_handle
+                && let Ok(err_msg) = rollback_rx.await
+            {
+                let _ = workbench.update(cx, |this, cx| {
+                    this.surface_rollback_notice(err_msg, cx);
+                });
+            }
         })
         .detach();
     });

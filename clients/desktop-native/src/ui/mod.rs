@@ -7,3 +7,4 @@ pub mod pane;
 pub mod pending_banner;
 pub mod server_dialog;
 pub mod settings_modal;
+pub mod update_modal;

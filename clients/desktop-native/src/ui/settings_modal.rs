@@ -15,10 +15,12 @@ use gpui_component::{
     h_flex,
     input::Input,
     scroll::ScrollableElement as _,
+    spinner::Spinner,
     v_flex,
 };
 
 use super::app::GatetermWorkbench;
+use super::update_modal::UpdateModalPhase;
 use crate::client::api::{AgentIntegrationStatus, CloudStatus};
 use crate::client::mcp::{McpServerStatus, build_mcp_presets, format_mcp_node_meta};
 use crate::i18n::{LanguagePref, Locale};
@@ -310,6 +312,7 @@ fn render_appearance_section(
 ) -> AnyElement {
     let part_theme = render_appearance_theme_and_font(workbench, cx);
     let part_system = render_appearance_system_tray(workbench, cx);
+    let part_updates = render_appearance_updates(workbench, cx);
     let part_config = render_appearance_config_summary(workbench, cx);
 
     v_flex()
@@ -320,7 +323,80 @@ fn render_appearance_section(
         .child(div().w_full().h(px(1.0)).bg(cx.theme().border))
         .child(part_system)
         .child(div().w_full().h(px(1.0)).bg(cx.theme().border))
+        .child(part_updates)
+        .child(div().w_full().h(px(1.0)).bg(cx.theme().border))
         .child(part_config)
+        .into_any_element()
+}
+
+#[inline(never)]
+fn render_appearance_updates(
+    workbench: &GatetermWorkbench,
+    cx: &mut Context<GatetermWorkbench>,
+) -> AnyElement {
+    let locale = workbench.locale;
+    let current_version = env!("CARGO_PKG_VERSION");
+    let checking = matches!(workbench.update_modal.phase, UpdateModalPhase::Checking);
+    let status_text = workbench.update_modal.status_line(current_version, locale);
+
+    v_flex()
+        .w_full()
+        .gap_2p5()
+        .child(
+            div()
+                .text_xs()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(cx.theme().foreground)
+                .child(locale.t("版本与更新", "Version & Updates")),
+        )
+        .child(
+            h_flex()
+                .w_full()
+                .p_3()
+                .gap_3()
+                .items_center()
+                .justify_between()
+                .rounded(px(6.0))
+                .bg(cx.theme().secondary.opacity(0.45))
+                .border_1()
+                .border_color(cx.theme().border)
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(cx.theme().foreground)
+                                .child(SharedString::from(format!("Gateterm v{current_version}"))),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(SharedString::from(status_text)),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap_2()
+                        .children(checking.then(|| Spinner::new().xsmall().color(cx.theme().primary)))
+                        .child(
+                            Button::new("settings-check-updates")
+                                .small()
+                                .secondary()
+                                .icon(IconName::Redo)
+                                .disabled(checking)
+                                .label(locale.t("检查更新…", "Check for Updates…"))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.trigger_manual_update_check(cx);
+                                })),
+                        ),
+                ),
+        )
         .into_any_element()
 }
 

@@ -16,25 +16,28 @@ pub enum TrayAction {
     OpenWeb,
     CopyUrl,
     OpenSettings,
+    CheckForUpdates,
     ViewLogs,
     Quit,
 }
 
-const ACTIONS: [TrayAction; 6] = [
+const ACTIONS: [TrayAction; 7] = [
     TrayAction::ShowWindow,
     TrayAction::OpenWeb,
     TrayAction::CopyUrl,
     TrayAction::OpenSettings,
+    TrayAction::CheckForUpdates,
     TrayAction::ViewLogs,
     TrayAction::Quit,
 ];
 
-fn labels(locale: Locale) -> [&'static str; 6] {
+fn labels(locale: Locale) -> [&'static str; 7] {
     [
         locale.t("显示主窗口", "Show main window"),
         locale.t("打开 Web 客户端", "Open web client"),
         locale.t("复制访问链接", "Copy access link"),
         locale.t("设置…", "Settings…"),
+        locale.t("检查更新…", "Check for Updates…"),
         locale.t("查看日志…", "View logs…"),
         locale.t("退出", "Quit"),
     ]
@@ -76,7 +79,7 @@ mod imp {
     pub struct SystemTray {
         icon: TrayIcon,
         status: MenuItem,
-        items: [MenuItem; 6],
+        items: [MenuItem; 7],
     }
 
     fn decode_icon() -> Result<Icon> {
@@ -97,7 +100,15 @@ mod imp {
                 .map(|item| item.id().clone())
                 .zip(ACTIONS)
                 .collect();
-            let [show_win, open_web, copy_url, settings, view_logs, quit] = &items;
+            let [
+                show_win,
+                open_web,
+                copy_url,
+                settings,
+                check_updates,
+                view_logs,
+                quit,
+            ] = &items;
 
             let menu = Menu::new();
             menu.append_items(&[
@@ -108,6 +119,7 @@ mod imp {
                 copy_url,
                 &PredefinedMenuItem::separator(),
                 settings,
+                check_updates,
                 view_logs,
                 &PredefinedMenuItem::separator(),
                 quit,
@@ -207,7 +219,7 @@ mod imp {
         tx: mpsc::UnboundedSender<TrayAction>,
         icons: Vec<ksni::Icon>,
         status: String,
-        labels: [&'static str; 6],
+        labels: [&'static str; 7],
     }
 
     impl ksni::Tray for SniTray {
@@ -262,8 +274,9 @@ mod imp {
                 ksni::MenuItem::Separator,
                 item(3),
                 item(4),
-                ksni::MenuItem::Separator,
                 item(5),
+                ksni::MenuItem::Separator,
+                item(6),
             ]
         }
     }
@@ -314,7 +327,19 @@ mod tests {
 
     #[test]
     fn every_menu_label_has_an_action() {
+        assert_eq!(ACTIONS.len(), 7);
         assert_eq!(labels(Locale::En).len(), ACTIONS.len());
+        assert_eq!(labels(Locale::ZhCn).len(), ACTIONS.len());
+        assert_eq!(ACTIONS[4], TrayAction::CheckForUpdates);
+        assert_eq!(labels(Locale::En)[4], "Check for Updates…");
+        assert_eq!(labels(Locale::ZhCn)[4], "检查更新…");
+        for label in labels(Locale::En) {
+            assert!(!label.is_empty());
+            assert!(
+                !label.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
+                "English tray label leaked Chinese: {label}"
+            );
+        }
     }
 
     #[cfg(target_os = "linux")]

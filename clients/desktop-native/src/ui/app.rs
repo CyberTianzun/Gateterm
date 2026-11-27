@@ -34,6 +34,10 @@ use super::pane::{SplitAxis, TabViewMode, WorkspaceTab};
 use super::pending_banner::render_pending_banners;
 use super::server_dialog::{ServerDialogState, render_server_dialog};
 use super::settings_modal::{SettingsModalState, render_settings_modal};
+use super::update_modal::{
+    DEFAULT_RELEASES_URL, StagedAction, UpdateModalPhase, UpdateModalState,
+    format_download_error, render_update_modal,
+};
 use crate::client::api::{
     AgentSessionInfo, ChatWindow, GateHttpClient, LauncherItem, PendingRequestInfo,
 };
@@ -140,6 +144,9 @@ pub struct GatetermWorkbench {
     pub history_modal: HistoryModalState,
     pub server_dialog: ServerDialogState,
     pub settings_modal: SettingsModalState,
+    pub update_modal: UpdateModalState,
+    pub update_download_cancel: Option<tokio::sync::watch::Sender<bool>>,
+    pub update_daily_task: Option<tokio::task::JoinHandle<()>>,
 
     pub new_session_filter_input: Entity<InputState>,
     pub terminal_search_input: Entity<InputState>,
@@ -417,6 +424,10 @@ impl GatetermWorkbench {
                 false
             } else {
                 entity.update(cx, |wb, cx| {
+                    wb.cancel_active_update_download();
+                    if let Some(daily) = wb.update_daily_task.take() {
+                        daily.abort();
+                    }
                     wb.shutdown_all_connections(cx);
                 });
                 true
@@ -444,6 +455,9 @@ impl GatetermWorkbench {
             history_modal: HistoryModalState::default(),
             server_dialog: ServerDialogState::default(),
             settings_modal,
+            update_modal: UpdateModalState::default(),
+            update_download_cancel: None,
+            update_daily_task: None,
             new_session_filter_input,
             terminal_search_input,
             rename_input,
@@ -472,7 +486,402 @@ impl GatetermWorkbench {
         };
 
         workbench.initialize_connections(cx);
+        workbench.start_update_daily_checks(cx);
         workbench
+    }
+
+    fn sync_server_update_status(outcome: &gateterm_updater::CheckOutcome) {
+        let release_update = match outcome {
+            gateterm_updater::CheckOutcome::UpdateAvailable { update, .. } => {
+                Some(gateterm_server::update::ReleaseUpdate {
+                    version: update.version.clone(),
+                    url: update.release_url.clone(),
+                })
+            }
+            gateterm_updater::CheckOutcome::UpToDate { .. } => None,
+        };
+        gateterm_server::update::record_external_status(env!("CARGO_PKG_VERSION"), release_update);
+    }
+
+    fn start_update_daily_checks(&mut self, cx: &mut Context<Self>) {
+        let cfg = match gateterm_updater::CheckConfig::for_app(
+            gateterm_updater::AppKind::DesktopNative,
+            env!("CARGO_PKG_VERSION"),
+        ) {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                tracing::warn!(error = %format!("{err:#}"), "Failed to build updater config");
+                return;
+            }
+        };
+
+        let (tx, mut rx) =
+            mpsc::unbounded_channel::<(bool, Result<gateterm_updater::CheckOutcome, String>)>();
+        let handle = Tokio::handle(cx);
+        let _guard = handle.enter();
+        self.update_daily_task = Some(gateterm_updater::start_daily_checks(
+            cfg,
+            move |is_startup, result| {
+                if let Err(err) = &result {
+                    tracing::debug!(error = %format!("{err:#}"), is_startup, "Background update check failed");
+                }
+                let _ = tx.send((is_startup, result.map_err(|e| format!("{e:#}"))));
+            },
+        ));
+
+        cx.spawn(async move |this, cx| {
+            while let Some((is_startup, result)) = rx.recv().await {
+                let Ok(()) = this.update(cx, |this, cx| {
+                    if let Ok(outcome) = &result {
+                        Self::sync_server_update_status(outcome);
+                    }
+                    this.update_modal.apply_check_result(
+                        0,
+                        false,
+                        is_startup,
+                        this.window_hidden_to_tray,
+                        this.locale,
+                        result,
+                    );
+                    cx.notify();
+                }) else {
+                    break;
+                };
+            }
+        })
+        .detach();
+    }
+
+    pub fn surface_rollback_notice(&mut self, err_msg: String, cx: &mut Context<Self>) {
+        if self.update_modal.is_downloading_or_preparing() {
+            return;
+        }
+        let message = match self.locale {
+            Locale::ZhCn => format!("上次应用更新未能完成，已自动恢复为当前版本。\n\n{err_msg}"),
+            Locale::En => format!(
+                "The previous update could not be applied and was rolled back to this version.\n\n{err_msg}"
+            ),
+        };
+        let fallback_url = self
+            .update_modal
+            .update
+            .as_ref()
+            .map(|u| u.release_url.clone())
+            .or_else(|| Some(DEFAULT_RELEASES_URL.to_owned()));
+        self.update_modal.set_error(message, fallback_url);
+        if self.window_hidden_to_tray {
+            self.update_modal.pending_on_show = true;
+        } else {
+            self.update_modal.open = true;
+        }
+        cx.notify();
+    }
+
+    fn cancel_active_update_download(&mut self) {
+        if let Some(tx) = self.update_download_cancel.take() {
+            let _ = tx.send(true);
+        }
+    }
+
+    pub fn trigger_manual_update_check(&mut self, cx: &mut Context<Self>) {
+        if self.quitting {
+            return;
+        }
+        let Some(generation) = self.update_modal.begin_manual_check() else {
+            cx.notify();
+            return;
+        };
+        cx.notify();
+
+        let cfg = match gateterm_updater::CheckConfig::for_app(
+            gateterm_updater::AppKind::DesktopNative,
+            env!("CARGO_PKG_VERSION"),
+        ) {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                self.update_modal.apply_check_result(
+                    generation,
+                    true,
+                    false,
+                    self.window_hidden_to_tray,
+                    self.locale,
+                    Err(format!("{err:#}")),
+                );
+                cx.notify();
+                return;
+            }
+        };
+
+        let task = Tokio::spawn_result(cx, async move {
+            Ok(gateterm_updater::check_now(&cfg, true)
+                .await
+                .map_err(|e| format!("{e:#}")))
+        });
+
+        cx.spawn(async move |this, cx| {
+            let result = match task.await {
+                Ok(res) => res,
+                Err(err) => Err(format!("{err:#}")),
+            };
+            let _ = this.update(cx, |this, cx| {
+                if let Ok(outcome) = &result {
+                    Self::sync_server_update_status(outcome);
+                }
+                this.update_modal.apply_check_result(
+                    generation,
+                    true,
+                    false,
+                    this.window_hidden_to_tray,
+                    this.locale,
+                    result,
+                );
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn start_update_download_and_apply(&mut self, cx: &mut Context<Self>) {
+        if self.quitting || self.update_download_cancel.is_some() {
+            return;
+        }
+        let Some(update) = self.update_modal.update.clone() else {
+            return;
+        };
+        if !update.can_self_apply {
+            self.open_update_release_page(update.release_url, cx);
+            return;
+        }
+        let Some(artifact) = update.artifact.clone() else {
+            return;
+        };
+        let Some(generation) = self.update_modal.begin_download(artifact.size) else {
+            return;
+        };
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        self.update_download_cancel = Some(cancel_tx);
+        cx.notify();
+
+        let (prog_tx, mut prog_rx) =
+            mpsc::unbounded_channel::<gateterm_updater::DownloadProgress>();
+        cx.spawn(async move |this, cx| {
+            while let Some(progress) = prog_rx.recv().await {
+                let Ok(()) = this.update(cx, |this, cx| {
+                    if this
+                        .update_modal
+                        .apply_download_progress(generation, progress)
+                    {
+                        cx.notify();
+                    }
+                }) else {
+                    break;
+                };
+            }
+        })
+        .detach();
+
+        let locale = self.locale;
+        let version = update.version.clone();
+        let task = Tokio::spawn_result(cx, async move {
+            let preflight = tokio::task::spawn_blocking(
+                move || -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+                    let current_exe = std::env::current_exe().map_err(|e| match locale {
+                        Locale::ZhCn => format!("无法定位当前可执行文件路径：{e}"),
+                        Locale::En => format!("Could not locate current executable path: {e}"),
+                    })?;
+                    let canonical_target = gateterm_updater::preflight_writable(&current_exe)
+                        .map_err(|e| format_download_error(locale, &e))?;
+                    let cache_root = gateterm_updater::updates_cache_dir().map_err(|e| match locale {
+                        Locale::ZhCn => format!("无法定位更新缓存目录：{e:#}"),
+                        Locale::En => format!("Could not locate update cache directory: {e:#}"),
+                    })?;
+                    Ok((canonical_target, cache_root))
+                },
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("Update preflight task panicked: {e}"))?;
+
+            let (canonical_target, cache_root) = match preflight {
+                Ok(paths) => paths,
+                Err(msg) => return Ok(Err(msg)),
+            };
+
+            let client = match gateterm_updater::build_http_client(env!("CARGO_PKG_VERSION"), false)
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    return Ok(Err(match locale {
+                        Locale::ZhCn => format!("无法初始化下载客户端：{e:#}"),
+                        Locale::En => format!("Could not initialize HTTP client: {e:#}"),
+                    }));
+                }
+            };
+
+            let last_sent = std::sync::atomic::AtomicU64::new(0);
+            let staged_res = gateterm_updater::download_and_stage(
+                &client,
+                gateterm_updater::AppKind::DesktopNative,
+                &version,
+                &artifact,
+                &cache_root,
+                cancel_rx,
+                move |progress| {
+                    let prev = last_sent.load(std::sync::atomic::Ordering::Relaxed);
+                    if progress.downloaded == 0
+                        || progress.downloaded >= progress.total
+                        || progress.downloaded.saturating_sub(prev) >= 64 * 1024
+                    {
+                        last_sent.store(progress.downloaded, std::sync::atomic::Ordering::Relaxed);
+                        let _ = prog_tx.send(progress);
+                    }
+                },
+            )
+            .await;
+
+            let staged = match staged_res {
+                Ok(s) => s,
+                Err(err) => return Ok(Err(format_download_error(locale, &err))),
+            };
+
+            let target_check = canonical_target.clone();
+            let post_preflight = tokio::task::spawn_blocking(move || {
+                gateterm_updater::preflight_writable(&target_check)
+                    .map_err(|e| format_download_error(locale, &e))
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("Update post-preflight task panicked: {e}"))?;
+
+            if let Err(msg) = post_preflight {
+                let staging_dir = staged.staging_dir.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    let _ = std::fs::remove_dir_all(&staging_dir);
+                })
+                .await;
+                return Ok(Err(msg));
+            }
+
+            Ok(Ok((staged, canonical_target, cache_root)))
+        });
+
+        cx.spawn(async move |this, cx| {
+            let result = match task.await {
+                Ok(res) => res,
+                Err(err) => Err(format!("{err:#}")),
+            };
+            let _ = this.update(cx, |this, cx| {
+                if generation != this.update_modal.download_generation || !this.update_modal.open {
+                    if let Ok((staged, _, _)) = result {
+                        std::thread::spawn(move || {
+                            let _ = std::fs::remove_dir_all(&staged.staging_dir);
+                        });
+                    }
+                    return;
+                }
+                this.update_download_cancel = None;
+                match this.update_modal.apply_staged_result(generation, result) {
+                    StagedAction::Ignored => {}
+                    StagedAction::Failed => {
+                        cx.notify();
+                    }
+                    StagedAction::ReadyToApply((staged, canonical_target, cache_root)) => {
+                        this.quitting = true;
+                        if let Some(daily) = this.update_daily_task.take() {
+                            daily.abort();
+                        }
+                        this.shutdown_all_connections(cx);
+                        match gateterm_updater::spawn_apply_helper(
+                            &staged,
+                            &canonical_target,
+                            &cache_root,
+                        ) {
+                            Ok(()) => {
+                                this.update_modal.open = false;
+                                cx.quit();
+                            }
+                            Err(err) => {
+                                let reason = format!("{err:#}");
+                                tracing::error!(error = %reason, "Failed to spawn self-update apply helper");
+                                let staging_dir = staged.staging_dir;
+                                std::thread::spawn(move || {
+                                    let _ = std::fs::remove_dir_all(&staging_dir);
+                                });
+                                let message = match this.locale {
+                                    Locale::ZhCn => format!(
+                                        "本地服务已停止，但无法启动更新程序。\n\n{reason}\n\n请前往 GitHub Release 页面手动下载安装，或关闭后重新启动 Gateterm。"
+                                    ),
+                                    Locale::En => format!(
+                                        "Local services were stopped, but the updater helper could not be started.\n\n{reason}\n\nPlease download the release from GitHub or close and restart Gateterm."
+                                    ),
+                                };
+                                let fallback_url = this
+                                    .update_modal
+                                    .update
+                                    .as_ref()
+                                    .map(|u| u.release_url.clone())
+                                    .or_else(|| Some(DEFAULT_RELEASES_URL.to_owned()));
+                                this.update_modal.set_error(message, fallback_url);
+                                this.update_modal.open = true;
+                                cx.notify();
+                            }
+                        }
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    pub fn skip_current_update_version(&mut self, version: String, cx: &mut Context<Self>) {
+        Tokio::spawn(cx, async move {
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Ok(path) = gateterm_updater::UpdateState::default_path(
+                    gateterm_updater::AppKind::DesktopNative,
+                ) {
+                    let mut state = gateterm_updater::UpdateState::load(&path);
+                    state.skipped_version = Some(version);
+                    if let Err(err) = state.save(&path) {
+                        tracing::warn!(error = %format!("{err:#}"), "Failed to persist skipped update version");
+                    }
+                }
+            })
+            .await;
+        })
+        .detach();
+        self.cancel_or_close_update_modal(cx);
+    }
+
+    pub fn open_update_release_page(&mut self, url: String, cx: &mut Context<Self>) {
+        match open::that_detached(&url) {
+            Ok(()) => {
+                if !self.quitting {
+                    self.cancel_or_close_update_modal(cx);
+                }
+            }
+            Err(err) => {
+                let message = match self.locale {
+                    Locale::ZhCn => format!("无法打开下载页面，请手动在浏览器访问：\n\n{url}\n\n{err}"),
+                    Locale::En => format!(
+                        "Could not open download page. Please open this URL in your browser:\n\n{url}\n\n{err}"
+                    ),
+                };
+                self.update_modal.set_error(message, Some(url));
+                cx.notify();
+            }
+        }
+    }
+
+    pub fn cancel_or_close_update_modal(&mut self, cx: &mut Context<Self>) {
+        if self.quitting {
+            cx.quit();
+            return;
+        }
+        if matches!(self.update_modal.phase, UpdateModalPhase::Preparing) {
+            return;
+        }
+        self.cancel_active_update_download();
+        self.update_modal.cancel();
+        self.pending_focus_terminal = true;
+        cx.notify();
     }
 
     fn initialize_connections(&mut self, cx: &mut Context<Self>) {
@@ -503,6 +912,9 @@ impl GatetermWorkbench {
             TrayAction::ShowWindow => {
                 crate::system::window_ext::show_and_focus_window(window, cx);
                 self.restore_session_after_show(cx);
+                if self.update_modal.on_show_window() {
+                    cx.notify();
+                }
             }
             TrayAction::OpenWeb => {
                 let url = self
@@ -537,10 +949,19 @@ impl GatetermWorkbench {
                 self.restore_session_after_show(cx);
                 self.open_settings_modal(window, cx);
             }
+            TrayAction::CheckForUpdates => {
+                crate::system::window_ext::show_and_focus_window(window, cx);
+                self.restore_session_after_show(cx);
+                self.trigger_manual_update_check(cx);
+            }
             TrayAction::ViewLogs => {
                 self.open_log_file();
             }
             TrayAction::Quit => {
+                self.cancel_active_update_download();
+                if let Some(daily) = self.update_daily_task.take() {
+                    daily.abort();
+                }
                 self.quitting = true;
                 self.shutdown_all_connections(cx);
                 cx.quit();
@@ -3619,6 +4040,7 @@ impl Render for GatetermWorkbench {
             && !self.new_session_modal.open
             && !self.history_modal.open
             && !self.server_dialog.open
+            && !self.update_modal.open
             && !self.terminal_search_open
         {
             if let Some(tab) = self.tabs.get(self.active_tab_idx) {
@@ -3704,6 +4126,7 @@ impl Render for GatetermWorkbench {
         let history_modal = render_history_modal(self, cx);
         let server_dialog = render_server_dialog(self, cx);
         let settings_modal = render_settings_modal(self, cx);
+        let update_modal = render_update_modal(self, cx);
 
         let main_workspace = v_flex()
             .size_full()
@@ -3823,6 +4246,7 @@ impl Render for GatetermWorkbench {
             .children(history_modal)
             .children(server_dialog)
             .children(settings_modal)
+            .children(update_modal)
     }
 }
 
