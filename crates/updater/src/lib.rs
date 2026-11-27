@@ -1,9 +1,14 @@
 //! Shared Sparkle-style desktop self-updater core for Gateterm.
 
+pub mod check;
 pub mod manifest;
 pub mod state;
 pub mod verify;
 
+pub use check::{
+    CHECK_INTERVAL, CheckConfig, CheckOutcome, DEFAULT_MANIFEST_URL, DEFAULT_SIGNATURE_URL,
+    STARTUP_DELAY, build_http_client, check_now, start_daily_checks,
+};
 pub use manifest::{
     ArchiveFormat, AvailableUpdate, Manifest, TargetArtifact, validate_and_select,
     validate_manifest,

@@ -43,8 +43,22 @@ impl UpdateMonitor {
     fn record_success(&self, update: Option<ReleaseUpdate>) {
         let mut status = self.status.write().unwrap();
         status.update = update;
-        status.checked_at = Some(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs());
+        status.checked_at = Some(now_unix_secs());
     }
+
+    fn record_external(&self, current_version: &str, update: Option<ReleaseUpdate>) {
+        let mut status = self.status.write().unwrap();
+        status.current_version = current_version.into();
+        status.update = update;
+        status.checked_at = Some(now_unix_secs());
+    }
+}
+
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn monitor() -> &'static Arc<UpdateMonitor> {
@@ -54,6 +68,12 @@ fn monitor() -> &'static Arc<UpdateMonitor> {
 
 /// Memory-only snapshot: opening or refreshing a web page never calls GitHub.
 pub fn cached_status() -> UpdateStatus { monitor().snapshot() }
+
+/// Records an update-check snapshot performed externally (e.g. by `gateterm-updater`)
+/// so `/api/update` serves fresh status without making duplicate GitHub requests.
+pub fn record_external_status(current_version: &str, update: Option<ReleaseUpdate>) {
+    monitor().record_external(current_version, update);
+}
 
 /// One checker per process, independent of HTTP restarts and connected web pages.
 /// The existing startup notification is called only after the first attempt;
@@ -368,5 +388,26 @@ mod tests {
             .build()
             .unwrap();
         assert!(check_latest_from(&client, &url, "0.2.2").await.is_err());
+    }
+
+    #[test]
+    fn record_external_status_updates_cached_snapshot() {
+        record_external_status(
+            "1.0.3",
+            Some(ReleaseUpdate {
+                version: "1.0.4".into(),
+                url: "https://github.com/CyberTianzun/Gateterm/releases/tag/release-v1.0.4".into(),
+            }),
+        );
+        let snap = cached_status();
+        assert_eq!(snap.current_version, "1.0.3");
+        assert_eq!(snap.update.unwrap().version, "1.0.4");
+        assert!(snap.checked_at.is_some());
+
+        record_external_status("1.0.4", None);
+        let cleared = cached_status();
+        assert_eq!(cleared.current_version, "1.0.4");
+        assert!(cleared.update.is_none());
+        assert!(cleared.checked_at.is_some());
     }
 }
