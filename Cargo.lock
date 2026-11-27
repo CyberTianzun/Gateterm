@@ -1716,6 +1716,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64",
+ "clap",
  "directories",
  "ed25519-dalek",
  "flate2",
