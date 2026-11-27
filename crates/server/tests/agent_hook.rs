@@ -274,3 +274,117 @@ async fn a_later_event_without_the_path_does_not_clear_it() {
     assert_eq!(v["sessions"][0]["transcript"], "/tmp/t.jsonl", "后续事件把已知路径抹掉了");
     assert_eq!(v["sessions"][0]["detail"], "Bash");
 }
+
+/// `PostToolUse:Read` 会把完整文件内容或 base64 图片塞进 `tool_response`,
+/// 很容易超过 512 KiB。服务端必须正常解析其余元数据、更新会话状态并返回 200,
+/// 不能由 body limit 拦成 HTTP 413。
+#[tokio::test]
+async fn large_post_tool_use_updates_state_instead_of_413() {
+    let addr = server().await;
+    let big_response = "a".repeat(1024 * 1024);
+    let body = format!(
+        r#"{{"session_id":"s-big","tool_name":"Read","tool_input":{{"file_path":"/work/big.png"}},"tool_response":"{big_response}","cwd":"/work/repo","transcript_path":"/tmp/big.jsonl"}}"#
+    );
+    let r = post_hook(
+        addr,
+        "/hook/claude-code/post-tool-use",
+        Some(hook_token()),
+        Some("7"),
+        &body,
+    )
+    .await;
+    assert_eq!(r.status(), 200, "超过 512 KiB 的 PostToolUse 不能返回 413");
+
+    let v = agent_sessions(addr, "tok").await;
+    let s = &v["sessions"][0];
+    assert_eq!(s["agent_session_id"], "s-big");
+    assert_eq!(s["state"], "working");
+    assert_eq!(s["detail"], "Read");
+    assert_eq!(s["cwd"], "/work/repo");
+    assert_eq!(s["transcript"], "/tmp/big.jsonl");
+}
+
+/// 非托管会话(没有 hook token)触发的超大 `PostToolUse` 同样不能回 413 ——
+/// 必须先鉴权、排空 body、安静回 200 且不留状态。
+#[tokio::test]
+async fn large_unauthenticated_hook_is_quietly_ignored_instead_of_413() {
+    let addr = server().await;
+    let big_response = "b".repeat(1024 * 1024);
+    let body = format!(r#"{{"session_id":"s-ext","tool_name":"Read","tool_response":"{big_response}"}}"#);
+    let r = post_hook(addr, "/hook/claude-code/post-tool-use", None, None, &body).await;
+    assert_quietly_ignored(addr, r).await;
+}
+
+/// 即使 payload 超出服务端内存解析上限(16 MiB),也必须排空连接并安静回 200 `{}`,
+/// 绝不能回 413 或直接断连把报错打到 agent TUI 上。
+#[tokio::test]
+async fn oversized_hook_payload_beyond_parse_cap_is_ignored_not_413() {
+    let addr = server().await;
+    let huge = "c".repeat(17 * 1024 * 1024);
+    let body = format!(r#"{{"session_id":"s-huge","tool_name":"Read","tool_response":"{huge}"}}"#);
+    let r = post_hook(
+        addr,
+        "/hook/claude-code/post-tool-use",
+        Some(hook_token()),
+        Some("7"),
+        &body,
+    )
+    .await;
+    assert_quietly_ignored(addr, r).await;
+}
+
+/// chunked 传输(无 Content-Length)下超过解析上限时,同样必须排空并回 200 `{}`。
+#[tokio::test]
+async fn oversized_chunked_hook_payload_is_ignored_not_413() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let addr = server().await;
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let head = format!(
+        "POST /hook/claude-code/post-tool-use HTTP/1.1\r\n\
+         Host: {addr}\r\n\
+         Authorization: Bearer {}\r\n\
+         X-Gateterm-Session: 7\r\n\
+         Content-Type: application/json\r\n\
+         Transfer-Encoding: chunked\r\n\
+         Connection: close\r\n\r\n",
+        hook_token(),
+    );
+    stream.write_all(head.as_bytes()).await.unwrap();
+
+    let prefix = br#"{"session_id":"s-chunked","tool_response":""#;
+    stream
+        .write_all(format!("{:x}\r\n", prefix.len()).as_bytes())
+        .await
+        .unwrap();
+    stream.write_all(prefix).await.unwrap();
+    stream.write_all(b"\r\n").await.unwrap();
+
+    let chunk = vec![b'z'; 1024 * 1024];
+    let chunk_head = format!("{:x}\r\n", chunk.len());
+    for _ in 0..17 {
+        stream.write_all(chunk_head.as_bytes()).await.unwrap();
+        stream.write_all(&chunk).await.unwrap();
+        stream.write_all(b"\r\n").await.unwrap();
+    }
+
+    let suffix = br#""}"#;
+    stream
+        .write_all(format!("{:x}\r\n", suffix.len()).as_bytes())
+        .await
+        .unwrap();
+    stream.write_all(suffix).await.unwrap();
+    stream.write_all(b"\r\n0\r\n\r\n").await.unwrap();
+    stream.flush().await.unwrap();
+
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).await.unwrap();
+    let resp = String::from_utf8_lossy(&raw);
+    assert!(
+        resp.starts_with("HTTP/1.1 200 OK\r\n"),
+        "expected HTTP 200 OK for oversized chunked hook, got: {}",
+        resp.lines().next().unwrap_or("")
+    );
+    let v = agent_sessions(addr, "tok").await;
+    assert!(v["sessions"].as_array().unwrap().is_empty());
+}

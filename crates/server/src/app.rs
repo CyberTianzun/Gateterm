@@ -81,8 +81,9 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/hook/{agent}/{event}",
             post(crate::agent::routes::hook)
-                // hook payload 里有 tool_input(命令原文、文件路径),给它一个明确上界
-                .layer(axum::extract::DefaultBodyLimit::max(512 * 1024)),
+                // hook 自行处理 body 上限与排空:PostToolUse:Read 等事件会携带完整文件内容/图片,
+                // 绝不能由 axum 提前拦成 HTTP 413 —— agent 会把非 2xx 当 hook 失败打给用户。
+                .layer(axum::extract::DefaultBodyLimit::disable()),
         )
         .fallback(crate::assets::static_handler)
         .with_state(state)

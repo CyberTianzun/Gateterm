@@ -24,9 +24,11 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-/// stdin 的上界。`tool_input` 可能带很长的命令原文,但 512 KiB 之外的东西对决策没有
-/// 帮助,超了就当读不到 —— 与服务端 `/hook/*` 的 body 上限一致。
-const MAX_STDIN: usize = 512 * 1024;
+/// stdin 的上界,与服务端 `/hook/*` 的 body 上限保持一致。
+/// `PostToolUse` 可能带大文件内容或工具输出;超限时丢弃缓冲并继续排空 stdin 后静默退出 0,
+/// 避免发出半截 JSON 或提前关闭管道让父进程/PowerShell 包装器触发 broken pipe。
+const MAX_STDIN: usize = super::routes::MAX_HOOK_BODY_BYTES;
+const MAX_STDIN_DRAIN: usize = super::routes::MAX_HOOK_DRAIN_BYTES;
 
 /// 决策类(阻塞式)hook 那头最长等 600 秒,我们比它短一点收手,好让「无决定」由我们写出来。
 const BLOCKING_READ_TIMEOUT: Duration = Duration::from_secs(590);
@@ -175,6 +177,42 @@ pub(crate) fn hook_target_meta(url: &str) -> HookTargetMeta {
     }
 }
 
+/// 读取至多 `max_bytes` 字节;超出时立刻释放缓冲并在 O(1) 内存下排空剩余流
+/// (上限 `max_drain_bytes`),返回 `Ok(None)` 让调用方静默回落而不发半截 JSON。
+fn read_stdin_bounded<R: Read>(
+    mut reader: R,
+    max_bytes: usize,
+    max_drain_bytes: usize,
+) -> std::io::Result<Option<Vec<u8>>> {
+    let mut body = Vec::new();
+    let mut chunk = [0u8; 8192];
+    let mut overflowed = false;
+    let mut drained = 0usize;
+    loop {
+        let n = reader.read(&mut chunk)?;
+        if n == 0 {
+            return Ok(if overflowed { None } else { Some(body) });
+        }
+        if overflowed {
+            drained = drained.saturating_add(n);
+            if drained >= max_drain_bytes {
+                return Ok(None);
+            }
+            continue;
+        }
+        if body.len().saturating_add(n) > max_bytes {
+            drained = body.len().saturating_add(n);
+            body = Vec::new();
+            overflowed = true;
+            if drained >= max_drain_bytes {
+                return Ok(None);
+            }
+            continue;
+        }
+        body.extend_from_slice(&chunk[..n]);
+    }
+}
+
 /// 返回进程退出码。永远是 0 —— 见模块文档第 2 条。
 pub fn run(url: &str) -> i32 {
     let meta = hook_target_meta(url);
@@ -194,12 +232,11 @@ pub fn run(url: &str) -> i32 {
 
     let (session, token, body) = match (env_session, env_token) {
         (Some(session), Some(token)) => {
-            let mut body = Vec::new();
-            let mut stdin = std::io::stdin().take(MAX_STDIN as u64);
-            if stdin.read_to_end(&mut body).is_err() {
+            let Ok(Some(body)) = read_stdin_bounded(std::io::stdin(), MAX_STDIN, MAX_STDIN_DRAIN)
+            else {
                 emit_fallback();
                 return 0;
-            }
+            };
             (session, token, body)
         }
         (env_session, env_token) => {
@@ -210,9 +247,12 @@ pub fn run(url: &str) -> i32 {
                 emit_fallback();
                 return 0;
             }
-            let mut body = Vec::new();
-            let mut stdin = std::io::stdin().take(MAX_STDIN as u64);
-            if stdin.read_to_end(&mut body).is_err() || body.is_empty() {
+            let Ok(Some(body)) = read_stdin_bounded(std::io::stdin(), MAX_STDIN, MAX_STDIN_DRAIN)
+            else {
+                emit_fallback();
+                return 0;
+            };
+            if body.is_empty() {
                 emit_fallback();
                 return 0;
             }
@@ -409,5 +449,28 @@ mod tests {
             elapsed < Duration::from_secs(2),
             "non-blocking hook should fail open in <2s, took {elapsed:?}"
         );
+    }
+
+    #[test]
+    fn max_stdin_matches_server_hook_body_limit() {
+        assert_eq!(MAX_STDIN, super::super::routes::MAX_HOOK_BODY_BYTES);
+    }
+
+    #[test]
+    fn read_stdin_bounded_buffers_within_limit_and_drains_on_overflow() {
+        let within = vec![b'a'; 1024];
+        let mut cur = std::io::Cursor::new(within.clone());
+        assert_eq!(read_stdin_bounded(&mut cur, 1024, 4096).unwrap(), Some(within));
+
+        let over = vec![b'b'; 20_000];
+        let mut cur = std::io::Cursor::new(over);
+        assert_eq!(read_stdin_bounded(&mut cur, 1024, 32_768).unwrap(), None);
+        assert_eq!(cur.position(), 20_000, "overflowed stdin must be drained to avoid EPIPE");
+
+        // Drain cap prevents unbounded reads from stalled/infinite streams.
+        let huge = vec![b'c'; 40_000];
+        let mut cur = std::io::Cursor::new(huge);
+        assert_eq!(read_stdin_bounded(&mut cur, 1024, 16_384).unwrap(), None);
+        assert!(cur.position() >= 16_384 && cur.position() < 40_000);
     }
 }

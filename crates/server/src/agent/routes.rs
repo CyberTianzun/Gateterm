@@ -243,27 +243,217 @@ fn log_ignored(reason: &str) {
     }
 }
 
+/// hook 请求体允许读入内存并解析的最大字节数。
+///
+/// `PostToolUse` 会带完整的 `tool_response`(例如 `Read` 大文件或 base64 图片),
+/// 512 KiB 很容易撞线。16 MiB 覆盖绝大多数真实工具输出,且仅在回环+鉴权通过后分配;
+/// 超出上限时不回 413,而是 O(1) 内存排空后安静回 200 `{}`。
+pub const MAX_HOOK_BODY_BYTES: usize = 16 * 1024 * 1024;
+
+/// 超过解析上限或被忽略时,最多排空多少字节以让本地 HTTP/1.1 客户端体面收到 200
+/// (避免 Windows 回环上未读完就关连接触发 WSAECONNABORTED / ECONNRESET)。
+pub(crate) const MAX_HOOK_DRAIN_BYTES: usize = 128 * 1024 * 1024;
+
+/// 读/排空单个 hook 请求体的总超时,防异常本地客户端永久占住 handler。
+const HOOK_BODY_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+enum HookBody {
+    Buffered(Vec<u8>),
+    TooLarge,
+    ReadError,
+}
+
+async fn drain_stream<S>(mut stream: S, max_drain_bytes: usize, timeout: std::time::Duration)
+where
+    S: futures_util::Stream<Item = Result<axum::body::Bytes, axum::Error>> + Unpin,
+{
+    use futures_util::StreamExt;
+    let _ = tokio::time::timeout(timeout, async {
+        let mut drained = 0usize;
+        while let Some(chunk) = stream.next().await {
+            let Ok(bytes) = chunk else { break };
+            drained = drained.saturating_add(bytes.len());
+            if drained > max_drain_bytes {
+                break;
+            }
+        }
+    })
+    .await;
+}
+
+async fn drain_body(body: axum::body::Body) {
+    drain_stream(body.into_data_stream(), MAX_HOOK_DRAIN_BYTES, HOOK_BODY_READ_TIMEOUT).await;
+}
+
+async fn read_hook_body(headers: &HeaderMap, body: axum::body::Body) -> HookBody {
+    let content_length = headers
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok());
+    read_hook_body_with_limits(
+        content_length,
+        body.into_data_stream(),
+        MAX_HOOK_BODY_BYTES,
+        MAX_HOOK_DRAIN_BYTES,
+        HOOK_BODY_READ_TIMEOUT,
+    )
+    .await
+}
+
+async fn read_hook_body_with_limits<S>(
+    content_length: Option<u64>,
+    mut stream: S,
+    max_body_bytes: usize,
+    max_drain_bytes: usize,
+    timeout: std::time::Duration,
+) -> HookBody
+where
+    S: futures_util::Stream<Item = Result<axum::body::Bytes, axum::Error>> + Unpin,
+{
+    use futures_util::StreamExt;
+    if content_length.is_some_and(|len| len > max_body_bytes as u64) {
+        drain_stream(stream, max_drain_bytes, timeout).await;
+        return HookBody::TooLarge;
+    }
+    let deadline = tokio::time::Instant::now() + timeout;
+    let initial_cap = content_length
+        .and_then(|len| usize::try_from(len).ok())
+        .map_or(0, |len| len.min(64 * 1024));
+    let mut buf = Vec::with_capacity(initial_cap);
+    let mut overflowed_bytes = 0usize;
+    let mut overflowed = false;
+    loop {
+        let Some(remaining) = deadline.checked_duration_since(tokio::time::Instant::now()) else {
+            return if overflowed { HookBody::TooLarge } else { HookBody::ReadError };
+        };
+        match tokio::time::timeout(remaining, stream.next()).await {
+            Ok(Some(Ok(chunk))) => {
+                if overflowed {
+                    overflowed_bytes = overflowed_bytes.saturating_add(chunk.len());
+                    if overflowed_bytes > max_drain_bytes {
+                        return HookBody::TooLarge;
+                    }
+                    continue;
+                }
+                if buf.len().saturating_add(chunk.len()) > max_body_bytes {
+                    overflowed_bytes = buf.len().saturating_add(chunk.len());
+                    // 立刻释放已缓冲的内存,剩余帧在 O(1) 内存下排空
+                    buf = Vec::new();
+                    overflowed = true;
+                    if overflowed_bytes > max_drain_bytes {
+                        return HookBody::TooLarge;
+                    }
+                    continue;
+                }
+                buf.extend_from_slice(&chunk);
+            }
+            Ok(Some(Err(_))) | Err(_) => {
+                return if overflowed { HookBody::TooLarge } else { HookBody::ReadError };
+            }
+            Ok(None) => {
+                return if overflowed { HookBody::TooLarge } else { HookBody::Buffered(buf) };
+            }
+        }
+    }
+}
+
+fn should_skip_hook_field(key: &str, keep_tool_input: bool) -> bool {
+    matches!(
+        key,
+        "tool_response"
+            | "toolResponse"
+            | "tool_result"
+            | "toolResult"
+            | "tool_output"
+            | "toolOutput"
+    ) || (!keep_tool_input && matches!(key, "tool_input" | "toolInput"))
+}
+
+struct HookObjectSeed {
+    keep_tool_input: bool,
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for HookObjectSeed {
+    type Value = serde_json::Value;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct HookObjectVisitor {
+            keep_tool_input: bool,
+        }
+
+        impl<'de> serde::de::Visitor<'de> for HookObjectVisitor {
+            type Value = serde_json::Value;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a JSON object")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut out = serde_json::Map::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if should_skip_hook_field(&key, self.keep_tool_input) {
+                        let _ = map.next_value::<serde::de::IgnoredAny>()?;
+                    } else {
+                        let val = map.next_value::<serde_json::Value>()?;
+                        out.insert(key, val);
+                    }
+                }
+                Ok(serde_json::Value::Object(out))
+            }
+        }
+
+        deserializer.deserialize_map(HookObjectVisitor {
+            keep_tool_input: self.keep_tool_input,
+        })
+    }
+}
+
+/// 解析 hook JSON 载荷,顺手跳过服务端用不到的超大工具输出(`tool_response` 等),
+/// 避免把数 MB 的文件内容/base64 图片再拷贝一份进 `serde_json::Value`。
+fn parse_hook_payload(
+    bytes: &[u8],
+    keep_tool_input: bool,
+) -> Result<serde_json::Value, serde_json::Error> {
+    if bytes.is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    if bytes.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{') {
+        use serde::de::DeserializeSeed;
+        let mut de = serde_json::Deserializer::from_slice(bytes);
+        let value = HookObjectSeed { keep_tool_input }.deserialize(&mut de)?;
+        de.end()?;
+        return Ok(value);
+    }
+    serde_json::from_slice(bytes)
+}
+
 /// `POST /hook/{agent}/{event}` —— agent 打进来的地方。
 ///
 /// 这是**第三方入口**,不属于客户端控制面,因此:
 /// - 用的是独立的 hook 密钥,不是客户端那个 bearer token;
 /// - 只认回环地址,主监听是不是 0.0.0.0 都一样;
-/// - **认不出的一律安静地收下**(见 `ignored`),包括没鉴权、没会话头、不认识的 agent、
-///   坏 JSON。安全性由「什么都不做」保证,而不是由回一个错误码保证。
+/// - **认不出或超大的请求一律排空后安静收下**(见 `ignored`),包括没鉴权、没会话头、
+///   不认识的 agent、坏 JSON、超限 body。安全性由「什么都不做」保证,而不是由回 4xx 保证。
 pub async fn hook(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Path((agent, event_slug)): Path<(String, String)>,
     headers: HeaderMap,
-    body: axum::body::Bytes,
+    body: axum::body::Body,
 ) -> Response {
     // 只认回环。hook payload 里有 tool_input(命令原文、文件路径),不对外开。
-    // 这一条保留 403:非回环的东西不是 agent,不需要对它安静。
+    // 这一条保留 403:非回环的东西不是 agent,不需要对它安静,也不必读它的 body。
     if !peer.ip().is_loopback() {
         tracing::warn!(%peer, "非回环地址访问 hook 面,拒绝");
         return StatusCode::FORBIDDEN.into_response();
     }
-    // hook 密钥。拿不到 = 不是我们托管的会话里跑的 agent —— 正常情况,安静收下。
+    // hook 密钥。拿不到 = 不是我们托管的会话里跑的 agent —— 正常情况,先排空再安静收下。
     let ok = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -271,6 +461,7 @@ pub async fn hook(
         .is_some_and(|v| v == crate::agent::store::hook_token());
     if !ok {
         log_ignored("no-or-bad-token");
+        drain_body(body).await;
         return ignored();
     }
     // 关联到哪个托管会话。**不校验会话是否还活着** —— 会话刚没、hook 还在路上是
@@ -285,24 +476,44 @@ pub async fn hook(
 
     let Some(adapter) = crate::agent::find(&agent) else {
         log_ignored("unknown-agent");
+        drain_body(body).await;
         return ignored();
     };
 
-    let payload: serde_json::Value = match serde_json::from_slice(&body) {
+    if adapter.process_watch().is_none() && header_session.is_none() {
+        log_ignored("no-session-header");
+        drain_body(body).await;
+        return ignored();
+    }
+
+    let event = crate::agent::edit::event_of_slug(&event_slug);
+    let is_blocking = adapter.is_blocking(&event);
+
+    let raw_body = match read_hook_body(&headers, body).await {
+        HookBody::Buffered(buf) => buf,
+        HookBody::TooLarge => {
+            log_ignored("payload-too-large");
+            return ignored();
+        }
+        HookBody::ReadError => {
+            log_ignored("body-read-error");
+            return ignored();
+        }
+    };
+
+    let payload = match parse_hook_payload(&raw_body, is_blocking) {
         Ok(v) => v,
-        Err(_) if body.is_empty() => serde_json::json!({}),
         Err(_) => {
             log_ignored("bad-json");
             return ignored();
         }
     };
+    drop(raw_body);
 
-    let event = crate::agent::edit::event_of_slug(&event_slug);
     if !adapter.accepts_payload(&payload) {
         log_ignored("foreign-agent-payload");
         return ignored();
     }
-    let is_blocking = adapter.is_blocking(&event);
     let update = if is_blocking {
         None
     } else {
@@ -856,5 +1067,92 @@ mod tests {
         });
         assert_eq!(perm.unwrap_err().kind(), ErrorKind::InvalidData);
         assert_eq!(perm_attempts, 1);
+    }
+
+    #[test]
+    fn parse_hook_payload_skips_heavy_tool_outputs_and_preserves_metadata() {
+        let raw = br#"{
+            "session_id": "s1",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/a.rs"},
+            "tool_response": {"content": "very large output"},
+            "toolOutput": "also ignored",
+            "cwd": "/repo",
+            "transcript_path": "/tmp/s1.jsonl"
+        }"#;
+
+        let telemetry = parse_hook_payload(raw, false).unwrap();
+        assert_eq!(telemetry["session_id"], "s1");
+        assert_eq!(telemetry["tool_name"], "Read");
+        assert_eq!(telemetry["cwd"], "/repo");
+        assert_eq!(telemetry["transcript_path"], "/tmp/s1.jsonl");
+        assert!(telemetry.get("tool_response").is_none());
+        assert!(telemetry.get("toolOutput").is_none());
+        assert!(telemetry.get("tool_input").is_none());
+
+        let blocking = parse_hook_payload(raw, true).unwrap();
+        assert_eq!(blocking["tool_input"]["file_path"], "/a.rs");
+        assert!(blocking.get("tool_response").is_none());
+
+        assert_eq!(parse_hook_payload(b"", false).unwrap(), serde_json::json!({}));
+        assert!(parse_hook_payload(b"{ nope", false).is_err());
+        assert!(parse_hook_payload(b"{} trailing", false).is_err());
+        assert!(parse_hook_payload(br#"{"tool_response": invalid}"#, false).is_err());
+    }
+
+    #[tokio::test]
+    async fn read_hook_body_enforces_limit_and_drains_without_error() {
+        use axum::body::Bytes;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let make_stream = |chunks: Vec<&'static [u8]>, seen: Arc<AtomicUsize>| {
+            futures_util::stream::iter(chunks.into_iter().map(move |c| {
+                seen.fetch_add(c.len(), Ordering::Relaxed);
+                Ok::<Bytes, axum::Error>(Bytes::from_static(c))
+            }))
+        };
+
+        // Exact limit fits and buffers.
+        let seen = Arc::new(AtomicUsize::new(0));
+        let res = read_hook_body_with_limits(
+            Some(8),
+            make_stream(vec![b"1234", b"5678"], seen.clone()),
+            8,
+            64,
+            std::time::Duration::from_secs(1),
+        )
+        .await;
+        match res {
+            HookBody::Buffered(b) => assert_eq!(b, b"12345678"),
+            _ => panic!("expected Buffered"),
+        }
+        assert_eq!(seen.load(Ordering::Relaxed), 8);
+
+        // Chunked overflow (> max_body_bytes) drains remaining chunks and reports TooLarge.
+        let seen = Arc::new(AtomicUsize::new(0));
+        let res = read_hook_body_with_limits(
+            None,
+            make_stream(vec![b"1234", b"56789", b"abcdef"], seen.clone()),
+            8,
+            64,
+            std::time::Duration::from_secs(1),
+        )
+        .await;
+        assert!(matches!(res, HookBody::TooLarge));
+        assert_eq!(seen.load(Ordering::Relaxed), 15, "all remaining chunks should be drained");
+
+        // Declared Content-Length > max_body_bytes skips buffering and drains.
+        let seen = Arc::new(AtomicUsize::new(0));
+        let res = read_hook_body_with_limits(
+            Some(15),
+            make_stream(vec![b"12345", b"67890", b"abcde"], seen.clone()),
+            8,
+            64,
+            std::time::Duration::from_secs(1),
+        )
+        .await;
+        assert!(matches!(res, HookBody::TooLarge));
+        assert_eq!(seen.load(Ordering::Relaxed), 15);
     }
 }
