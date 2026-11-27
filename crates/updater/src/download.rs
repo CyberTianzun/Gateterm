@@ -546,35 +546,47 @@ async fn stream_archive_to_file(
         total: expected_size,
     });
 
-    loop {
-        if *cancel.borrow() {
-            return Err(DownloadError::Cancelled);
-        }
-        let maybe_chunk = select_with_cancel(cancel, response.chunk())
-            .await?
-            .context("failed while streaming update archive")?;
-        let Some(chunk) = maybe_chunk else {
-            break;
-        };
-        if chunk.is_empty() {
-            continue;
-        }
-        let next_downloaded = downloaded.saturating_add(chunk.len() as u64);
-        if next_downloaded > expected_size {
-            return Err(DownloadError::SizeMismatch {
-                expected: expected_size,
-                actual: next_downloaded,
+    let stream_res: Result<(), DownloadError> = async {
+        loop {
+            if *cancel.borrow() {
+                return Err(DownloadError::Cancelled);
+            }
+            let maybe_chunk = select_with_cancel(cancel, response.chunk())
+                .await?
+                .context("failed while streaming update archive")?;
+            let Some(chunk) = maybe_chunk else {
+                break;
+            };
+            if chunk.is_empty() {
+                continue;
+            }
+            let next_downloaded = downloaded.saturating_add(chunk.len() as u64);
+            if next_downloaded > expected_size {
+                return Err(DownloadError::SizeMismatch {
+                    expected: expected_size,
+                    actual: next_downloaded,
+                });
+            }
+            file.write_all(&chunk).await.with_context(|| {
+                format!("failed to write staging archive {}", archive_path.display())
+            })?;
+            hasher.update(&chunk);
+            downloaded = next_downloaded;
+            on_progress(DownloadProgress {
+                downloaded,
+                total: expected_size,
             });
         }
-        file.write_all(&chunk).await.with_context(|| {
-            format!("failed to write staging archive {}", archive_path.display())
-        })?;
-        hasher.update(&chunk);
-        downloaded = next_downloaded;
-        on_progress(DownloadProgress {
-            downloaded,
-            total: expected_size,
-        });
+        Ok(())
+    }
+    .await;
+
+    if let Err(err) = stream_res {
+        // Wait for any in-flight tokio::fs::File spawn_blocking write to complete and
+        // close the underlying OS file handle before StagingCleanupGuard deletes staging_dir.
+        let _ = file.flush().await;
+        drop(file);
+        return Err(err);
     }
 
     file.flush()
