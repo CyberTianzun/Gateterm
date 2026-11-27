@@ -145,7 +145,10 @@ pub fn draw(ui: &mut egui::Ui, view: &mut UpdateView, locale: Locale) -> UpdateO
 
         if let Some(update) = &view.update
             && update.can_self_apply
-            && !matches!(view.phase, UpdatePhase::Checking | UpdatePhase::UpToDate)
+            && matches!(
+                view.phase,
+                UpdatePhase::Available | UpdatePhase::Downloading(_) | UpdatePhase::Preparing
+            )
         {
             egui::Frame::NONE
                 .fill(WARN_BG_COLOR)

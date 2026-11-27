@@ -38,6 +38,9 @@ const MAX_REDIRECTS: usize = 5;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Per-read idle timeout enforced on streaming release archive downloads.
+pub const DOWNLOAD_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Configuration for fetching and verifying update manifests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckConfig {
@@ -80,18 +83,56 @@ pub enum CheckOutcome {
     },
 }
 
-/// Builds the shared HTTP client enforcing HTTPS-only redirects (max 5 hops) unless
+/// Builds the shared HTTP client enforcing HTTPS-only redirects (max 5 hops) and a 15-second
+/// total request timeout (for small metadata requests such as manifests and signatures) unless
 /// `allow_http_for_test` is enabled.
 pub fn build_http_client(
     current_version: &str,
     allow_http_for_test: bool,
 ) -> anyhow::Result<reqwest::Client> {
+    build_http_client_inner(
+        current_version,
+        allow_http_for_test,
+        Some(REQUEST_TIMEOUT),
+        None,
+        allow_http_for_test,
+    )
+}
+
+/// Builds the HTTP client for streaming release archive downloads, sharing the HTTPS-only
+/// redirect policy (max 5 hops) and 5-second connect timeout while replacing the total request
+/// deadline with a per-read idle timeout ([`DOWNLOAD_READ_TIMEOUT`]).
+pub fn build_download_http_client(
+    current_version: &str,
+    allow_http_for_test: bool,
+) -> anyhow::Result<reqwest::Client> {
+    build_http_client_inner(
+        current_version,
+        allow_http_for_test,
+        None,
+        Some(DOWNLOAD_READ_TIMEOUT),
+        allow_http_for_test,
+    )
+}
+
+pub(crate) fn build_http_client_inner(
+    current_version: &str,
+    allow_http_for_test: bool,
+    request_timeout: Option<Duration>,
+    read_timeout: Option<Duration>,
+    disable_proxy: bool,
+) -> anyhow::Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder()
         .user_agent(format!("gateterm/{current_version}"))
         .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
         .redirect(redirect_policy(allow_http_for_test));
-    if allow_http_for_test {
+    if let Some(timeout) = request_timeout {
+        builder = builder.timeout(timeout);
+    }
+    if let Some(read_timeout) = read_timeout {
+        builder = builder.read_timeout(read_timeout);
+    }
+    if disable_proxy {
         builder = builder.no_proxy();
     }
     builder.build().context("failed to build updater HTTP client")
@@ -583,7 +624,9 @@ mod tests {
         });
 
         // allow_http_for_test = false must reject redirect to http://...
-        let strict_client = build_http_client("1.0.3", false).unwrap();
+        // Disable system proxy in tests so HTTP_PROXY/ALL_PROXY env vars never hijack loopback.
+        let strict_client =
+            build_http_client_inner("1.0.3", false, Some(REQUEST_TIMEOUT), None, true).unwrap();
         let err = strict_client
             .get(format!("{base}/to-http"))
             .send()

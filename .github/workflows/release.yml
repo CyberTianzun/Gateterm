@@ -381,7 +381,7 @@ jobs:
             echo "::error::Missing UPDATER_SIGNING_KEY secret required for stable release manifest signing"
             exit 1
           fi
-          cargo run --release -p gateterm-updater --bin manifest-tool -- build-and-sign \
+          cargo run --release --locked -p gateterm-updater --bin manifest-tool -- build-and-sign \
             --dist dist \
             --version "${VERSION#v}" \
             --tag "$GITHUB_REF_NAME" \
@@ -389,7 +389,7 @@ jobs:
             --notes-file "$RUNNER_TEMP/release-notes.md" \
             --out-manifest dist/update-manifest.json \
             --out-sig dist/update-manifest.json.sig
-          cargo run --release -p gateterm-updater --bin manifest-tool -- verify \
+          cargo run --release --locked -p gateterm-updater --bin manifest-tool -- verify \
             --manifest dist/update-manifest.json \
             --sig dist/update-manifest.json.sig
       - uses: softprops/action-gh-release@v2

@@ -11,8 +11,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use gateterm_updater::{
-    ArchiveFormat, Manifest, TargetArtifact, compiled_public_key_b64, generate_keypair,
-    sign_manifest_bytes, validate_manifest, verify_manifest_bytes,
+    ArchiveFormat, MAX_MANIFEST_BYTES, Manifest, TargetArtifact, compiled_public_key_b64,
+    generate_keypair, sign_manifest_bytes, truncate_notes, validate_manifest,
+    verify_manifest_bytes,
 };
 use semver::Version;
 use sha2::{Digest, Sha256};
@@ -180,8 +181,9 @@ fn build_and_sign(
         dist.display()
     );
 
-    let notes = fs::read_to_string(notes_file)
+    let raw_notes = fs::read_to_string(notes_file)
         .with_context(|| format!("failed to read notes file {}", notes_file.display()))?;
+    let notes = truncate_notes(&raw_notes);
 
     let mut targets = BTreeMap::new();
     for spec in DESKTOP_TARGETS {
@@ -222,6 +224,11 @@ fn build_and_sign(
 
     let manifest_bytes =
         serde_json::to_vec_pretty(&manifest).context("failed to serialize manifest JSON")?;
+    anyhow::ensure!(
+        manifest_bytes.len() <= MAX_MANIFEST_BYTES,
+        "serialized manifest exceeds {MAX_MANIFEST_BYTES} byte limit ({} bytes)",
+        manifest_bytes.len()
+    );
     let sig_b64 = sign_manifest_bytes(&manifest_bytes, &signing_key)
         .context("failed to sign update manifest")?;
 
@@ -235,8 +242,7 @@ fn verify_command(
     sig_path: &Path,
     public_key: Option<&str>,
 ) -> anyhow::Result<()> {
-    let manifest_bytes = fs::read(manifest_path)
-        .with_context(|| format!("failed to read manifest {}", manifest_path.display()))?;
+    let manifest_bytes = read_file_capped(manifest_path, MAX_MANIFEST_BYTES, "manifest")?;
     let sig_text = fs::read_to_string(sig_path)
         .with_context(|| format!("failed to read signature {}", sig_path.display()))?;
 
@@ -251,6 +257,29 @@ fn verify_command(
         .context("failed to parse verified manifest JSON")?;
     validate_manifest(&manifest).context("manifest schema validation failed")?;
     Ok(())
+}
+
+fn read_file_capped(path: &Path, max_bytes: usize, label: &str) -> anyhow::Result<Vec<u8>> {
+    let meta = fs::metadata(path)
+        .with_context(|| format!("failed to stat {label} {}", path.display()))?;
+    anyhow::ensure!(
+        meta.len() <= max_bytes as u64,
+        "{label} {} exceeds {max_bytes} byte limit ({} bytes)",
+        path.display(),
+        meta.len()
+    );
+    let file = fs::File::open(path)
+        .with_context(|| format!("failed to open {label} {}", path.display()))?;
+    let mut buf = Vec::with_capacity((meta.len() as usize).min(max_bytes));
+    file.take(max_bytes as u64 + 1)
+        .read_to_end(&mut buf)
+        .with_context(|| format!("failed to read {label} {}", path.display()))?;
+    anyhow::ensure!(
+        buf.len() <= max_bytes,
+        "{label} {} exceeds {max_bytes} byte limit",
+        path.display()
+    );
+    Ok(buf)
 }
 
 fn validate_repo_slug(repo: &str) -> anyhow::Result<()> {

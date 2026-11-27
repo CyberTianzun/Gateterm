@@ -13,15 +13,16 @@ pub use apply::{
 };
 pub use check::{
     CHECK_INTERVAL, CheckConfig, CheckOutcome, DEFAULT_MANIFEST_URL, DEFAULT_SIGNATURE_URL,
-    STARTUP_DELAY, build_http_client, check_now, start_daily_checks,
+    DOWNLOAD_READ_TIMEOUT, MAX_MANIFEST_BYTES, STARTUP_DELAY, build_download_http_client,
+    build_http_client, check_now, start_daily_checks,
 };
 pub use download::{
     DownloadError, DownloadProgress, MAX_BINARY_BYTES, StagedUpdate, download_and_stage,
     extract_verified_binary, preflight_writable, updates_cache_dir,
 };
 pub use manifest::{
-    ArchiveFormat, AvailableUpdate, Manifest, TargetArtifact, validate_and_select,
-    validate_manifest,
+    ArchiveFormat, AvailableUpdate, MAX_NOTES_BYTES, Manifest, TargetArtifact, truncate_notes,
+    validate_and_select, validate_manifest,
 };
 pub use state::UpdateState;
 pub use verify::{

@@ -11,6 +11,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::AppKind;
 
+struct TmpFileGuard<'a> {
+    path: &'a Path,
+    active: bool,
+}
+
+impl Drop for TmpFileGuard<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = std::fs::remove_file(self.path);
+        }
+    }
+}
+
 /// Persisted updater preference and check timestamp stored independently from `config.toml`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateState {
@@ -65,6 +78,10 @@ impl UpdateState {
 
         let payload =
             serde_json::to_vec_pretty(self).context("failed to serialize updater state")?;
+        let mut tmp_guard = TmpFileGuard {
+            path: &tmp_path,
+            active: false,
+        };
         {
             let mut file = std::fs::OpenOptions::new()
                 .write(true)
@@ -73,6 +90,7 @@ impl UpdateState {
                 .with_context(|| {
                     format!("failed to create temp state file {}", tmp_path.display())
                 })?;
+            tmp_guard.active = true;
             file.write_all(&payload).with_context(|| {
                 format!("failed to write temp state file {}", tmp_path.display())
             })?;
@@ -81,10 +99,8 @@ impl UpdateState {
             })?;
         }
 
-        if let Err(err) = replace_file(&tmp_path, path) {
-            let _ = std::fs::remove_file(&tmp_path);
-            return Err(err);
-        }
+        replace_file(&tmp_path, path)?;
+        tmp_guard.active = false;
         Ok(())
     }
 
@@ -226,5 +242,57 @@ mod tests {
             native_path.file_name().and_then(|n| n.to_str()),
             Some("updater-desktop-native.json")
         );
+    }
+
+    #[test]
+    fn save_cleans_up_temp_file_on_failure_and_guard_unlinks_when_dropped_active() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // 1. Failing replace_file (destination is an existing directory) leaves no .tmp behind.
+        let dir_dest = dir.path().join("dest-is-a-dir");
+        std::fs::create_dir_all(&dir_dest).unwrap();
+        let state = UpdateState {
+            skipped_version: Some("1.0.4".to_owned()),
+            last_checked_at: Some(1_700_000_000),
+        };
+        assert!(state.save(&dir_dest).is_err());
+        let leftover: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(leftover, vec!["dest-is-a-dir"]);
+
+        // 2. Armed TmpFileGuard unlinks temp file on early error return (e.g. write/sync failure)
+        //    after the inner file handle closes.
+        let guarded_tmp = dir.path().join(".state.tmp");
+        let early_err = (|| -> anyhow::Result<()> {
+            let mut guard = TmpFileGuard {
+                path: &guarded_tmp,
+                active: false,
+            };
+            {
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&guarded_tmp)?;
+                guard.active = true;
+                file.write_all(b"partial")?;
+                anyhow::bail!("simulated write or sync failure");
+            }
+        })();
+        assert!(early_err.is_err());
+        assert!(!guarded_tmp.exists());
+
+        // 3. Disarmed TmpFileGuard does not delete pre-existing file if open/create_new failed.
+        let preexisting = dir.path().join(".preexisting.tmp");
+        std::fs::write(&preexisting, b"keep").unwrap();
+        {
+            let _inactive_guard = TmpFileGuard {
+                path: &preexisting,
+                active: false,
+            };
+        }
+        assert!(preexisting.exists());
     }
 }

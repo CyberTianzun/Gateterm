@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use gateterm_updater::{
-    ArchiveFormat, Manifest, TargetArtifact, compiled_public_key_b64, generate_keypair,
-    sign_manifest_bytes, validate_manifest,
+    ArchiveFormat, MAX_MANIFEST_BYTES, MAX_NOTES_BYTES, Manifest, TargetArtifact,
+    compiled_public_key_b64, generate_keypair, sign_manifest_bytes, validate_manifest,
 };
 use sha2::{Digest, Sha256};
 
@@ -489,4 +489,147 @@ fn build_and_sign_and_verify_reject_missing_key_prerelease_and_invalid_schema() 
             .unwrap();
         assert!(!verify_default_unconfigured.status.success());
     }
+}
+
+#[test]
+fn build_and_sign_truncates_oversized_notes_on_utf8_boundary_and_enforces_256kib_cap() {
+    let bin = manifest_tool_bin();
+    let tmp = tempfile::tempdir().unwrap();
+    let dist_dir = tmp.path().join("dist");
+    write_four_archives(&dist_dir, "1.0.4");
+    let (priv_b64, pub_b64) = generate_keypair();
+
+    // 1. > 64 KiB notes spanning a multi-byte UTF-8 boundary is truncated cleanly to <= 65536 bytes.
+    let notes_path = tmp.path().join("huge-notes.md");
+    let mut long_notes = "a".repeat(MAX_NOTES_BYTES - 1);
+    long_notes.push('中'); // 3-byte char straddling byte boundary 65535..65538
+    long_notes.push_str(&"🚀".repeat(100));
+    fs::write(&notes_path, &long_notes).unwrap();
+
+    let out_m = tmp.path().join("truncated-manifest.json");
+    let out_s = tmp.path().join("truncated-manifest.json.sig");
+    let build_ok = Command::new(&bin)
+        .args([
+            "build-and-sign",
+            "--dist",
+            dist_dir.to_str().unwrap(),
+            "--version",
+            "1.0.4",
+            "--tag",
+            "release-v1.0.4",
+            "--repo",
+            "CyberTianzun/Gateterm",
+            "--notes-file",
+            notes_path.to_str().unwrap(),
+            "--out-manifest",
+            out_m.to_str().unwrap(),
+            "--out-sig",
+            out_s.to_str().unwrap(),
+        ])
+        .env("UPDATER_SIGNING_KEY", &priv_b64)
+        .output()
+        .unwrap();
+    assert!(
+        build_ok.status.success(),
+        "build-and-sign should succeed after truncating notes: {}",
+        String::from_utf8_lossy(&build_ok.stderr)
+    );
+
+    let raw_manifest = fs::read(&out_m).unwrap();
+    assert!(raw_manifest.len() <= MAX_MANIFEST_BYTES);
+    let manifest: Manifest = serde_json::from_slice(&raw_manifest).unwrap();
+    assert!(manifest.notes.len() <= MAX_NOTES_BYTES);
+    assert_eq!(manifest.notes.len(), MAX_NOTES_BYTES - 1);
+    assert!(manifest.notes.bytes().all(|b| b == b'a'));
+
+    let verify_ok = Command::new(&bin)
+        .args([
+            "verify",
+            "--manifest",
+            out_m.to_str().unwrap(),
+            "--sig",
+            out_s.to_str().unwrap(),
+            "--public-key",
+            &pub_b64,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        verify_ok.status.success(),
+        "verify must accept signed manifest with truncated notes: {}",
+        String::from_utf8_lossy(&verify_ok.stderr)
+    );
+
+    // 2. Notes that stay <= 64 KiB in raw UTF-8 but JSON-escape past 256 KiB fail build-and-sign.
+    let escaped_notes_path = tmp.path().join("escaped-notes.md");
+    fs::write(&escaped_notes_path, "\x01".repeat(MAX_NOTES_BYTES)).unwrap();
+    let escaped_m = tmp.path().join("escaped-manifest.json");
+    let escaped_s = tmp.path().join("escaped-manifest.json.sig");
+    let build_oversized = Command::new(&bin)
+        .args([
+            "build-and-sign",
+            "--dist",
+            dist_dir.to_str().unwrap(),
+            "--version",
+            "1.0.4",
+            "--tag",
+            "release-v1.0.4",
+            "--repo",
+            "CyberTianzun/Gateterm",
+            "--notes-file",
+            escaped_notes_path.to_str().unwrap(),
+            "--out-manifest",
+            escaped_m.to_str().unwrap(),
+            "--out-sig",
+            escaped_s.to_str().unwrap(),
+        ])
+        .env("UPDATER_SIGNING_KEY", &priv_b64)
+        .output()
+        .unwrap();
+    assert!(!build_oversized.status.success());
+    assert!(
+        String::from_utf8_lossy(&build_oversized.stderr)
+            .contains(&MAX_MANIFEST_BYTES.to_string()),
+        "expected manifest size cap error, got: {}",
+        String::from_utf8_lossy(&build_oversized.stderr)
+    );
+
+    // 3. Signed manifest larger than 256 KiB is rejected by `manifest-tool verify`.
+    let oversized_manifest = Manifest {
+        schema_version: 1,
+        version: "1.0.4".to_owned(),
+        tag: "release-v1.0.4".to_owned(),
+        pub_date: "2026-11-27T08:00:00Z".to_owned(),
+        release_url: "https://github.com/CyberTianzun/Gateterm/releases/tag/release-v1.0.4"
+            .to_owned(),
+        notes: "x".repeat(MAX_MANIFEST_BYTES + 128),
+        targets: manifest.targets,
+    };
+    let oversized_bytes = serde_json::to_vec_pretty(&oversized_manifest).unwrap();
+    assert!(oversized_bytes.len() > MAX_MANIFEST_BYTES);
+    let oversized_sig = sign_manifest_bytes(&oversized_bytes, &priv_b64).unwrap();
+    let oversized_m = tmp.path().join("oversized-manifest.json");
+    let oversized_s = tmp.path().join("oversized-manifest.json.sig");
+    fs::write(&oversized_m, &oversized_bytes).unwrap();
+    fs::write(&oversized_s, &oversized_sig).unwrap();
+
+    let verify_oversized = Command::new(&bin)
+        .args([
+            "verify",
+            "--manifest",
+            oversized_m.to_str().unwrap(),
+            "--sig",
+            oversized_s.to_str().unwrap(),
+            "--public-key",
+            &pub_b64,
+        ])
+        .output()
+        .unwrap();
+    assert!(!verify_oversized.status.success());
+    assert!(
+        String::from_utf8_lossy(&verify_oversized.stderr)
+            .contains(&MAX_MANIFEST_BYTES.to_string()),
+        "expected manifest size cap error in verify, got: {}",
+        String::from_utf8_lossy(&verify_oversized.stderr)
+    );
 }

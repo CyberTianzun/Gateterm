@@ -696,7 +696,7 @@ fn format_sha256_lower(digest: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build_http_client;
+    use crate::{DOWNLOAD_READ_TIMEOUT, build_download_http_client};
     use axum::{
         Router,
         extract::Path as AxumPath,
@@ -867,7 +867,7 @@ mod tests {
         });
 
         let cache_dir = tempfile::tempdir().unwrap();
-        let client = build_http_client("1.0.3", true).unwrap();
+        let client = build_download_http_client("1.0.3", true).unwrap();
 
         // 1. Zip test
         let (_tx, rx) = tokio::sync::watch::channel(false);
@@ -1057,7 +1057,7 @@ mod tests {
             }
         });
 
-        let client = build_http_client("1.0.3", true).unwrap();
+        let client = build_download_http_client("1.0.3", true).unwrap();
 
         // 1. Wrong sha256 -> HashMismatch and staging_dir removed
         {
@@ -1236,7 +1236,15 @@ mod tests {
 
         let cache_dir = tempfile::tempdir().unwrap();
         let (_tx, rx) = tokio::sync::watch::channel(false);
-        let strict_client = build_http_client("1.0.3", false).unwrap();
+        // Disable system proxy in tests so HTTP_PROXY/ALL_PROXY env vars never hijack loopback.
+        let strict_client = crate::check::build_http_client_inner(
+            "1.0.3",
+            false,
+            None,
+            Some(DOWNLOAD_READ_TIMEOUT),
+            true,
+        )
+        .unwrap();
         let artifact = TargetArtifact {
             url: format!("{base}/to-http"),
             sha256: "0".repeat(64),
@@ -1261,7 +1269,7 @@ mod tests {
         assert_eq!(std::fs::read_dir(cache_dir.path()).unwrap().count(), 0);
 
         let (_tx2, rx2) = tokio::sync::watch::channel(false);
-        let test_client = build_http_client("1.0.3", true).unwrap();
+        let test_client = build_download_http_client("1.0.3", true).unwrap();
         let loop_artifact = TargetArtifact {
             url: format!("{base}/hop/0"),
             sha256: "0".repeat(64),
@@ -1283,6 +1291,136 @@ mod tests {
             .is_err()
         );
         assert_eq!(std::fs::read_dir(cache_dir.path()).unwrap().count(), 0);
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn download_client_allows_slow_multi_chunk_stream_and_times_out_on_stall() {
+        assert_eq!(DOWNLOAD_READ_TIMEOUT, std::time::Duration::from_secs(30));
+        assert!(build_download_http_client("1.0.3", false).is_ok());
+
+        let payload = b"slow-stream-binary-payload-v1.0.4-data".repeat(16);
+        let zip_bytes = build_zip_bytes(&[("gateterm-desktop-web.exe", &payload, None, false)]);
+        let zip_sha = sha256_hex(&zip_bytes);
+        let zip_len = zip_bytes.len() as u64;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let base_url = format!("http://{addr}");
+
+        let (stall_release_tx, stall_release_rx) = tokio::sync::oneshot::channel::<()>();
+        let stall_rx_arc = Arc::new(tokio::sync::Mutex::new(Some(stall_release_rx)));
+        let srv_bytes = zip_bytes.clone();
+
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let body = srv_bytes.clone();
+                let rx_arc = stall_rx_arc.clone();
+                tokio::spawn(async move {
+                    let path = read_http_request_path(&mut socket).await;
+                    let hdr = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = socket.write_all(hdr.as_bytes()).await;
+                    let _ = socket.flush().await;
+                    match path.as_str() {
+                        "/chunked-slow.zip" => {
+                            // Stream in 8 chunks spaced 60ms apart (~420ms+ total > 250ms read_timeout).
+                            let chunk_size = (body.len() / 8).max(1);
+                            for chunk in body.chunks(chunk_size) {
+                                if socket.write_all(chunk).await.is_err() {
+                                    break;
+                                }
+                                let _ = socket.flush().await;
+                                tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+                            }
+                        }
+                        "/stalled.zip" => {
+                            let first_part = body.len().min(64);
+                            let _ = socket.write_all(&body[..first_part]).await;
+                            let _ = socket.flush().await;
+                            if let Some(rx) = rx_arc.lock().await.take() {
+                                let _ = rx.await;
+                            }
+                        }
+                        _ => {}
+                    }
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+
+        let read_timeout_client = crate::check::build_http_client_inner(
+            "1.0.3",
+            true,
+            None,
+            Some(std::time::Duration::from_millis(250)),
+            true,
+        )
+        .unwrap();
+
+        // 1. Multi-chunk delayed stream exceeding read_timeout in total duration still succeeds.
+        {
+            let cache_dir = tempfile::tempdir().unwrap();
+            let (_tx, rx) = tokio::sync::watch::channel(false);
+            let artifact = TargetArtifact {
+                url: format!("{base_url}/chunked-slow.zip"),
+                sha256: zip_sha.clone(),
+                size: zip_len,
+                format: ArchiveFormat::Zip,
+                binary_path: "gateterm-desktop-web.exe".to_owned(),
+            };
+            let staged = download_and_stage(
+                &read_timeout_client,
+                AppKind::DesktopWeb,
+                "1.0.4",
+                &artifact,
+                cache_dir.path(),
+                rx,
+                |_| {},
+            )
+            .await
+            .expect("multi-chunk stream within per-read idle budget must succeed");
+            assert_eq!(std::fs::read(&staged.binary_path).unwrap(), payload);
+        }
+
+        // 2. Stalled stream exceeding read_timeout fails with timeout error and cleans up staging_dir.
+        {
+            let cache_dir = tempfile::tempdir().unwrap();
+            let (_tx, rx) = tokio::sync::watch::channel(false);
+            let artifact = TargetArtifact {
+                url: format!("{base_url}/stalled.zip"),
+                sha256: zip_sha,
+                size: zip_len,
+                format: ArchiveFormat::Zip,
+                binary_path: "gateterm-desktop-web.exe".to_owned(),
+            };
+            let err = download_and_stage(
+                &read_timeout_client,
+                AppKind::DesktopWeb,
+                "1.0.4",
+                &artifact,
+                cache_dir.path(),
+                rx,
+                |_| {},
+            )
+            .await
+            .unwrap_err();
+            let _ = stall_release_tx.send(());
+            match &err {
+                DownloadError::Other(inner) => assert!(
+                    inner
+                        .chain()
+                        .any(|c| c.downcast_ref::<reqwest::Error>().is_some_and(|e| e.is_timeout())),
+                    "expected reqwest read timeout error, got {inner:#}"
+                ),
+                other => panic!("expected DownloadError::Other(timeout), got {other:?}"),
+            }
+            assert_eq!(std::fs::read_dir(cache_dir.path()).unwrap().count(), 0);
+        }
 
         server.abort();
     }

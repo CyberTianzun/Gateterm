@@ -649,5 +649,11 @@ fn update_window_downloading_uptodate_and_error_render_without_cjk_in_english() 
                 .any(|t| t == locale.text("前往 GitHub 手动下载", "Open GitHub Release")),
             "{texts:?}"
         );
+        assert!(
+            !texts
+                .iter()
+                .any(|t| t.contains(locale.text("本地终端会话", "local terminal session"))),
+            "Error phase must not show terminal-restart warning: {texts:?}"
+        );
     }
 }

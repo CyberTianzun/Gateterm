@@ -706,8 +706,10 @@ impl GatetermWorkbench {
                 Err(msg) => return Ok(Err(msg)),
             };
 
-            let client = match gateterm_updater::build_http_client(env!("CARGO_PKG_VERSION"), false)
-            {
+            let client = match gateterm_updater::build_download_http_client(
+                env!("CARGO_PKG_VERSION"),
+                false,
+            ) {
                 Ok(c) => c,
                 Err(e) => {
                     return Ok(Err(match locale {

@@ -795,7 +795,9 @@ impl App {
                 }
             };
 
-            let client = match gateterm_updater::build_http_client(env!("CARGO_PKG_VERSION"), false) {
+            let client =
+                match gateterm_updater::build_download_http_client(env!("CARGO_PKG_VERSION"), false)
+                {
                 Ok(c) => c,
                 Err(e) => {
                     let _ = proxy.send_event(UserEvent::UpdateStaged {
@@ -1361,6 +1363,10 @@ impl ApplicationHandler<UserEvent> for App {
                         if let Err(err) =
                             gateterm_updater::preflight_writable(&bundle.canonical_target)
                         {
+                            let staging_dir = bundle.staged.staging_dir;
+                            std::thread::spawn(move || {
+                                let _ = std::fs::remove_dir_all(&staging_dir);
+                            });
                             let msg = format_download_error(self.locale, &err);
                             if let Some(view) = self.update_view.as_mut() {
                                 let fallback_url =

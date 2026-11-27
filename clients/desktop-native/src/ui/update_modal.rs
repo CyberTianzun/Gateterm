@@ -309,6 +309,20 @@ impl UpdateModalState {
     }
 }
 
+/// Returns `true` when the update modal should display the amber terminal-close warning banner.
+pub fn should_show_terminal_warning(
+    update: Option<&AvailableUpdate>,
+    phase: &UpdateModalPhase,
+) -> bool {
+    update.is_some_and(|u| u.can_self_apply)
+        && matches!(
+            phase,
+            UpdateModalPhase::Available
+                | UpdateModalPhase::Downloading { .. }
+                | UpdateModalPhase::Preparing
+        )
+}
+
 /// Returns `(main_warning, remote_sessions_subnote)` describing how restarting affects
 /// active local terminal sessions versus remote server sessions.
 pub fn terminal_warning_copy(active_local_sessions: usize, locale: Locale) -> (String, String) {
@@ -593,13 +607,7 @@ pub fn render_update_modal(
         body = body.child(status_body);
     }
 
-    if let Some(update) = &state.update
-        && update.can_self_apply
-        && !matches!(
-            state.phase,
-            UpdateModalPhase::Checking | UpdateModalPhase::UpToDate | UpdateModalPhase::Idle
-        )
-    {
+    if should_show_terminal_warning(state.update.as_ref(), &state.phase) {
         let (warn_main, warn_sub) = terminal_warning_copy(active_local_sessions, locale);
         let warning_color = cx.theme().warning;
         body = body.child(
@@ -1210,5 +1218,58 @@ mod tests {
             open_available.update.as_ref().map(|u| u.version.as_str()),
             Some("1.0.4")
         );
+    }
+
+    #[test]
+    fn terminal_warning_banner_shown_only_for_self_apply_active_phases_and_hidden_on_error() {
+        let self_apply = sample_update(true);
+        let macos_fallback = sample_update(false);
+
+        assert!(should_show_terminal_warning(
+            Some(&self_apply),
+            &UpdateModalPhase::Available
+        ));
+        assert!(should_show_terminal_warning(
+            Some(&self_apply),
+            &UpdateModalPhase::Downloading {
+                downloaded: 512,
+                total: 1024,
+            }
+        ));
+        assert!(should_show_terminal_warning(
+            Some(&self_apply),
+            &UpdateModalPhase::Preparing
+        ));
+
+        // Error phase (even when `update` is Some with `can_self_apply: true`) must hide the warning.
+        assert!(!should_show_terminal_warning(
+            Some(&self_apply),
+            &UpdateModalPhase::Error {
+                message: "Target directory is not writable".to_owned(),
+                fallback_url: Some(DEFAULT_RELEASES_URL.to_owned()),
+            }
+        ));
+        assert!(!should_show_terminal_warning(
+            Some(&self_apply),
+            &UpdateModalPhase::Checking
+        ));
+        assert!(!should_show_terminal_warning(
+            Some(&self_apply),
+            &UpdateModalPhase::UpToDate
+        ));
+        assert!(!should_show_terminal_warning(
+            Some(&self_apply),
+            &UpdateModalPhase::Idle
+        ));
+
+        // macOS fallback and None must never show the self-apply restart warning.
+        assert!(!should_show_terminal_warning(
+            Some(&macos_fallback),
+            &UpdateModalPhase::Available
+        ));
+        assert!(!should_show_terminal_warning(
+            None,
+            &UpdateModalPhase::Available
+        ));
     }
 }

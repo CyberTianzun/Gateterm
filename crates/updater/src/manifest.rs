@@ -116,7 +116,7 @@ pub fn validate_and_select(
 
     let artifact = target_key.and_then(|key| manifest.targets.get(key).cloned());
     let can_self_apply = artifact.is_some();
-    let notes = truncate_utf8_bytes(&manifest.notes, MAX_NOTES_BYTES);
+    let notes = truncate_notes(&manifest.notes);
 
     tracing::debug!(
         app = app.id(),
@@ -207,6 +207,11 @@ fn validate_binary_path(binary_path: &str) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+/// Truncates release notes to [`MAX_NOTES_BYTES`] (64 KiB) on a valid UTF-8 character boundary.
+pub fn truncate_notes(notes: &str) -> String {
+    truncate_utf8_bytes(notes, MAX_NOTES_BYTES)
 }
 
 fn truncate_utf8_bytes(s: &str, max_bytes: usize) -> String {
