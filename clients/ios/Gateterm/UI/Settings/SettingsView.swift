@@ -100,6 +100,11 @@ struct SettingsView: View {
 
                 Section {
                     LabeledContent("Gateterm", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
+                    if let storeURL = AppStoreLink.currentURL {
+                        Link(destination: storeURL) {
+                            Label(L.t("ios_open_app_store"), systemImage: "arrow.up.right.square")
+                        }
+                    }
                 }
             }
             .navigationTitle(L.t("settings_title"))

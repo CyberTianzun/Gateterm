@@ -24,6 +24,7 @@ SOURCES=()
 while IFS= read -r file; do SOURCES+=("$file"); done < <(
   cd "$IOS/Gateterm" && find Wire Net Connection Agent Term Appearance I18n Push Controller -name '*.swift' \
     ! -name 'AppModel.swift' ! -name 'TermFonts.swift' | sed "s|^|$IOS/Gateterm/|")
+SOURCES+=("$IOS/Gateterm/UI/Settings/AppStoreLink.swift")
 SOURCES+=("$IOS/Generated/gateterm_cloud_ffi.swift")
 
 swiftc -module-name Gateterm -emit-library -emit-module -enable-testing -parse-as-library -swift-version 5 \

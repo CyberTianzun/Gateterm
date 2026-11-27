@@ -110,6 +110,7 @@ enum L {
             "ios_view_history": "历史会话",
             "ios_chat_view": "聊天",
             "ios_terminal_view": "终端",
+            "ios_open_app_store": "在 App Store 中查看",
             "launcher_filter": "筛选",
         ],
         en: [
@@ -157,6 +158,7 @@ enum L {
             "ios_view_history": "History",
             "ios_chat_view": "Chat",
             "ios_terminal_view": "Terminal",
+            "ios_open_app_store": "View on App Store",
             "launcher_filter": "Filter",
         ]
     )
