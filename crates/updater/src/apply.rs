@@ -15,6 +15,7 @@ pub const APPLY_UPDATE_FLAG: &str = "--apply-update";
 /// Filename inside `cache_root` where rollback/apply diagnostics are recorded for the next launch.
 pub const ERROR_LOG_FILENAME: &str = "last-apply-error.txt";
 
+#[cfg(any(windows, target_os = "linux"))]
 const PARENT_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_SWAP_RETRY_ATTEMPTS: usize = 50;
 const DEFAULT_SWAP_RETRY_DELAY: Duration = Duration::from_millis(200);
